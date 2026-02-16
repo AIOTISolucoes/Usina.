@@ -1,0 +1,1077 @@
+/* =========================================================
+   THEME / BRAND — BASE IGUAL AO DASHBOARD + ACCENT AIOTI
+========================================================= */
+:root{
+  /* ✅ Paleta BASE (dashboard) */
+  --neon: #39e58c;
+  --neon-soft: rgba(57,229,140,.25);
+  --neon-strong: rgba(57,229,140,.55);
+
+  /* ✅ AIOTI (accent opcional — não domina) */
+  --aioti-green: #7FD055;
+  --aioti-green-strong: rgba(127, 208, 85, .95);
+  --aioti-green-glow-1: rgba(127, 208, 85, .30);
+  --aioti-green-glow-2: rgba(127, 208, 85, .18);
+  --aioti-green-glow-3: rgba(127, 208, 85, .10);
+
+  /* Weather */
+  --warm-yellow: #ff9800;
+  --warm-yellow-glow: rgba(255,152,0,.22);
+
+  /* Fundo / cards (dashboard) */
+  --bg-0: #050807;
+  --card-0: rgba(14,24,20,0.96);
+  --card-1: rgba(7,12,10,0.96);
+
+  /* 🔴 Alarm palette (premium) */
+  --alarm-red: #ff3b3b;
+  --alarm-red-2: #ff5c77;
+  --alarm-red-glow-1: rgba(255, 59, 59, 0.35);
+  --alarm-red-glow-2: rgba(255, 59, 59, 0.18);
+  --alarm-red-glow-3: rgba(255, 92, 119, 0.12);
+}
+
+/* =========================================================
+   RESET
+========================================================= */
+*{
+  box-sizing: border-box;
+  font-family: "Segoe UI", Roboto, Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ✅ scroll suave pros botões “pular para” */
+html{ scroll-behavior: smooth; }
+
+/* =========================================================
+   BODY / FUNDO (✅ volta pro mesmo vibe do DASHBOARD)
+========================================================= */
+body{
+  margin: 0;
+  padding: 20px;
+  background:
+    radial-gradient(1200px 600px at 20% -10%, rgba(57,229,140,0.08), transparent 60%),
+    radial-gradient(1000px 500px at 90% 10%, rgba(57,229,140,0.05), transparent 60%),
+    var(--bg-0);
+  color: #e9fff3;
+}
+
+/* =========================================================
+   GRID PRINCIPAL
+========================================================= */
+.plant-layout{
+  display: grid;
+  grid-template-columns: 1fr;
+  grid-template-areas:
+    "header"
+    "alarms"
+    "summary"
+    "charts"
+    "devices";
+  gap: 22px;
+}
+
+.plant-header-card{
+  grid-area: header;
+  box-shadow:
+    inset 0 0 0 1px rgba(57,229,140,0.18),
+    0 22px 40px rgba(0,0,0,0.65);
+  position: sticky;
+  top: 16px;
+  z-index: 5;
+}
+
+.plant-alarms-card{ grid-area: alarms; }
+.plant-summary-strip{ grid-area: summary; }
+.plant-charts-grid{ grid-area: charts; }
+.plant-devices-card{ grid-area: devices; }
+
+/* =========================================================
+   ✅ DEVICE JUMP — CENTRALIZADO (igual sua imagem)
+========================================================= */
+.device-jump-card{
+  padding: 16px 16px;
+  border-radius: 16px;
+  background: linear-gradient(180deg, rgba(14,24,20,0.90), rgba(7,12,10,0.92));
+  box-shadow:
+    inset 0 0 0 1px rgba(57,229,140,0.10),
+    0 16px 34px rgba(0,0,0,0.55);
+  position: relative;
+  overflow: hidden;
+
+  /* ✅ faz o conteúdo ficar no centro do card */
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.device-jump-card::before{
+  content:"";
+  position:absolute;
+  inset:-40px;
+  background:
+    radial-gradient(420px 160px at 18% 30%, rgba(57,229,140,.09), transparent 60%),
+    radial-gradient(420px 160px at 82% 55%, rgba(57,229,140,.06), transparent 62%);
+  filter: blur(2px);
+  opacity: .9;
+  pointer-events:none;
+}
+
+.device-jump{
+  position: relative;
+  z-index: 1;
+
+  /* ✅ centraliza os botões */
+  display: inline-flex;       /* ao invés de flex (pega só o “tamanho dos botões”) */
+  justify-content: center;
+  align-items: center;
+  gap: 12px;
+
+  /* ✅ impede de esticar e ficar “lado esquerdo” */
+  width: auto;
+}
+
+/* Botão retangular moderno */
+.jump-btn{
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+
+  height: 44px;
+  padding: 0 16px;
+
+  border-radius: 12px;
+  text-decoration: none;
+
+  color: rgba(233,255,243,0.92);
+  background: rgba(12,20,17,0.70);
+
+  border: 1px solid rgba(57,229,140,0.22);
+
+  box-shadow:
+    0 14px 28px rgba(0,0,0,0.45),
+    inset 0 1px 0 rgba(255,255,255,0.06);
+
+  transition: transform .12s ease, box-shadow .18s ease, border-color .18s ease, background .18s ease, filter .18s ease;
+  user-select: none;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.jump-btn i{
+  color: var(--neon);
+  filter: drop-shadow(0 0 10px rgba(57,229,140,.22));
+  opacity: .95;
+}
+
+/* ✅ deixa TODOS os botões com o mesmo tamanho */
+.device-jump{
+  display: inline-flex;
+  gap: 12px;
+}
+
+/* botão “padronizado” */
+.jump-btn{
+  min-width: 160px;      /* ajuste: 150–190 */
+  height: 44px;          /* altura fixa */
+  padding: 0 16px;       /* sem “engordar” diferente */
+  border-radius: 14px;
+
+  display: grid;         /* ícone e texto alinhados sempre */
+  grid-template-columns: 18px 1fr;
+  align-items: center;
+  column-gap: 10px;
+
+  justify-content: center;
+  text-align: left;
+  white-space: nowrap;
+}
+
+/* ícone sempre com largura fixa */
+.jump-btn i{
+  width: 18px;
+  display: grid;
+  place-items: center;
+  font-size: 14px;
+}
+
+.jump-btn:hover{
+  background: rgba(57,229,140,0.10);
+  border-color: rgba(57,229,140,0.35);
+  box-shadow:
+    0 18px 36px rgba(0,0,0,0.55),
+    0 0 22px rgba(57,229,140,0.16),
+    inset 0 1px 0 rgba(255,255,255,0.06);
+  transform: translateY(-1px);
+}
+
+.jump-btn:active{
+  transform: translateY(0px) scale(0.99);
+}
+
+/* ✅ Âncora com “offset” pra não cair colado em cima */
+.section-anchor{
+  position: relative;
+  top: -14px;
+  height: 1px;
+}
+
+/* =========================================================
+   GRÁFICOS — GRID HORIZONTAL
+========================================================= */
+.plant-charts-grid{
+  display: grid;
+  grid-template-columns: 1.3fr 1fr;
+  gap: 22px;
+}
+
+/* Card de gráfico */
+.plant-chart-card{
+  display: flex;
+  flex-direction: column;
+  height: 360px;
+}
+
+/* Wrapper do canvas */
+.plant-chart-card .chart-wrapper{
+  flex: 1;
+  position: relative;
+  padding-top: 12px;
+}
+
+/* ✅ Glow no gráfico (CSS-only) — verde do DASHBOARD */
+.plant-chart-card canvas{
+  filter:
+    drop-shadow(0 0 10px rgba(57,229,140,.16))
+    drop-shadow(0 0 22px rgba(57,229,140,.10));
+}
+
+/* =========================================================
+   CARD BASE
+========================================================= */
+.card{
+  background: linear-gradient(180deg, var(--card-0), var(--card-1));
+  border-radius: 16px;
+  padding: 20px 24px;
+}
+
+/* =========================================================
+   HEADER GRID
+========================================================= */
+.header-grid{
+  display: grid;
+  grid-template-columns: 2.3fr 1.4fr;
+  gap: 28px;
+  align-items: center;
+}
+
+/* =========================================================
+   HEADER USINA
+========================================================= */
+.header-main{
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding-top: 4px;
+}
+
+.card-header{
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+/* =========================================================
+   HEADER (TOPO ESQUERDO) — REWORK
+========================================================= */
+.plant-header-title{
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  margin-top: 0;
+}
+
+/* Botão voltar base (mantido) */
+.back-btn{
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 1px solid rgba(57,229,140,0.22);
+  background: rgba(20,34,28,0.85);
+  color: rgba(233,255,243,0.92);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.25s ease;
+}
+
+.back-btn:hover{
+  background: rgba(57,229,140,0.10);
+  box-shadow: 0 0 14px rgba(57,229,140,0.22);
+  transform: translateX(-2px);
+}
+
+/* ✅ versão modern (quadradinho) + mais alta */
+.back-btn--modern{
+  width: 42px;
+  height: 42px;
+  border-radius: 14px;
+  border: 1px solid rgba(57,229,140,0.22);
+  background: rgba(12,20,17,0.72);
+  color: rgba(233,255,243,0.92);
+
+  box-shadow:
+    0 14px 30px rgba(0,0,0,0.45),
+    inset 0 1px 0 rgba(255,255,255,0.06);
+
+  transition: transform .12s ease, box-shadow .18s ease, border-color .18s ease, background .18s ease;
+
+  /* ✅ sobe a seta */
+  margin-top: -16px;
+}
+
+.back-btn--modern:hover{
+  background: rgba(57,229,140,0.10);
+  border-color: rgba(57,229,140,0.30);
+  box-shadow:
+    0 18px 38px rgba(0,0,0,0.55),
+    0 0 22px rgba(57,229,140,0.16),
+    inset 0 1px 0 rgba(255,255,255,0.06);
+  transform: translateY(-1px);
+}
+
+.back-btn--modern:active{
+  transform: translateY(0px) scale(0.98);
+}
+
+.back-svg{
+  width: 22px;
+  height: 22px;
+  display: block;
+}
+
+/* Linha 2: badge + texto */
+.plant-title-row{
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+/* Badge plantinha (base dashboard) + accent AIOTI sutil */
+.plant-badge{
+  width: 44px;
+  height: 44px;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+
+  background:
+    radial-gradient(circle at 30% 25%, rgba(57,229,140,0.20), rgba(12,18,32,0.12) 55%),
+    rgba(12,20,17,0.65);
+
+  border: 1px solid rgba(57,229,140,0.30);
+
+  box-shadow:
+    0 0 0 1px rgba(57,229,140,0.10),
+    0 0 18px rgba(57,229,140,0.22),
+    0 10px 24px rgba(127,208,85,.08),
+    0 14px 30px rgba(0,0,0,0.45);
+
+  animation: neonGlow 2.8s ease-in-out infinite;
+}
+
+.plant-badge i{
+  font-size: 18px;
+  color: var(--neon);
+  filter: drop-shadow(0 0 12px rgba(57,229,140,0.40));
+}
+
+/* Textos */
+.plant-title-text{
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.plant-name{
+  margin: 0;
+  font-size: 22px;
+  font-weight: 650;
+  letter-spacing: 0.2px;
+  color: rgba(244,246,255,0.95);
+  text-shadow:
+    0 0 18px rgba(57,229,140,0.10),
+    0 0 30px rgba(57,229,140,0.06);
+}
+
+/* Sublinha opcional */
+.plant-subline{
+  font-size: 12px;
+  color: rgba(154,219,184,0.70);
+  text-shadow: 0 0 18px rgba(57,229,140,0.08);
+}
+
+/* =========================================================
+   KPI (✅ verde e glow iguais ao DASHBOARD)
+========================================================= */
+.plant-kpis{
+  display: flex;
+  gap: 40px;
+  margin-top: 14px;
+}
+
+.kpi-label{
+  font-size: 11px;
+  color: #8be8c0;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  text-shadow: 0 0 14px rgba(255,255,255,0.05);
+}
+
+.kpi strong{
+  display: block;
+  margin-top: 4px;
+  font-size: 18px;
+  font-weight: 700;
+
+  color: var(--neon);
+  text-shadow:
+    0 0 10px rgba(57,229,140,0.22),
+    0 0 22px rgba(57,229,140,0.12),
+    0 0 40px rgba(57,229,140,0.08);
+
+  animation: neonTextGlow 2.6s ease-in-out infinite;
+}
+
+/* =========================================================
+   WEATHER
+========================================================= */
+.weather-station{
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 18px 20px;
+  background: transparent;
+  align-self: center;
+}
+
+.weather-title{
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: 0.7px;
+  color: #b6e5cf;
+  margin-bottom: 16px;
+  text-transform: uppercase;
+  text-shadow: 0 0 10px rgba(57,229,140,0.10);
+}
+
+.weather-item{
+  display: grid;
+  grid-template-columns: 18px 1fr auto;
+  gap: 12px;
+  padding: 10px 0;
+  font-size: 13px;
+  color: rgba(233,255,243,0.88);
+  text-shadow: 0 0 14px rgba(255,255,255,0.06);
+}
+
+.weather-item strong{
+  color: var(--warm-yellow);
+  text-shadow:
+    0 0 10px var(--warm-yellow-glow),
+    0 0 20px rgba(255,152,0,0.10);
+}
+
+.weather-icon{
+  color: var(--warm-yellow);
+  font-size: 14px;
+  opacity: 0.9;
+  filter: drop-shadow(0 0 8px rgba(255,152,0,0.18));
+}
+
+/* =========================================================
+   🔴 ALARMES — PREMIUM RED GLOW
+========================================================= */
+.plant-alarms-card{
+  background: linear-gradient(180deg, var(--card-0), var(--card-1));
+  border-radius: 16px;
+  padding: 20px 24px;
+  box-shadow:
+    inset 0 0 0 1px rgba(57,229,140,0.08),
+    0 14px 32px rgba(0,0,0,0.6);
+}
+
+.plant-alarms-card .card-title{
+  margin-bottom: 14px;
+}
+
+#plantActiveAlarms{
+  display: flex;
+  flex-direction: column;
+  gap: 12px; /* mais “respirado” */
+}
+
+.alarm-row{
+  position: relative;
+  width: 100%;
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 16px;
+  padding: 14px 16px;
+  border-radius: 14px;
+  font-size: 13px;
+  align-items: center;
+  overflow: hidden;
+
+  /* base neutra */
+  background: linear-gradient(180deg, rgba(16,26,22,0.72), rgba(10,16,14,0.72));
+  border: 1px solid rgba(255,255,255,0.06);
+  color: rgba(244,246,255,0.92);
+
+  box-shadow:
+    0 12px 26px rgba(0,0,0,0.45),
+    inset 0 1px 0 rgba(255,255,255,0.06);
+
+  transition: transform .12s ease, box-shadow .18s ease, border-color .18s ease, filter .18s ease;
+}
+
+.alarm-row::before{
+  content:"";
+  position:absolute;
+  left: 10px;
+  top: 10px;
+  bottom: 10px;
+  width: 4px;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.12);
+  box-shadow: 0 0 0 1px rgba(0,0,0,0.25) inset;
+  pointer-events:none;
+}
+
+.alarm-row::after{
+  content:"";
+  position:absolute;
+  inset:-2px;
+  border-radius: 16px;
+  background:
+    radial-gradient(520px 120px at 12% 50%, rgba(255,255,255,0.06), transparent 60%),
+    radial-gradient(520px 120px at 88% 55%, rgba(255,255,255,0.03), transparent 62%);
+  pointer-events:none;
+  opacity: .65;
+}
+
+.alarm-row span{
+  text-shadow: 0 0 14px rgba(255,255,255,0.06);
+}
+
+.alarm-row:hover{
+  transform: translateY(-1px);
+  box-shadow:
+    0 16px 34px rgba(0,0,0,0.55),
+    inset 0 1px 0 rgba(255,255,255,0.08);
+}
+
+/* HIGH/CRITICAL — vermelho premium */
+.alarm-row.critical,
+.alarm-row.high{
+  background:
+    linear-gradient(90deg, rgba(255,59,59,0.22), rgba(255,59,59,0.06)),
+    linear-gradient(180deg, rgba(18,10,12,0.72), rgba(10,6,8,0.72));
+  border-color: rgba(255,59,59,0.28);
+  color: rgba(255,255,255,0.95);
+  box-shadow:
+    0 18px 40px rgba(0,0,0,0.55),
+    0 0 26px var(--alarm-red-glow-2),
+    inset 0 0 0 1px rgba(255,59,59,0.16),
+    inset 0 1px 0 rgba(255,255,255,0.08);
+}
+
+.alarm-row.critical::before,
+.alarm-row.high::before{
+  background: linear-gradient(180deg, rgba(255,59,59,0.95), rgba(255,92,119,0.55));
+  box-shadow:
+    0 0 10px var(--alarm-red-glow-1),
+    0 0 20px var(--alarm-red-glow-2);
+}
+
+.alarm-row.critical::after,
+.alarm-row.high::after{
+  background:
+    radial-gradient(520px 160px at 16% 50%, rgba(255,59,59,0.18), transparent 60%),
+    radial-gradient(520px 160px at 88% 55%, rgba(255,92,119,0.12), transparent 62%),
+    radial-gradient(280px 120px at 40% 10%, rgba(255,255,255,0.05), transparent 55%);
+  opacity: .95;
+}
+
+.alarm-row.critical span,
+.alarm-row.high span{
+  text-shadow:
+    0 0 10px rgba(255,255,255,0.18),
+    0 0 20px rgba(255,59,59,0.12);
+}
+
+/* MEDIUM — âmbar */
+.alarm-row.medium{
+  background: linear-gradient(90deg, rgba(255,186,65,0.18), rgba(255,186,65,0.05));
+  border-color: rgba(255,186,65,0.22);
+  color: rgba(255,255,255,0.92);
+}
+.alarm-row.medium::before{
+  background: linear-gradient(180deg, rgba(255,186,65,0.95), rgba(255,186,65,0.45));
+  box-shadow: 0 0 10px rgba(255,186,65,0.26);
+}
+
+/* LOW — azul/ciano */
+.alarm-row.low{
+  background: linear-gradient(90deg, rgba(80,180,255,0.16), rgba(80,180,255,0.05));
+  border-color: rgba(80,180,255,0.18);
+}
+.alarm-row.low::before{
+  background: linear-gradient(180deg, rgba(80,180,255,0.95), rgba(80,180,255,0.45));
+  box-shadow: 0 0 10px rgba(80,180,255,0.22);
+}
+
+/* =========================================================
+   SUMMARY (se usar depois)
+========================================================= */
+.plant-summary-strip{
+  background: linear-gradient(180deg, rgba(18,30,25,0.96), rgba(10,18,15,0.96));
+  border-radius: 16px;
+  padding: 18px 22px;
+  box-shadow:
+    inset 0 0 0 1px rgba(57,229,140,0.12),
+    0 12px 28px rgba(0,0,0,0.6);
+}
+
+.summary-strip-grid{
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 18px;
+}
+
+.summary-strip-item{
+  background: linear-gradient(180deg, rgba(20,34,28,0.95), rgba(12,20,17,0.95));
+  border-radius: 12px;
+  padding: 16px 18px;
+  border: 1px solid rgba(57,229,140,0.18);
+}
+
+.summary-strip-item strong{
+  font-size: 20px;
+  color: var(--neon);
+  text-shadow:
+    0 0 10px rgba(57,229,140,.20),
+    0 0 24px rgba(57,229,140,.10);
+}
+
+/* =========================================================
+   INVERSORES — ISOLADO
+========================================================= */
+.inverter-header,
+.inverter-row{
+  display: grid;
+  grid-template-columns: 14px 1.2fr 1fr 1fr 1fr 1fr 0.6fr 1.6fr;
+  gap: 12px;
+  padding: 12px 14px;
+  font-size: 13px;
+}
+
+.inverter-header{
+  color: #9adbb8;
+  text-transform: uppercase;
+  font-size: 11px;
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+  margin-bottom: 6px;
+}
+
+.inverter-row{
+  border-radius: 10px;
+  background: rgba(255,255,255,0.03);
+  margin-bottom: 6px;
+}
+
+.inverter-name{
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.arrow{
+  font-size: 12px;
+  color: var(--neon);
+  transition: transform 0.3s ease;
+  filter: drop-shadow(0 0 10px rgba(57,229,140,.18));
+}
+
+.inverter-row.open .arrow{
+  transform: rotate(180deg);
+}
+
+.status-dot{
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  margin-top: 4px;
+}
+
+.inverter-row.online .status-dot{
+  background: var(--neon);
+  box-shadow:
+    0 0 10px rgba(57,229,140,0.45),
+    0 0 18px rgba(57,229,140,0.18);
+  animation: neonDotGlow 2.4s ease-in-out infinite;
+}
+
+.inverter-row.offline .status-dot{
+  background: #ff5c5c;
+}
+
+/* Strings */
+.inverter-strings{
+  max-height: 0;
+  overflow: hidden;
+  transition: max-height 0.35s ease, opacity 0.25s ease;
+  opacity: 0;
+}
+
+.inverter-strings.open{
+  max-height: 600px;
+  opacity: 1;
+}
+
+.strings-grid{
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 12px;
+  padding: 16px;
+}
+
+/* =========================================================
+   STRING CARDS (base dashboard)
+========================================================= */
+.string-card{
+  position: relative;
+  border-radius: 12px;
+  padding: 12px 10px;
+  font-size: 12px;
+  text-align: center;
+  letter-spacing: .2px;
+
+  background: linear-gradient(180deg, rgba(14, 28, 22, .85), rgba(7, 14, 11, .85));
+  border: 1px solid rgba(57,229,140,.12);
+  color: rgba(154, 219, 184, .95);
+
+  box-shadow:
+    inset 0 0 0 1px rgba(255,255,255,.02),
+    0 6px 18px rgba(0,0,0,.35);
+
+  transition: transform .12s ease, box-shadow .18s ease, border-color .18s ease, filter .18s ease, opacity .18s ease;
+  cursor: pointer;
+  user-select: none;
+}
+
+.string-card strong{
+  display:block;
+  margin-top: 6px;
+  font-weight: 800;
+  color: var(--neon);
+  text-shadow:
+    0 0 10px rgba(57,229,140,.18),
+    0 0 22px rgba(57,229,140,.10);
+}
+
+.string-card.active{
+  border-color: rgba(57,229,140,.50);
+  box-shadow:
+    inset 0 0 0 1px rgba(57,229,140,.18),
+    0 0 0 1px rgba(57,229,140,.08),
+    0 10px 26px rgba(0,0,0,.40),
+    0 0 22px rgba(57,229,140,.22),
+    0 0 44px rgba(57,229,140,.14);
+}
+
+.string-card.active::after{
+  content:"";
+  position:absolute;
+  inset:-2px;
+  border-radius: 14px;
+  background: radial-gradient(circle at 50% 0%, rgba(57,229,140,.24), transparent 55%);
+  filter: blur(10px);
+  opacity: .9;
+  pointer-events:none;
+}
+
+.string-card:hover{
+  transform: translateY(-1px);
+  border-color: rgba(57,229,140,.42);
+  box-shadow:
+    inset 0 0 0 1px rgba(57,229,140,.12),
+    0 12px 30px rgba(0,0,0,.45),
+    0 0 26px rgba(57,229,140,.18);
+}
+
+.string-card:active{
+  transform: translateY(0px) scale(.99);
+}
+
+.string-card.nodata{
+  border-color: rgba(154,219,184,.18);
+  color: rgba(154,219,184,.55);
+  filter: saturate(.65);
+  cursor: default;
+}
+
+.string-card.nodata strong{
+  color: rgba(154,219,184,.55);
+  text-shadow: none;
+}
+
+.string-card.disabled{
+  background: linear-gradient(180deg, rgba(30,30,30,.55), rgba(14,14,14,.55));
+  border-color: rgba(180,180,180,.10);
+  color: rgba(210,210,210,.45);
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,.02), 0 6px 18px rgba(0,0,0,.35);
+  filter: grayscale(1) saturate(0);
+  opacity: .65;
+  cursor: not-allowed;
+}
+
+.string-card.disabled strong,
+.string-card.disabled{
+  color: rgba(210,210,210,.35);
+}
+
+.string-card.disabled::after{
+  display:none;
+}
+
+.string-card.fault{
+  color: #ff5c5c;
+  box-shadow: inset 0 0 0 1px rgba(255,92,92,0.4);
+}
+
+/* =========================================================
+   RELÉ
+========================================================= */
+.device-row{
+  display: grid;
+  grid-template-columns: 14px 1fr auto;
+  gap: 14px;
+  padding: 14px 16px;
+  border-radius: 10px;
+  background: rgba(255,255,255,0.03);
+}
+
+/* =========================================================
+   RESPONSIVO
+========================================================= */
+@media (max-width: 1100px){
+  .header-grid,
+  .plant-charts-grid{
+    grid-template-columns: 1fr;
+  }
+
+  .summary-strip-grid{
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+/* =========================================================
+   LEGENDA DO GRÁFICO
+========================================================= */
+.chart-legend{
+  margin-top: 10px;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.legend-bars{
+  display: grid;
+  grid-auto-rows: 8px;
+  gap: 6px;
+  padding-top: 2px;
+}
+
+.bar{
+  width: 26px;
+  height: 8px;
+  border-radius: 999px;
+}
+
+.bar--green{
+  background: var(--neon);
+  box-shadow:
+    0 0 12px rgba(57,229,140,0.35),
+    0 0 26px rgba(57,229,140,0.18);
+}
+
+.bar--yellow{
+  background: rgba(255,152,0,0.95);
+  box-shadow:
+    0 0 12px rgba(255,152,0,0.35),
+    0 0 26px rgba(255,152,0,0.18);
+}
+
+.legend-text{
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  line-height: 1.15;
+}
+
+.legend-line{
+  font-size: 13px;
+  letter-spacing: 0.02em;
+}
+
+.legend-line--green{
+  color: rgba(233,255,243,0.92);
+  text-shadow: 0 0 12px rgba(57,229,140,0.10);
+}
+
+.legend-line--yellow{
+  color: rgba(233,255,243,0.92);
+  text-shadow: 0 0 12px rgba(255,152,0,0.10);
+}
+
+/* =========================================================
+   ANIMAÇÕES — glow “respirando”
+========================================================= */
+@keyframes neonTextGlow{
+  0%, 100%{
+    text-shadow:
+      0 0 10px rgba(57,229,140,.18),
+      0 0 22px rgba(57,229,140,.10),
+      0 0 40px rgba(57,229,140,.06);
+    filter: brightness(1);
+  }
+  50%{
+    text-shadow:
+      0 0 14px rgba(57,229,140,.28),
+      0 0 30px rgba(57,229,140,.16),
+      0 0 54px rgba(57,229,140,.10);
+    filter: brightness(1.06);
+  }
+}
+
+@keyframes neonGlow{
+  0%, 100%{
+    box-shadow:
+      0 0 0 1px rgba(57,229,140,0.10),
+      0 0 16px rgba(57,229,140,0.18),
+      0 14px 30px rgba(0,0,0,0.45);
+    filter: brightness(1);
+  }
+  50%{
+    box-shadow:
+      0 0 0 1px rgba(57,229,140,0.14),
+      0 0 22px rgba(57,229,140,0.26),
+      0 14px 30px rgba(0,0,0,0.45);
+    filter: brightness(1.05);
+  }
+}
+
+@keyframes neonDotGlow{
+  0%, 100%{
+    box-shadow:
+      0 0 10px rgba(57,229,140,0.40),
+      0 0 18px rgba(57,229,140,0.16);
+  }
+  50%{
+    box-shadow:
+      0 0 14px rgba(57,229,140,0.55),
+      0 0 26px rgba(57,229,140,0.22);
+  }
+}
+
+/* Acessibilidade */
+@media (prefers-reduced-motion: reduce){
+  .plant-badge,
+  .kpi strong,
+  .inverter-row.online .status-dot{
+    animation: none !important;
+  }
+}
+
+/* =========================================================
+   DEVICE NAV (BOTÕES CENTRALIZADOS / MESMO TAMANHO / GLOW)
+========================================================= */
+.plant-device-nav-card{
+  padding: 14px 18px;
+  background: linear-gradient(180deg, rgba(18,30,25,0.96), rgba(10,18,15,0.96));
+  border-radius: 16px;
+  box-shadow:
+    inset 0 0 0 1px rgba(57,229,140,0.10),
+    0 14px 32px rgba(0,0,0,0.55);
+}
+
+.device-nav-wrap{
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 14px;
+}
+
+.device-nav-btn{
+  width: 170px;
+  height: 46px;
+  padding: 0 18px;
+
+  border-radius: 14px;
+  border: 1px solid rgba(57,229,140,0.26);
+  background: rgba(12,20,17,0.62);
+  color: rgba(233,255,243,0.92);
+
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+
+  box-shadow:
+    0 14px 30px rgba(0,0,0,0.35),
+    inset 0 1px 0 rgba(255,255,255,0.05);
+
+  transition: transform .12s ease, box-shadow .18s ease, border-color .18s ease, background .18s ease;
+}
+
+.device-nav-btn i{
+  width: 18px;
+  text-align: center;
+  color: var(--neon);
+  filter: drop-shadow(0 0 12px rgba(57,229,140,0.25));
+  opacity: .95;
+}
+
+.device-nav-btn span{
+  display: inline-block;
+  text-align: center;
+  letter-spacing: .2px;
+}
+
+.device-nav-btn:hover{
+  border-color: rgba(57,229,140,0.40);
+  background: rgba(57,229,140,0.08);
+  box-shadow:
+    0 18px 38px rgba(0,0,0,0.45),
+    0 0 22px rgba(57,229,140,0.14),
+    inset 0 1px 0 rgba(255,255,255,0.06);
+  transform: translateY(-1px);
+}
+
+.device-nav-btn:active{
+  transform: translateY(0px) scale(.99);
+}
+
+.scroll-anchor{
+  scroll-margin-top: 120px;
+  height: 0;
+}

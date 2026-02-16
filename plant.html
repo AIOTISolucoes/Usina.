@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <title>Usina</title>
+
+  <!-- CSS -->
+  <link rel="stylesheet" href="./css/plant.css" />
+  <link
+    rel="stylesheet"
+    href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css"
+  />
+
+  <!-- Chart.js -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+</head>
+
+<body>
+
+<main class="plant-layout">
+
+  <!-- =================================================
+       HEADER + WEATHER
+  ================================================== -->
+  <section class="card plant-header-card header-grid">
+
+    <!-- RESUMO USINA -->
+    <div class="header-main">
+
+      <div class="card-header plant-header-title">
+
+        <!-- Linha 1: somente a seta -->
+        <button class="back-btn back-btn--modern" onclick="history.back()" aria-label="Voltar">
+          <svg class="back-svg" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M14.5 5L8.5 12L14.5 19"
+                  stroke="currentColor" stroke-width="2.2"
+                  stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
+
+        <!-- Linha 2: plant badge + textos -->
+        <div class="plant-title-row">
+          <span class="plant-badge" aria-hidden="true">
+            <i class="fa-solid fa-seedling"></i>
+          </span>
+
+          <div class="plant-title-text">
+            <h2 class="plant-name">Usina Acopiara</h2>
+            <span class="plant-subline" id="plantSubline">Nenhum alarme ativo</span>
+          </div>
+        </div>
+
+      </div>
+
+      <div class="plant-kpis">
+        <div class="kpi">
+          <div class="kpi-label">Rated Power</div>
+          <strong id="headerRatedPower">—</strong>
+        </div>
+        <div class="kpi">
+          <div class="kpi-label">Active Power</div>
+          <strong id="headerActivePower">—</strong>
+        </div>
+        <div class="kpi">
+          <div class="kpi-label">Capacidade</div>
+          <strong id="headerCapacity">—</strong>
+        </div>
+      </div>
+    </div>
+
+    <!-- WEATHER -->
+    <div class="weather-station">
+      <h3 class="weather-title">Weather Station</h3>
+
+      <div class="weather-item">
+        <i class="fa-solid fa-sun weather-icon"></i>
+        <span>Irradiance POA</span>
+        <strong id="weatherIrradiance">—</strong>
+      </div>
+
+      <div class="weather-item">
+        <i class="fa-solid fa-temperature-half weather-icon"></i>
+        <span>Air Temperature</span>
+        <strong id="weatherAirTemp">—</strong>
+      </div>
+
+      <div class="weather-item">
+        <i class="fa-solid fa-microchip weather-icon"></i>
+        <span>Module Temp</span>
+        <strong id="weatherModuleTemp">—</strong>
+      </div>
+    </div>
+
+  </section>
+
+  <!-- =================================================
+       ALARMES
+  ================================================== -->
+  <section class="card plant-alarms-card">
+    <h3 class="card-title">Alarmes Ativos</h3>
+
+    <div id="plantActiveAlarms">
+      <div class="alarm-row critical">
+        <span>Inversor • Inversor 03</span>
+        <span>Evento 32</span>
+        <span>05/02/2026 10:01</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- =================================================
+       NAV DISPOSITIVOS (BOTÕES CENTRALIZADOS)
+  ================================================== -->
+  <section class="card plant-device-nav-card">
+    <div class="device-nav-wrap">
+      <button class="device-nav-btn" type="button" data-target="#sec-inverters">
+        <i class="fa-solid fa-bolt" aria-hidden="true"></i>
+        <span>Inversores</span>
+      </button>
+
+      <button class="device-nav-btn" type="button" data-target="#sec-relay">
+        <i class="fa-solid fa-tower-broadcast" aria-hidden="true"></i>
+        <span>Relé</span>
+      </button>
+    </div>
+  </section>
+
+  <!-- =================================================
+       GRÁFICOS
+  ================================================== -->
+  <section class="plant-charts-grid">
+
+    <section class="card plant-chart-card">
+      <div class="card-header">
+        <div>
+          <h2>Produção diária</h2>
+
+          <div class="chart-legend">
+            <span class="legend-bars" aria-hidden="true">
+              <span class="bar bar--green"></span>
+              <span class="bar bar--yellow"></span>
+            </span>
+
+            <div class="legend-text">
+              <span class="legend-line legend-line--green">Active Power</span>
+              <span class="legend-line legend-line--yellow">Irradiância</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="chart-wrapper">
+        <canvas id="plantMainChart"></canvas>
+      </div>
+    </section>
+
+    <section class="card plant-chart-card">
+      <div class="card-header">
+        <div>
+          <h2>Geração mensal acumulada</h2>
+          <span class="subtitle">Últimos 30 dias</span>
+        </div>
+      </div>
+
+      <div class="chart-wrapper">
+        <canvas id="plantMonthlyChart"></canvas>
+      </div>
+    </section>
+
+  </section>
+
+  <!-- =================================================
+       DISPOSITIVOS — INVERSORES + RELÉ
+  ================================================== -->
+  <section class="card plant-devices-card">
+
+    <!-- âncora invisível (com offset pra não ficar atrás do header sticky) -->
+    <div id="sec-inverters" class="scroll-anchor"></div>
+
+    <h3 class="card-title">Inversores</h3>
+
+    <div class="inverters-section">
+
+      <div class="inverter-header">
+        <span></span>
+        <span>Inversor</span>
+        <span>Power</span>
+        <span>Efficiency</span>
+        <span>Temp</span>
+        <span>Freq</span>
+        <span>PR</span>
+        <span>Última leitura</span>
+      </div>
+
+      <div class="inverter-row online inverter-toggle" data-inverter="1">
+        <span class="status-dot"></span>
+        <span class="inverter-name">
+          Inversor 1
+          <i class="arrow fa-solid fa-chevron-down"></i>
+        </span>
+        <span>136 kW</span>
+        <span>98.6 %</span>
+        <span>41.8 °C</span>
+        <span>60.04 Hz</span>
+        <span>1.00</span>
+        <span>05/02/2026 11:10</span>
+      </div>
+
+      <div class="inverter-strings" id="strings-1" data-inverter="1">
+        <div class="strings-grid" data-inverter-id="1"></div>
+      </div>
+
+      <div class="inverter-row online inverter-toggle" data-inverter="2">
+        <span class="status-dot"></span>
+        <span class="inverter-name">
+          Inversor 2
+          <i class="arrow fa-solid fa-chevron-down"></i>
+        </span>
+        <span>135 kW</span>
+        <span>98.4 %</span>
+        <span>42.2 °C</span>
+        <span>60.03 Hz</span>
+        <span>1.00</span>
+        <span>05/02/2026 11:10</span>
+      </div>
+
+      <div class="inverter-strings" id="strings-2" data-inverter="2">
+        <div class="strings-grid" data-inverter-id="2"></div>
+      </div>
+
+      <div class="inverter-row offline inverter-toggle" data-inverter="3">
+        <span class="status-dot"></span>
+        <span class="inverter-name">
+          Inversor 3
+          <i class="arrow fa-solid fa-chevron-down"></i>
+        </span>
+        <span>—</span>
+        <span>—</span>
+        <span>—</span>
+        <span>—</span>
+        <span>—</span>
+        <span>05/02/2026 10:01</span>
+      </div>
+
+      <div class="inverter-strings" id="strings-3" data-inverter="3">
+        <div class="strings-grid" data-inverter-id="3"></div>
+      </div>
+
+      <div class="inverter-row online inverter-toggle" data-inverter="4">
+        <span class="status-dot"></span>
+        <span class="inverter-name">
+          Inversor 4
+          <i class="arrow fa-solid fa-chevron-down"></i>
+        </span>
+        <span>137 kW</span>
+        <span>98.5 %</span>
+        <span>41.9 °C</span>
+        <span>60.04 Hz</span>
+        <span>1.00</span>
+        <span>05/02/2026 11:10</span>
+      </div>
+
+      <div class="inverter-strings" id="strings-4" data-inverter="4">
+        <div class="strings-grid" data-inverter-id="4"></div>
+      </div>
+
+      <div class="inverter-row online inverter-toggle" data-inverter="5">
+        <span class="status-dot"></span>
+        <span class="inverter-name">
+          Inversor 5
+          <i class="arrow fa-solid fa-chevron-down"></i>
+        </span>
+        <span>132 kW</span>
+        <span>98.1 %</span>
+        <span>41.6 °C</span>
+        <span>60.03 Hz</span>
+        <span>1.00</span>
+        <span>05/02/2026 11:10</span>
+      </div>
+
+      <div class="inverter-strings" id="strings-5" data-inverter="5">
+        <div class="strings-grid" data-inverter-id="5"></div>
+      </div>
+
+      <div class="inverter-row online inverter-toggle" data-inverter="6">
+        <span class="status-dot"></span>
+        <span class="inverter-name">
+          Inversor 6
+          <i class="arrow fa-solid fa-chevron-down"></i>
+        </span>
+        <span>140 kW</span>
+        <span>98.7 %</span>
+        <span>42.0 °C</span>
+        <span>60.05 Hz</span>
+        <span>1.00</span>
+        <span>05/02/2026 11:10</span>
+      </div>
+
+      <div class="inverter-strings" id="strings-6" data-inverter="6">
+        <div class="strings-grid" data-inverter-id="6"></div>
+      </div>
+
+      <div class="inverter-row online inverter-toggle" data-inverter="7">
+        <span class="status-dot"></span>
+        <span class="inverter-name">
+          Inversor 7
+          <i class="arrow fa-solid fa-chevron-down"></i>
+        </span>
+        <span>136 kW</span>
+        <span>98.6 %</span>
+        <span>41.8 °C</span>
+        <span>60.04 Hz</span>
+        <span>1.00</span>
+        <span>05/02/2026 11:10</span>
+      </div>
+
+      <div class="inverter-strings" id="strings-7" data-inverter="7">
+        <div class="strings-grid" data-inverter-id="7"></div>
+      </div>
+
+      <div class="inverter-row online inverter-toggle" data-inverter="8">
+        <span class="status-dot"></span>
+        <span class="inverter-name">
+          Inversor 8
+          <i class="arrow fa-solid fa-chevron-down"></i>
+        </span>
+        <span>134 kW</span>
+        <span>98.3 %</span>
+        <span>41.7 °C</span>
+        <span>60.03 Hz</span>
+        <span>1.00</span>
+        <span>05/02/2026 11:10</span>
+      </div>
+
+      <div class="inverter-strings" id="strings-8" data-inverter="8">
+        <div class="strings-grid" data-inverter-id="8"></div>
+      </div>
+
+    </div>
+
+    <!-- âncora invisível -->
+    <div id="sec-relay" class="scroll-anchor"></div>
+
+    <!-- RELÉ -->
+    <h3 class="card-title" style="margin-top:24px">Relé</h3>
+
+    <div class="device-row online">
+      <span class="status-dot"></span>
+      <span class="device-name">Relé</span>
+      <span class="device-value">ONLINE</span>
+    </div>
+
+  </section>
+
+</main>
+
+<!-- ✅ Navegação sem empilhar histórico -->
+<script>
+  (function deviceNavNoHistory() {
+    const btns = document.querySelectorAll('.device-nav-btn[data-target]');
+    if (!btns.length) return;
+
+    function scrollToTarget(selector) {
+      const el = document.querySelector(selector);
+      if (!el) return;
+
+      el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+      // ✅ NÃO cria nova entrada no histórico (evita "voltar 2x")
+      // mantém o hash só pra URL ficar "bonita" (e compartilhável) sem empilhar
+      try {
+        history.replaceState(null, '', selector);
+      } catch (_) {}
+    }
+
+    btns.forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        const target = btn.getAttribute('data-target');
+        scrollToTarget(target);
+      });
+    });
+
+    // se abriu a página com hash (link direto), faz scroll uma vez e não empilha nada
+    if (location.hash) {
+      const hash = location.hash;
+      setTimeout(() => scrollToTarget(hash), 0);
+    }
+  })();
+</script>
+
+<script src="./js/plant.js"></script>
+</body>
+</html>
