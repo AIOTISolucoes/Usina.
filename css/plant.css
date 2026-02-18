@@ -19,9 +19,9 @@
   --warm-yellow-glow: rgba(255,152,0,.22);
 
   /* Fundo / cards (dashboard) */
-  --bg-0: #050807;
-  --card-0: rgba(14,24,20,0.96);
-  --card-1: rgba(7,12,10,0.96);
+  --bg-0: #010403;
+  --card-0: rgba(8,14,12,0.97);
+  --card-1: rgba(3,7,6,0.97);
 
   /* 🔴 Alarm palette (premium) */
   --alarm-red: #ff3b3b;
@@ -29,6 +29,13 @@
   --alarm-red-glow-1: rgba(255, 59, 59, 0.35);
   --alarm-red-glow-2: rgba(255, 59, 59, 0.18);
   --alarm-red-glow-3: rgba(255, 92, 119, 0.12);
+
+  /* ✅ extras para “premium glass / glow” */
+  --glass: rgba(12,20,17,0.62);
+  --glass-2: rgba(10,16,14,0.72);
+  --border-soft: rgba(255,255,255,0.08);
+  --border-neon: rgba(57,229,140,0.22);
+  --shadow-deep: 0 22px 44px rgba(0,0,0,0.68);
 }
 
 /* =========================================================
@@ -45,16 +52,39 @@
 html{ scroll-behavior: smooth; }
 
 /* =========================================================
-   BODY / FUNDO (✅ volta pro mesmo vibe do DASHBOARD)
+   BODY / FUNDO — PREMIUM AURORA + NOISE (CSS-only)
 ========================================================= */
 body{
   margin: 0;
   padding: 20px;
-  background:
-    radial-gradient(1200px 600px at 20% -10%, rgba(57,229,140,0.08), transparent 60%),
-    radial-gradient(1000px 500px at 90% 10%, rgba(57,229,140,0.05), transparent 60%),
-    var(--bg-0);
   color: #e9fff3;
+
+  background:
+    /* aurora / bloom verde */
+    radial-gradient(1200px 700px at 18% -12%, rgba(57,229,140,0.22), transparent 60%),
+    radial-gradient(900px 520px at 86% 6%, rgba(57,229,140,0.16), transparent 58%),
+    radial-gradient(760px 520px at 60% 104%, rgba(127,208,85,0.12), transparent 62%),
+
+    /* vinheta suave para “cinema” */
+    radial-gradient(1100px 700px at 50% 35%, rgba(0,0,0,0.22), transparent 56%),
+    linear-gradient(180deg, rgba(0,0,0,0.56), rgba(0,0,0,0.82)),
+
+    var(--bg-0);
+  position: relative;
+  overflow-x: hidden;
+}
+
+/* noise fino (não pesa, não “pontilha” feio) */
+body::before{
+  content:"";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.10;
+  background-image:
+    repeating-linear-gradient(0deg, rgba(255,255,255,0.025) 0 1px, transparent 1px 3px),
+    repeating-linear-gradient(90deg, rgba(255,255,255,0.018) 0 1px, transparent 1px 4px);
+  mix-blend-mode: overlay;
 }
 
 /* =========================================================
@@ -72,23 +102,58 @@ body{
   gap: 22px;
 }
 
-.plant-header-card{
-  grid-area: header;
+/* =========================================================
+   CARD BASE — GLASS + BORDA + GLOW
+========================================================= */
+.card{
+  position: relative;
+  background: linear-gradient(180deg, var(--card-0), var(--card-1));
+  border-radius: 16px;
+  padding: 20px 24px;
+  border: 1px solid rgba(255,255,255,0.06);
   box-shadow:
-    inset 0 0 0 1px rgba(57,229,140,0.18),
-    0 22px 40px rgba(0,0,0,0.65);
-  position: sticky;
-  top: 16px;
-  z-index: 5;
+    inset 0 0 0 1px rgba(57,229,140,0.10),
+    0 14px 34px rgba(0,0,0,0.58);
+  overflow: hidden;
 }
 
+/* brilho interno sutil */
+.card::before{
+  content:"";
+  position:absolute;
+  inset:-2px;
+  pointer-events:none;
+  border-radius: 18px;
+  background:
+    radial-gradient(680px 140px at 18% 10%, rgba(57,229,140,0.10), transparent 60%),
+    radial-gradient(520px 140px at 84% 50%, rgba(57,229,140,0.07), transparent 62%),
+    radial-gradient(280px 140px at 45% 0%, rgba(255,255,255,0.035), transparent 55%);
+  opacity: .85;
+}
+
+/* =========================================================
+   ÁREAS
+========================================================= */
+.plant-header-card{ grid-area: header; }
 .plant-alarms-card{ grid-area: alarms; }
 .plant-summary-strip{ grid-area: summary; }
 .plant-charts-grid{ grid-area: charts; }
 .plant-devices-card{ grid-area: devices; }
 
+/* Header sticky com glow premium */
+.plant-header-card{
+  position: sticky;
+  top: 16px;
+  z-index: 5;
+
+  box-shadow:
+    inset 0 0 0 1px rgba(57,229,140,0.20),
+    0 18px 46px rgba(0,0,0,0.70),
+    0 0 28px rgba(57,229,140,0.10);
+}
+
 /* =========================================================
-   ✅ DEVICE JUMP — CENTRALIZADO (igual sua imagem)
+   ✅ DEVICE JUMP — CENTRALIZADO
 ========================================================= */
 .device-jump-card{
   padding: 16px 16px;
@@ -100,7 +165,6 @@ body{
   position: relative;
   overflow: hidden;
 
-  /* ✅ faz o conteúdo ficar no centro do card */
   display: flex;
   justify-content: center;
   align-items: center;
@@ -111,10 +175,10 @@ body{
   position:absolute;
   inset:-40px;
   background:
-    radial-gradient(420px 160px at 18% 30%, rgba(57,229,140,.09), transparent 60%),
-    radial-gradient(420px 160px at 82% 55%, rgba(57,229,140,.06), transparent 62%);
+    radial-gradient(420px 160px at 18% 30%, rgba(57,229,140,.11), transparent 60%),
+    radial-gradient(420px 160px at 82% 55%, rgba(57,229,140,.08), transparent 62%);
   filter: blur(2px);
-  opacity: .9;
+  opacity: .95;
   pointer-events:none;
 }
 
@@ -122,13 +186,11 @@ body{
   position: relative;
   z-index: 1;
 
-  /* ✅ centraliza os botões */
-  display: inline-flex;       /* ao invés de flex (pega só o “tamanho dos botões”) */
+  display: inline-flex;
   justify-content: center;
   align-items: center;
   gap: 12px;
 
-  /* ✅ impede de esticar e ficar “lado esquerdo” */
   width: auto;
 }
 
@@ -141,7 +203,7 @@ body{
   height: 44px;
   padding: 0 16px;
 
-  border-radius: 12px;
+  border-radius: 14px;
   text-decoration: none;
 
   color: rgba(233,255,243,0.92);
@@ -161,24 +223,17 @@ body{
 
 .jump-btn i{
   color: var(--neon);
-  filter: drop-shadow(0 0 10px rgba(57,229,140,.22));
+  filter: drop-shadow(0 0 12px rgba(57,229,140,.26));
   opacity: .95;
 }
 
-/* ✅ deixa TODOS os botões com o mesmo tamanho */
-.device-jump{
-  display: inline-flex;
-  gap: 12px;
-}
-
-/* botão “padronizado” */
 .jump-btn{
-  min-width: 160px;      /* ajuste: 150–190 */
-  height: 44px;          /* altura fixa */
-  padding: 0 16px;       /* sem “engordar” diferente */
+  min-width: 160px;
+  height: 44px;
+  padding: 0 16px;
   border-radius: 14px;
 
-  display: grid;         /* ícone e texto alinhados sempre */
+  display: grid;
   grid-template-columns: 18px 1fr;
   align-items: center;
   column-gap: 10px;
@@ -188,7 +243,6 @@ body{
   white-space: nowrap;
 }
 
-/* ícone sempre com largura fixa */
 .jump-btn i{
   width: 18px;
   display: grid;
@@ -198,10 +252,10 @@ body{
 
 .jump-btn:hover{
   background: rgba(57,229,140,0.10);
-  border-color: rgba(57,229,140,0.35);
+  border-color: rgba(57,229,140,0.38);
   box-shadow:
     0 18px 36px rgba(0,0,0,0.55),
-    0 0 22px rgba(57,229,140,0.16),
+    0 0 26px rgba(57,229,140,0.16),
     inset 0 1px 0 rgba(255,255,255,0.06);
   transform: translateY(-1px);
 }
@@ -210,7 +264,7 @@ body{
   transform: translateY(0px) scale(0.99);
 }
 
-/* ✅ Âncora com “offset” pra não cair colado em cima */
+/* ✅ Âncora com “offset” */
 .section-anchor{
   position: relative;
   top: -14px;
@@ -226,34 +280,23 @@ body{
   gap: 22px;
 }
 
-/* Card de gráfico */
 .plant-chart-card{
   display: flex;
   flex-direction: column;
   height: 360px;
 }
 
-/* Wrapper do canvas */
 .plant-chart-card .chart-wrapper{
   flex: 1;
   position: relative;
   padding-top: 12px;
 }
 
-/* ✅ Glow no gráfico (CSS-only) — verde do DASHBOARD */
+/* ✅ Glow no gráfico */
 .plant-chart-card canvas{
   filter:
-    drop-shadow(0 0 10px rgba(57,229,140,.16))
-    drop-shadow(0 0 22px rgba(57,229,140,.10));
-}
-
-/* =========================================================
-   CARD BASE
-========================================================= */
-.card{
-  background: linear-gradient(180deg, var(--card-0), var(--card-1));
-  border-radius: 16px;
-  padding: 20px 24px;
+    drop-shadow(0 0 12px rgba(57,229,140,.18))
+    drop-shadow(0 0 26px rgba(57,229,140,.12));
 }
 
 /* =========================================================
@@ -310,7 +353,7 @@ body{
 
 .back-btn:hover{
   background: rgba(57,229,140,0.10);
-  box-shadow: 0 0 14px rgba(57,229,140,0.22);
+  box-shadow: 0 0 16px rgba(57,229,140,0.22);
   transform: translateX(-2px);
 }
 
@@ -328,8 +371,6 @@ body{
     inset 0 1px 0 rgba(255,255,255,0.06);
 
   transition: transform .12s ease, box-shadow .18s ease, border-color .18s ease, background .18s ease;
-
-  /* ✅ sobe a seta */
   margin-top: -16px;
 }
 
@@ -338,7 +379,7 @@ body{
   border-color: rgba(57,229,140,0.30);
   box-shadow:
     0 18px 38px rgba(0,0,0,0.55),
-    0 0 22px rgba(57,229,140,0.16),
+    0 0 26px rgba(57,229,140,0.16),
     inset 0 1px 0 rgba(255,255,255,0.06);
   transform: translateY(-1px);
 }
@@ -360,7 +401,7 @@ body{
   gap: 12px;
 }
 
-/* Badge plantinha (base dashboard) + accent AIOTI sutil */
+/* Badge plantinha */
 .plant-badge{
   width: 44px;
   height: 44px;
@@ -369,14 +410,14 @@ body{
   place-items: center;
 
   background:
-    radial-gradient(circle at 30% 25%, rgba(57,229,140,0.20), rgba(12,18,32,0.12) 55%),
+    radial-gradient(circle at 30% 25%, rgba(57,229,140,0.22), rgba(12,18,32,0.12) 55%),
     rgba(12,20,17,0.65);
 
   border: 1px solid rgba(57,229,140,0.30);
 
   box-shadow:
     0 0 0 1px rgba(57,229,140,0.10),
-    0 0 18px rgba(57,229,140,0.22),
+    0 0 22px rgba(57,229,140,0.24),
     0 10px 24px rgba(127,208,85,.08),
     0 14px 30px rgba(0,0,0,0.45);
 
@@ -386,7 +427,7 @@ body{
 .plant-badge i{
   font-size: 18px;
   color: var(--neon);
-  filter: drop-shadow(0 0 12px rgba(57,229,140,0.40));
+  filter: drop-shadow(0 0 14px rgba(57,229,140,0.42));
 }
 
 /* Textos */
@@ -403,11 +444,10 @@ body{
   letter-spacing: 0.2px;
   color: rgba(244,246,255,0.95);
   text-shadow:
-    0 0 18px rgba(57,229,140,0.10),
-    0 0 30px rgba(57,229,140,0.06);
+    0 0 22px rgba(57,229,140,0.10),
+    0 0 36px rgba(57,229,140,0.06);
 }
 
-/* Sublinha opcional */
 .plant-subline{
   font-size: 12px;
   color: rgba(154,219,184,0.70);
@@ -415,7 +455,7 @@ body{
 }
 
 /* =========================================================
-   KPI (✅ verde e glow iguais ao DASHBOARD)
+   KPI
 ========================================================= */
 .plant-kpis{
   display: flex;
@@ -441,7 +481,7 @@ body{
   text-shadow:
     0 0 10px rgba(57,229,140,0.22),
     0 0 22px rgba(57,229,140,0.12),
-    0 0 40px rgba(57,229,140,0.08);
+    0 0 44px rgba(57,229,140,0.08);
 
   animation: neonTextGlow 2.6s ease-in-out infinite;
 }
@@ -465,7 +505,7 @@ body{
   color: #b6e5cf;
   margin-bottom: 16px;
   text-transform: uppercase;
-  text-shadow: 0 0 10px rgba(57,229,140,0.10);
+  text-shadow: 0 0 12px rgba(57,229,140,0.10);
 }
 
 .weather-item{
@@ -502,6 +542,21 @@ body{
   box-shadow:
     inset 0 0 0 1px rgba(57,229,140,0.08),
     0 14px 32px rgba(0,0,0,0.6);
+  border: 1px solid rgba(255,255,255,0.06);
+  overflow: hidden;
+  position: relative;
+}
+
+.plant-alarms-card::before{
+  content:"";
+  position:absolute;
+  inset:-2px;
+  border-radius: 18px;
+  background:
+    radial-gradient(520px 140px at 14% 40%, rgba(255,59,59,0.08), transparent 62%),
+    radial-gradient(520px 140px at 92% 60%, rgba(57,229,140,0.06), transparent 62%);
+  opacity: .9;
+  pointer-events:none;
 }
 
 .plant-alarms-card .card-title{
@@ -511,7 +566,7 @@ body{
 #plantActiveAlarms{
   display: flex;
   flex-direction: column;
-  gap: 12px; /* mais “respirado” */
+  gap: 12px;
 }
 
 .alarm-row{
@@ -526,7 +581,6 @@ body{
   align-items: center;
   overflow: hidden;
 
-  /* base neutra */
   background: linear-gradient(180deg, rgba(16,26,22,0.72), rgba(10,16,14,0.72));
   border: 1px solid rgba(255,255,255,0.06);
   color: rgba(244,246,255,0.92);
@@ -574,7 +628,6 @@ body{
     inset 0 1px 0 rgba(255,255,255,0.08);
 }
 
-/* HIGH/CRITICAL — vermelho premium */
 .alarm-row.critical,
 .alarm-row.high{
   background:
@@ -584,7 +637,7 @@ body{
   color: rgba(255,255,255,0.95);
   box-shadow:
     0 18px 40px rgba(0,0,0,0.55),
-    0 0 26px var(--alarm-red-glow-2),
+    0 0 28px var(--alarm-red-glow-2),
     inset 0 0 0 1px rgba(255,59,59,0.16),
     inset 0 1px 0 rgba(255,255,255,0.08);
 }
@@ -613,7 +666,6 @@ body{
     0 0 20px rgba(255,59,59,0.12);
 }
 
-/* MEDIUM — âmbar */
 .alarm-row.medium{
   background: linear-gradient(90deg, rgba(255,186,65,0.18), rgba(255,186,65,0.05));
   border-color: rgba(255,186,65,0.22);
@@ -624,7 +676,6 @@ body{
   box-shadow: 0 0 10px rgba(255,186,65,0.26);
 }
 
-/* LOW — azul/ciano */
 .alarm-row.low{
   background: linear-gradient(90deg, rgba(80,180,255,0.16), rgba(80,180,255,0.05));
   border-color: rgba(80,180,255,0.18);
@@ -644,6 +695,21 @@ body{
   box-shadow:
     inset 0 0 0 1px rgba(57,229,140,0.12),
     0 12px 28px rgba(0,0,0,0.6);
+  border: 1px solid rgba(255,255,255,0.06);
+  position: relative;
+  overflow: hidden;
+}
+
+.plant-summary-strip::before{
+  content:"";
+  position:absolute;
+  inset:-2px;
+  border-radius: 18px;
+  background:
+    radial-gradient(580px 140px at 16% 40%, rgba(57,229,140,0.10), transparent 60%),
+    radial-gradient(520px 140px at 86% 70%, rgba(57,229,140,0.06), transparent 62%);
+  opacity: .9;
+  pointer-events:none;
 }
 
 .summary-strip-grid{
@@ -691,6 +757,10 @@ body{
   border-radius: 10px;
   background: rgba(255,255,255,0.03);
   margin-bottom: 6px;
+  border: 1px solid rgba(255,255,255,0.06);
+  box-shadow:
+    0 10px 22px rgba(0,0,0,0.35),
+    inset 0 1px 0 rgba(255,255,255,0.05);
 }
 
 .inverter-name{
@@ -718,16 +788,29 @@ body{
   margin-top: 4px;
 }
 
+/* ✅ dot online premium */
+.inverter-row.online{
+  border-color: rgba(57,229,140,0.16);
+  box-shadow:
+    0 14px 30px rgba(0,0,0,0.42),
+    0 0 26px rgba(57,229,140,0.08),
+    inset 0 1px 0 rgba(255,255,255,0.06);
+}
 .inverter-row.online .status-dot{
   background: var(--neon);
   box-shadow:
-    0 0 10px rgba(57,229,140,0.45),
-    0 0 18px rgba(57,229,140,0.18);
+    0 0 10px rgba(57,229,140,0.55),
+    0 0 22px rgba(57,229,140,0.22);
   animation: neonDotGlow 2.4s ease-in-out infinite;
 }
 
+/* ✅ offline */
+.inverter-row.offline{
+  border-color: rgba(255,92,92,0.14);
+}
 .inverter-row.offline .status-dot{
   background: #ff5c5c;
+  box-shadow: 0 0 10px rgba(255,92,92,0.18);
 }
 
 /* Strings */
@@ -855,18 +938,6 @@ body{
 }
 
 /* =========================================================
-   RELÉ
-========================================================= */
-.device-row{
-  display: grid;
-  grid-template-columns: 14px 1fr auto;
-  gap: 14px;
-  padding: 14px 16px;
-  border-radius: 10px;
-  background: rgba(255,255,255,0.03);
-}
-
-/* =========================================================
    RESPONSIVO
 ========================================================= */
 @media (max-width: 1100px){
@@ -963,14 +1034,14 @@ body{
   0%, 100%{
     box-shadow:
       0 0 0 1px rgba(57,229,140,0.10),
-      0 0 16px rgba(57,229,140,0.18),
+      0 0 18px rgba(57,229,140,0.18),
       0 14px 30px rgba(0,0,0,0.45);
     filter: brightness(1);
   }
   50%{
     box-shadow:
       0 0 0 1px rgba(57,229,140,0.14),
-      0 0 22px rgba(57,229,140,0.26),
+      0 0 26px rgba(57,229,140,0.26),
       0 14px 30px rgba(0,0,0,0.45);
     filter: brightness(1.05);
   }
@@ -1008,6 +1079,7 @@ body{
   box-shadow:
     inset 0 0 0 1px rgba(57,229,140,0.10),
     0 14px 32px rgba(0,0,0,0.55);
+  border: 1px solid rgba(255,255,255,0.06);
 }
 
 .device-nav-wrap{
@@ -1062,7 +1134,7 @@ body{
   background: rgba(57,229,140,0.08);
   box-shadow:
     0 18px 38px rgba(0,0,0,0.45),
-    0 0 22px rgba(57,229,140,0.14),
+    0 0 24px rgba(57,229,140,0.14),
     inset 0 1px 0 rgba(255,255,255,0.06);
   transform: translateY(-1px);
 }
@@ -1074,4 +1146,364 @@ body{
 .scroll-anchor{
   scroll-margin-top: 120px;
   height: 0;
+}
+
+/* =========================================================
+   ✅ RELÉ — CLEAN + GLOW (igual seu print)
+========================================================= */
+.relay-row{
+  display: grid;
+  grid-template-columns: 14px 1fr auto;
+  gap: 14px;
+  align-items: center;
+
+  padding: 14px 16px;
+  border-radius: 12px;
+
+  background:
+    radial-gradient(520px 180px at 18% 40%, rgba(57,229,140,0.06), transparent 60%),
+    linear-gradient(180deg, rgba(16,26,22,0.78), rgba(10,16,14,0.78));
+
+  border: 1px solid rgba(255,255,255,0.06);
+
+  box-shadow:
+    0 14px 30px rgba(0,0,0,0.40),
+    0 0 22px rgba(57,229,140,0.06),
+    inset 0 1px 0 rgba(255,255,255,0.05);
+
+  position: relative;
+  overflow: hidden;
+}
+
+.relay-row::before{
+  content:"";
+  position:absolute;
+  inset:-2px;
+  border-radius: 14px;
+  pointer-events:none;
+  background:
+    radial-gradient(520px 160px at 16% 50%, rgba(57,229,140,0.10), transparent 60%),
+    radial-gradient(520px 160px at 88% 55%, rgba(57,229,140,0.06), transparent 62%),
+    radial-gradient(220px 120px at 40% 0%, rgba(255,255,255,0.03), transparent 55%);
+  opacity: .9;
+}
+
+.relay-row.online{
+  border-color: rgba(57,229,140,0.18);
+  box-shadow:
+    0 16px 34px rgba(0,0,0,0.46),
+    0 0 26px rgba(57,229,140,0.10),
+    inset 0 1px 0 rgba(255,255,255,0.06);
+}
+
+.relay-row.offline{
+  border-color: rgba(255,92,92,0.14);
+}
+
+/* usa o MESMO dot do inversor */
+.relay-row.online .status-dot{
+  background: var(--neon);
+  box-shadow:
+    0 0 10px rgba(57,229,140,0.55),
+    0 0 22px rgba(57,229,140,0.22);
+  animation: neonDotGlow 2.4s ease-in-out infinite;
+}
+
+.relay-row.offline .status-dot{
+  background: #ff5c5c;
+  box-shadow: 0 0 10px rgba(255,92,92,0.18);
+}
+
+.relay-left{
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.relay-title{
+  font-size: 14px;
+  font-weight: 650;
+  color: rgba(244,246,255,0.92);
+  letter-spacing: 0.2px;
+}
+
+.relay-right{
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  justify-content: flex-end;
+  white-space: nowrap;
+}
+
+.relay-last{
+  font-size: 12px;
+  color: rgba(154,219,184,0.65);
+  text-shadow: 0 0 14px rgba(57,229,140,0.08);
+}
+
+/* Badge ON/OFF */
+.relay-state{
+  height: 30px;
+  min-width: 64px;
+  padding: 0 12px;
+  border-radius: 999px;
+
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+
+  border: 1px solid rgba(255,255,255,0.10);
+  background: rgba(12,20,17,0.55);
+
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.05),
+    0 10px 22px rgba(0,0,0,0.35);
+}
+
+/* ON */
+.relay-state--on{
+  color: rgba(233,255,243,0.95);
+  border-color: rgba(57,229,140,0.28);
+  background: rgba(57,229,140,0.10);
+  box-shadow:
+    0 0 16px rgba(57,229,140,0.16),
+    inset 0 1px 0 rgba(255,255,255,0.06);
+}
+
+/* OFF */
+.relay-state--off{
+  color: rgba(255,255,255,0.95);
+  border-color: rgba(255,92,92,0.28);
+  background: rgba(255,92,92,0.08);
+  box-shadow:
+    0 0 16px rgba(255,92,92,0.12),
+    inset 0 1px 0 rgba(255,255,255,0.06);
+}
+
+/* UNKNOWN */
+.relay-state--unknown{
+  color: rgba(233,255,243,0.72);
+  border-color: rgba(255,255,255,0.10);
+  background: rgba(12,20,17,0.45);
+}
+
+.relay-power{
+  font-size: 13px;
+  font-weight: 800;
+  color: rgba(233,255,243,0.92);
+  letter-spacing: 0.02em;
+}
+
+/* opcional: kW verde quando vier valor válido */
+.relay-power--valid{
+  color: var(--neon);
+  text-shadow:
+    0 0 10px rgba(57,229,140,0.18),
+    0 0 22px rgba(57,229,140,0.10);
+}
+
+/* =========================================================
+   MOBILE / TABLET RESPONSIVE (iPhone + Android)
+========================================================= */
+@media (max-width: 900px){
+  body{
+    padding: 14px;
+  }
+
+  .plant-layout{
+    gap: 14px;
+  }
+
+  .card{
+    padding: 14px;
+    border-radius: 14px;
+  }
+
+  .plant-header-card{
+    position: static;
+  }
+
+  .header-grid{
+    grid-template-columns: 1fr;
+    gap: 14px;
+  }
+
+  .plant-title-row{
+    align-items: center;
+  }
+
+  .plant-name{
+    font-size: 18px;
+  }
+
+  .plant-subline{
+    font-size: 11px;
+  }
+
+  .back-btn--modern{
+    margin-top: 0;
+    width: 38px;
+    height: 38px;
+    border-radius: 12px;
+  }
+
+  .plant-kpis{
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 12px;
+    margin-top: 10px;
+  }
+
+  .kpi strong{
+    font-size: 15px;
+  }
+
+  .weather-station{
+    padding: 10px 4px 2px;
+  }
+
+  .weather-item{
+    grid-template-columns: 16px 1fr auto;
+    gap: 8px;
+    font-size: 12px;
+    padding: 8px 0;
+  }
+
+  .device-nav-wrap{
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+
+  .device-nav-btn{
+    width: calc(50% - 5px);
+    min-width: 140px;
+    height: 42px;
+    padding: 0 12px;
+    font-size: 13px;
+  }
+
+  .plant-charts-grid{
+    grid-template-columns: 1fr;
+    gap: 14px;
+  }
+
+  .plant-chart-card{
+    height: 300px;
+  }
+
+  .card-title,
+  .plant-chart-card h2{
+    font-size: 16px;
+    margin: 0;
+  }
+
+  .subtitle{
+    font-size: 12px;
+  }
+
+  .inverters-section{
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    padding-bottom: 4px;
+  }
+
+  .inverter-header,
+  .inverter-row{
+    min-width: 920px;
+    grid-template-columns: 14px 1.2fr 0.95fr 0.9fr 0.8fr 0.8fr 0.6fr 1.2fr;
+    font-size: 12px;
+    gap: 10px;
+    padding: 10px 12px;
+  }
+
+  .strings-grid{
+    grid-template-columns: repeat(4, 1fr);
+    gap: 8px;
+    padding: 10px 6px 12px;
+  }
+
+  .alarm-row{
+    grid-template-columns: 1fr;
+    gap: 6px;
+    padding: 12px 12px 12px 16px;
+  }
+
+  .relay-row{
+    grid-template-columns: 14px 1fr;
+    row-gap: 10px;
+  }
+
+  .relay-right{
+    grid-column: 1 / -1;
+    justify-content: flex-start;
+    flex-wrap: wrap;
+    white-space: normal;
+  }
+
+  .relay-state,
+  .relay-power,
+  .relay-last{
+    font-size: 12px;
+  }
+}
+
+@media (max-width: 560px){
+  body{
+    padding: 10px;
+  }
+
+  .card{
+    padding: 12px;
+  }
+
+  .plant-kpis{
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+
+  .device-nav-btn{
+    width: 100%;
+    min-width: 0;
+  }
+
+  .weather-title,
+  .kpi-label{
+    font-size: 10px;
+  }
+
+  .plant-name{
+    font-size: 17px;
+  }
+
+  .plant-badge{
+    width: 38px;
+    height: 38px;
+  }
+
+  .plant-badge i{
+    font-size: 16px;
+  }
+
+  .plant-chart-card{
+    height: 260px;
+  }
+
+  .chart-legend{
+    margin-top: 6px;
+    gap: 8px;
+  }
+
+  .legend-line{
+    font-size: 12px;
+  }
+
+  .strings-grid{
+    grid-template-columns: repeat(2, 1fr);
+  }
 }

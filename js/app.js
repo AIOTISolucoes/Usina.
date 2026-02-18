@@ -62,9 +62,6 @@ let EVENTS_STATE = {
 let eventsAbortController = null;
 
 // ✅ MODO PADRÃO DO EVENTS
-// round_robin = “5 sequências” (o que você quer)
-// history      = histórico bruto (pode grudar no Inversor1 por paginação)
-// latest_per_device = 1 último por device
 let EVENTS_VIEW_MODE = "round_robin";
 
 // ✅ quantas “rodadas/seqüências” você quer ver (T1..T5)
@@ -127,6 +124,64 @@ function getAlarmDescription(eventCode) {
     9: "Sobretensão"
   };
   return map[eventCode] || `Evento ${eventCode}`;
+}
+
+// =============================================================================
+// ✅ TOP CHIPS (GEN / NO COMM / OFF) — AJUSTADO PRO SEU HTML
+// ----------------------------------------------------------------------------
+// Seu HTML usa:
+//   - countGen
+//   - countNoComm
+//   - countOff
+// e o /plants retorna (no seu print/curl):
+//   inverter_total, inverter_generating, inverter_no_comm, inverter_off
+// =============================================================================
+function asInt(v, fallback = 0) {
+  const n = Number(v);
+  return Number.isFinite(n) ? Math.trunc(n) : fallback;
+}
+
+function pickFirstNumber(obj, keys, fallback = 0) {
+  for (const k of keys) {
+    const v = obj?.[k];
+    const n = Number(v);
+    if (Number.isFinite(n)) return Math.trunc(n);
+  }
+  return fallback;
+}
+
+function updateInverterStatusChips(plants) {
+  const list = Array.isArray(plants) ? plants : [];
+
+  const totals = list.reduce(
+    (acc, p) => {
+      // aceita variações de nomes (por segurança)
+      acc.total += pickFirstNumber(p, ["inverter_total", "inverter_count", "inverters_total"], 0);
+      acc.gen += pickFirstNumber(p, ["inverter_generating", "inverter_gen", "generating_inverters"], 0);
+      acc.noComm += pickFirstNumber(p, ["inverter_no_comm", "inverter_nocomm", "inverter_noCommunication"], 0);
+      acc.off += pickFirstNumber(p, ["inverter_off", "inverter_off_count", "off_inverters"], 0);
+      return acc;
+    },
+    { total: 0, gen: 0, noComm: 0, off: 0 }
+  );
+
+  // ✅ IDs do seu HTML
+  const elGen = document.getElementById("countGen");
+  const elNo = document.getElementById("countNoComm");
+  const elOff = document.getElementById("countOff");
+
+  if (elGen) {
+    elGen.textContent = String(totals.gen);
+    elGen.title = `Gerando: ${totals.gen} de ${totals.total}`;
+  }
+  if (elNo) {
+    elNo.textContent = String(totals.noComm);
+    elNo.title = `Sem comunicação: ${totals.noComm} de ${totals.total}`;
+  }
+  if (elOff) {
+    elOff.textContent = String(totals.off);
+    elOff.title = `Desligados: ${totals.off} de ${totals.total}`;
+  }
 }
 
 // =============================================================================
@@ -273,7 +328,7 @@ async function fetchPlants() {
   return Array.isArray(data) ? data : [];
 }
 
-// ✅ ALARMES: NÃO MEXI (continua usando /alarms/* como você pediu)
+// ✅ ALARMES: NÃO MEXI
 async function fetchActiveAlarms() {
   const res = await apiFetch("/alarms/active");
   if (!res.ok) throw new Error("Erro ao buscar alarmes ativos");
@@ -304,8 +359,6 @@ async function acknowledgeAlarm(alarmId) {
 
 /**
  * ✅ Busca eventos (corrigido)
- * - retry automático em 500 (1 vez)
- * - primeira carga SEM include_total (mais leve, evita 500/cold start)
  */
 async function fetchEventsSafeBackend({
   start_time,
@@ -320,7 +373,7 @@ async function fetchEventsSafeBackend({
   plant_id,
   mode = "round_robin",
   rounds = 5,
-  include_total = false, // ✅ default false
+  include_total = false,
   _retry = 0
 } = {}) {
   if (!start_time || !end_time) {
@@ -344,31 +397,23 @@ async function fetchEventsSafeBackend({
 
   const md = String(mode || "").toLowerCase();
   if (md) params.append("mode", md);
-
   if (md === "round_robin") params.append("rounds", String(rounds || 5));
-
   if (include_total) params.append("include_total", "1");
 
-  if (plant_id != null && String(plant_id).match(/^\d+$/)) {
-    params.append("plant_id", String(plant_id));
-  }
+  if (plant_id != null && String(plant_id).match(/^\d+$/)) params.append("plant_id", String(plant_id));
 
   const sev = String(severity || "").toLowerCase();
   if (sev && sev !== "all") params.append("severity", sev);
 
   const et = String(event_type || "").toLowerCase();
   const allowedEventTypes = new Set(["all", "alarm", "event", "status"]);
-  if (allowedEventTypes.has(et) && et !== "all") {
-    params.append("event_type", et);
-  }
+  if (allowedEventTypes.has(et) && et !== "all") params.append("event_type", et);
 
   const src = String(source || "").toLowerCase();
   const allowedSources = new Set(["inverter", "relay", "weather"]);
   if (allowedSources.has(src)) params.append("source", src);
 
-  if (device_id != null && String(device_id).match(/^\d+$/)) {
-    params.append("device_id", String(device_id));
-  }
+  if (device_id != null && String(device_id).match(/^\d+$/)) params.append("device_id", String(device_id));
 
   const qv = safeTrim(q);
   if (qv) params.append("q", qv);
@@ -387,7 +432,6 @@ async function fetchEventsSafeBackend({
     throw e;
   }
 
-  // ✅ retry automático uma vez se for erro 5xx
   if (!res.ok && res.status >= 500 && _retry < 1) {
     const waitMs = 600;
     console.warn(`[EVENTS] server ${res.status}. retry em ${waitMs}ms...`);
@@ -541,7 +585,6 @@ function updateEventsPaginationUI(pagination) {
   const total = pagination?.total;
   const total_pages = pagination?.total_pages;
 
-  // ✅ se vier null/undefined, não sobrescreve com 0
   if (total != null) EVENTS_STATE.total = Number.isFinite(Number(total)) ? Number(total) : EVENTS_STATE.total;
   if (total_pages != null) EVENTS_STATE.total_pages = Number.isFinite(Number(total_pages)) ? Number(total_pages) : EVENTS_STATE.total_pages;
 
@@ -554,9 +597,7 @@ function updateEventsPaginationUI(pagination) {
   }
 
   if (prevBtn) prevBtn.disabled = EVENTS_STATE.page <= 1;
-  if (nextBtn) {
-    nextBtn.disabled = EVENTS_STATE.total_pages > 0 ? EVENTS_STATE.page >= EVENTS_STATE.total_pages : false;
-  }
+  if (nextBtn) nextBtn.disabled = EVENTS_STATE.total_pages > 0 ? EVENTS_STATE.page >= EVENTS_STATE.total_pages : false;
 }
 
 function wireEventsFiltersOnce() {
@@ -619,17 +660,8 @@ function wireEventsFiltersOnce() {
     });
   }
 
-  if (ui.prevBtn) {
-    ui.prevBtn.addEventListener("click", () => {
-      if (EVENTS_STATE.page > 1) loadEvents(EVENTS_STATE.page - 1);
-    });
-  }
-
-  if (ui.nextBtn) {
-    ui.nextBtn.addEventListener("click", () => {
-      loadEvents(EVENTS_STATE.page + 1);
-    });
-  }
+  if (ui.prevBtn) ui.prevBtn.addEventListener("click", () => { if (EVENTS_STATE.page > 1) loadEvents(EVENTS_STATE.page - 1); });
+  if (ui.nextBtn) ui.nextBtn.addEventListener("click", () => { loadEvents(EVENTS_STATE.page + 1); });
 }
 
 // =============================================================================
@@ -750,7 +782,6 @@ async function loadEvents(page = 1, { silent = false } = {}) {
   const tbody = document.getElementById("eventsTbody");
   if (!tbody) return;
 
-  // ✅ evita 2 loads simultâneos (isso gerava “precisa dar F5” em várias máquinas)
   if (EVENTS_STATE.loading) return;
   EVENTS_STATE.loading = true;
 
@@ -777,7 +808,6 @@ async function loadEvents(page = 1, { silent = false } = {}) {
       filters.end_time = end.toISOString();
     }
 
-    // ✅ primeira carga leve: include_total=false (evita COUNT pesado e 500 “de primeira”)
     const response = await fetchEventsSafeBackend({
       start_time: filters.start_time,
       end_time: filters.end_time,
@@ -796,7 +826,6 @@ async function loadEvents(page = 1, { silent = false } = {}) {
 
     const events = response?.items || [];
 
-    // ✅ paginação “mínima” (não depende de total_pages)
     updateEventsPaginationUI({
       page,
       page_size: EVENTS_STATE.page_size,
@@ -961,7 +990,6 @@ function showView(viewName) {
   const topSummary = document.getElementById("topSummary");
   if (topSummary) topSummary.classList.remove("hidden");
 
-  // ✅ liga/desliga auto refresh só no Events
   if (viewName === "events") {
     EVENTS_STATE.page = 1;
     loadEvents(1);
@@ -996,11 +1024,18 @@ async function refreshDashboard() {
   try {
     const [plants, alarms] = await Promise.all([fetchPlants(), fetchActiveAlarms()]);
     if (Array.isArray(plants) && plants.length > 0) lastValidPlants = plants;
+
     lastAlarmSeverityByPlant = buildPlantAlarmSeverityMap(alarms);
+
+    // ✅ chips (Gen/NoComm/Off)
+    updateInverterStatusChips(lastValidPlants);
+
     updateSummaryUI(lastValidPlants);
     renderPortfolioTable(lastValidPlants);
   } catch (err) {
     console.error("Erro ao atualizar dashboard:", err);
+
+    updateInverterStatusChips(lastValidPlants);
     updateSummaryUI(lastValidPlants);
     renderPortfolioTable(lastValidPlants);
   }

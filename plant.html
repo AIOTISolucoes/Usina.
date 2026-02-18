@@ -2,10 +2,11 @@
 <html lang="pt-BR">
 <head>
   <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>Usina</title>
 
   <!-- CSS -->
-  <link rel="stylesheet" href="./css/plant.css" />
+  <link rel="stylesheet" href="css/plant.css" />
   <link
     rel="stylesheet"
     href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css"
@@ -344,10 +345,19 @@
     <!-- RELÉ -->
     <h3 class="card-title" style="margin-top:24px">Relé</h3>
 
-    <div class="device-row online">
-      <span class="status-dot"></span>
-      <span class="device-name">Relé</span>
-      <span class="device-value">ONLINE</span>
+    <!-- ✅ RELÉ CLEAN: bolinha + nome + badge ON/OFF + timestamp + kW -->
+    <div class="relay-row" id="relayRow">
+      <span class="status-dot" id="relayDot"></span>
+
+      <div class="relay-left">
+        <div class="relay-title">Relé</div>
+      </div>
+
+      <div class="relay-right">
+        <span class="relay-last" id="relayLastUpdateText">—</span>
+        <span class="relay-state relay-state--unknown" id="relayStateBadge">—</span>
+        <span class="relay-power" id="relayPowerText">— kW</span>
+      </div>
     </div>
 
   </section>
@@ -367,10 +377,7 @@
       el.scrollIntoView({ behavior: 'smooth', block: 'start' });
 
       // ✅ NÃO cria nova entrada no histórico (evita "voltar 2x")
-      // mantém o hash só pra URL ficar "bonita" (e compartilhável) sem empilhar
-      try {
-        history.replaceState(null, '', selector);
-      } catch (_) {}
+      try { history.replaceState(null, '', selector); } catch (_) {}
     }
 
     btns.forEach(btn => {
@@ -381,7 +388,6 @@
       });
     });
 
-    // se abriu a página com hash (link direto), faz scroll uma vez e não empilha nada
     if (location.hash) {
       const hash = location.hash;
       setTimeout(() => scrollToTarget(hash), 0);

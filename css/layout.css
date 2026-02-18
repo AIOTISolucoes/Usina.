@@ -797,3 +797,262 @@ td {
   margin-left: 2px;
 }
 
+/* ===============================
+   RESPONSIVO (PC + TABLET + MOBILE)
+================================ */
+
+/* Laptop menor / tablet landscape */
+@media (max-width: 1200px){
+  .content{ padding: 16px; }
+
+  .psf-inner{
+    max-width: 100%;
+    grid-template-columns: auto auto 1fr;
+    grid-template-areas:
+      "rated active gauge"
+      "status status status";
+    row-gap: 12px;
+    column-gap: 16px;
+    padding: 12px 16px;
+    min-height: unset;
+  }
+
+  .psf-rated{ grid-area: rated; }
+  .psf-active{ grid-area: active; }
+  .psf-gauge{ grid-area: gauge; justify-self: end; }
+  .psf-status-icons{
+    grid-area: status;
+    justify-self: start;
+    justify-content: flex-start;
+    flex-wrap: wrap;
+    white-space: normal;
+    gap: 10px;
+  }
+
+  .events-filters-bar{ gap: 10px; }
+  .filter-group input,
+  .filter-group select{ min-width: 140px; }
+}
+
+/* Tablet portrait */
+@media (max-width: 900px){
+  .layout{
+    grid-template-columns: 60px 1fr;
+  }
+
+  .sidebar{
+    padding: 10px 0;
+  }
+
+  .sidebar-logo{
+    height: 44px;
+    margin-bottom: 14px;
+  }
+
+  .sidebar-btn{
+    width: 40px;
+    height: 40px;
+    font-size: 18px;
+  }
+
+  .topbar{
+    height: 56px;
+    padding: 0 12px;
+  }
+
+  .plant-name{ font-size: 16px; }
+
+  .topbar-right{ gap: 8px; }
+  .user-pill{ padding: 4px 8px; }
+
+  .plant-summary-fixed{ top: 56px; }
+
+  .psf-inner{
+    grid-template-columns: 1fr 1fr;
+    grid-template-areas:
+      "rated active"
+      "gauge gauge"
+      "status status";
+    row-gap: 10px;
+    padding: 10px 12px;
+  }
+
+  .psf-gauge{ justify-self: center; }
+
+  .psf-gauge-circle{
+    width: 74px;
+    height: 74px;
+    font-size: 14px;
+  }
+
+  .psf-rated-value{ font-size: 16px; }
+  .psf-active-value{ font-size: 18px; }
+
+  .psf-active::before,
+  .psf-gauge::before,
+  .psf-status-icons::before{ display:none; }
+
+  .content{ padding: 12px; }
+
+  .card-header,
+  th,
+  td{ padding: 12px; }
+
+  .events-filters-bar{
+    padding: 12px;
+    border-radius: 8px;
+  }
+
+  .filter-actions{
+    margin-left: 0;
+    width: 100%;
+    justify-content: flex-end;
+  }
+
+  .alarms-table-wrapper,
+  .events-table-wrapper-full,
+  .portfolio-table-wrapper{
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .portfolio-table,
+  .alarms-table,
+  .events-table-full{
+    min-width: 760px;
+  }
+}
+
+/* Mobile (iPhone/Android) */
+@media (max-width: 640px){
+  .layout{
+    grid-template-columns: 1fr;
+    min-height: 100dvh;
+  }
+
+  .sidebar{
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    top: auto;
+    height: 64px;
+    z-index: 400;
+
+    border-right: none;
+    border-top: 1px solid var(--border-soft);
+
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+  }
+
+  .sidebar-logo{
+    width: 40px;
+    height: 40px;
+    margin: 0;
+  }
+
+  .sidebar-nav{
+    flex: 0;
+    flex-direction: row;
+    justify-content: center;
+    gap: 10px;
+  }
+
+  .sidebar-bottom{
+    margin-top: 0;
+    padding-bottom: 0;
+    flex-direction: row;
+    gap: 8px;
+  }
+
+  .main{
+    height: auto;
+    min-height: 100dvh;
+    padding-bottom: 74px; /* espaço da barra inferior */
+  }
+
+  .topbar{
+    height: auto;
+    min-height: 52px;
+    padding: 8px 10px;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .topbar-right{
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .status-pill,
+  .user-pill{ font-size: 10px; }
+
+  .plant-summary-fixed{
+    position: sticky;
+    top: 0;
+  }
+
+  .psf-inner{
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      "rated"
+      "active"
+      "gauge"
+      "status";
+    text-align: left;
+    padding: 10px;
+  }
+
+  .psf-gauge{ justify-self: start; }
+
+  .psf-status-icons{
+    justify-content: flex-start;
+    gap: 8px;
+  }
+
+  .psf-status{
+    height: 32px;
+    padding: 0 10px;
+    font-size: 12px;
+  }
+
+  .content{ padding: 10px; }
+
+  .card{ border-radius: 10px; }
+
+  .tab-btn{
+    padding: 8px 10px;
+    font-size: 11px;
+  }
+
+  .events-filters-bar{
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    align-items: end;
+  }
+
+  .filter-group{ min-width: 0; }
+
+  .filter-group input,
+  .filter-group select{
+    width: 100%;
+    min-width: 0;
+  }
+
+  .filter-actions{
+    grid-column: 1 / -1;
+    justify-content: stretch;
+    gap: 8px;
+  }
+
+  .btn-clear,
+  .btn-apply{
+    flex: 1;
+    min-height: 36px;
+  }
+}

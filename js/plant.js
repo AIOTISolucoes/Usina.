@@ -156,6 +156,130 @@ function capMonthlyOutliers(dailyArr) {
 }
 
 // ======================================================
+// ✅ NORMALIZA PAYLOAD DIÁRIO (00:00 até último dado do dia)
+// - Filtra apenas pontos do dia atual quando houver timestamp por ponto
+// - Preenche faltas com 0 para evitar buracos visuais
+// ======================================================
+function normalizeDailyPayload(payload) {
+  if (!payload) return payload;
+
+  const labelsRaw = Array.isArray(payload.labels) ? payload.labels.slice() : [];
+
+  const powerRaw =
+    Array.isArray(payload.activePower) ? payload.activePower.slice() :
+    Array.isArray(payload.active_power_kw) ? payload.active_power_kw.slice() :
+    Array.isArray(payload.power_kw) ? payload.power_kw.slice() :
+    [];
+
+  const irrRaw =
+    Array.isArray(payload.irradiance) ? payload.irradiance.slice() :
+    Array.isArray(payload.irradiance_wm2) ? payload.irradiance_wm2.slice() :
+    [];
+
+  if (!labelsRaw.length) return payload;
+
+  // timestamp por ponto (se existir), para filtrar estritamente o DIA ATUAL
+  const pointTsRaw =
+    Array.isArray(payload.timestamps) ? payload.timestamps :
+    Array.isArray(payload.ts) ? payload.ts :
+    Array.isArray(payload.point_timestamps) ? payload.point_timestamps :
+    Array.isArray(payload.time) ? payload.time :
+    null;
+
+  const hasPointTimestamps = Array.isArray(pointTsRaw) && pointTsRaw.length > 0;
+
+  // "HH:mm" -> minutos desde 00:00
+  const toMin = (hhmm) => {
+    const m = String(hhmm || "").trim().match(/^(\d{1,2}):(\d{2})$/);
+    if (!m) return null;
+    const hh = Number(m[1]), mm = Number(m[2]);
+    if (!Number.isFinite(hh) || !Number.isFinite(mm)) return null;
+    if (hh < 0 || hh > 23 || mm < 0 || mm > 59) return null;
+    return hh * 60 + mm;
+  };
+
+  const dateKeyInSaoPaulo = (d) => {
+    if (!(d instanceof Date) || Number.isNaN(d.getTime())) return null;
+    return d.toLocaleDateString("en-CA", { timeZone: "America/Sao_Paulo" });
+  };
+
+  const todayKeySP = new Date().toLocaleDateString("en-CA", { timeZone: "America/Sao_Paulo" });
+
+  const points = [];
+  for (let i = 0; i < labelsRaw.length; i++) {
+    const minute = toMin(labelsRaw[i]);
+    if (minute == null) continue;
+
+    if (hasPointTimestamps) {
+      const ts = pointTsRaw[i];
+      const d = ts ? new Date(ts) : null;
+      const key = dateKeyInSaoPaulo(d);
+      if (!key || key !== todayKeySP) continue;
+    }
+
+    points.push({
+      minute,
+      power: powerRaw[i] != null ? asNumber(powerRaw[i], 0) : 0,
+      irr: irrRaw[i] != null ? asNumber(irrRaw[i], 0) : 0
+    });
+  }
+
+  if (!points.length) {
+    return {
+      ...payload,
+      labels: [],
+      activePower: [],
+      irradiance: []
+    };
+  }
+
+  const mins = points.map(p => p.minute).sort((a, b) => a - b);
+
+  // detecta o passo (1,5,10,15...) olhando o menor diff positivo
+  let step = 5; // fallback
+  if (mins.length >= 3) {
+    const diffs = [];
+    for (let i = 1; i < mins.length; i++) {
+      const d = mins[i] - mins[i - 1];
+      if (d > 0 && d <= 60) diffs.push(d);
+    }
+    if (diffs.length) step = Math.max(1, Math.min(...diffs));
+  }
+
+  const mapP = new Map();
+  const mapI = new Map();
+  points.forEach(p => {
+    mapP.set(p.minute, p.power);
+    mapI.set(p.minute, p.irr);
+  });
+
+  // começa SEMPRE em 00:00 e termina no último minuto que chegou dado hoje
+  const lastMin = Math.max(...mins);
+
+  const labels = [];
+  const activePower = [];
+  const irradiance = [];
+
+  for (let m = 0; m <= lastMin; m += step) {
+    const hh = String(Math.floor(m / 60)).padStart(2, "0");
+    const mm = String(m % 60).padStart(2, "0");
+    labels.push(`${hh}:${mm}`);
+
+    // sem buraco visual: minutos faltantes viram 0
+    activePower.push(mapP.has(m) ? mapP.get(m) : 0);
+    irradiance.push(mapI.has(m) ? mapI.get(m) : 0);
+  }
+
+  return {
+    ...payload,
+    labels,
+    activePower,
+    irradiance
+  };
+}
+
+
+// ======================================================
 // MOCK STRINGS (pra não depender da API)
 // ======================================================
 function buildMockStringsPayload(inverterId, count = 28) {
@@ -178,6 +302,7 @@ let DAILY = null;
 let MONTHLY = null;
 let ACTIVE_ALARMS = [];
 let INVERTERS_REALTIME = [];
+let RELAY_REALTIME = null; // ✅ NEW
 
 const API_BASE = "https://jgeg9i0js1.execute-api.us-east-1.amazonaws.com";
 const PLANT_ID = new URLSearchParams(window.location.search).get("plant_id") || "1";
@@ -276,6 +401,17 @@ async function fetchMonthlyEnergy(plantId) {
   });
   const data = await res.json();
   return normalizeApiBody(data);
+}
+
+// ✅ NEW: relay realtime
+async function fetchRelayRealtime(plantId) {
+  const url = `${API_BASE}/plants/${plantId}/relay/realtime`;
+  const res = await fetch(url, { headers: buildAuthHeaders() });
+  if (!res.ok) {
+    console.warn(`[relay/realtime] HTTP ${res.status} em ${url}`);
+    return { item: null };
+  }
+  return normalizeApiBody(await res.json());
 }
 
 // ✅ realtime por inversor
@@ -381,7 +517,7 @@ function buildInvertersIndex(inverters) {
       inv.device_name ??
       inv.deviceName ??
       inv.name ??
-      inv.device_type ??         // ✅ MUITO IMPORTANTE (se o backend manda "Inversor1")
+      inv.device_type ??
       inv.deviceType ??
       null;
 
@@ -487,6 +623,171 @@ function renderAlarms(alarms) {
 }
 
 // ======================================================
+// ✅ RENDER — RELÉ (NOVO SHAPE DO ENDPOINT /relay/realtime)
+// item: { is_online, relay_on, last_update, analog:{active_power_kw} }
+// ======================================================
+function ensureRelayUiScaffold() {
+  const relayRow = document.getElementById("relayRow");
+  if (!relayRow) return null;
+
+  const nameEl = relayRow.querySelector(".device-name");
+  const dotEl = document.getElementById("relayDot") || relayRow.querySelector(".status-dot");
+
+  // Remove “extras antigos” visualmente (não remove do DOM, só não usa)
+  const oldOnline = document.getElementById("relayOnlineText");
+  const oldAvail = document.getElementById("relayAvailabilityText");
+  const oldLast = document.getElementById("relayLastUpdateText");
+
+  if (oldOnline) oldOnline.textContent = "—";
+  if (oldAvail) oldAvail.textContent = "";
+  if (oldLast) oldLast.textContent = "";
+
+  // cria badge ONLINE/OFFLINE ao lado do nome
+  let badgeOnline = relayRow.querySelector("#relayOnlineBadge");
+  if (!badgeOnline) {
+    badgeOnline = document.createElement("span");
+    badgeOnline.id = "relayOnlineBadge";
+    badgeOnline.style.display = "inline-flex";
+    badgeOnline.style.alignItems = "center";
+    badgeOnline.style.justifyContent = "center";
+    badgeOnline.style.padding = "6px 10px";
+    badgeOnline.style.borderRadius = "999px";
+    badgeOnline.style.fontSize = "11px";
+    badgeOnline.style.letterSpacing = "0.06em";
+    badgeOnline.style.textTransform = "uppercase";
+    badgeOnline.style.border = "1px solid rgba(255,255,255,0.10)";
+    badgeOnline.style.background = "rgba(255,255,255,0.04)";
+    badgeOnline.style.color = "rgba(233,255,243,0.88)";
+    badgeOnline.style.marginLeft = "10px";
+    badgeOnline.style.whiteSpace = "nowrap";
+
+    if (nameEl) nameEl.appendChild(badgeOnline);
+  }
+
+  // cria badge ON/OFF do relé
+  let badgeState = relayRow.querySelector("#relayStateBadge");
+  if (!badgeState) {
+    badgeState = document.createElement("span");
+    badgeState.id = "relayStateBadge";
+    badgeState.style.display = "inline-flex";
+    badgeState.style.alignItems = "center";
+    badgeState.style.justifyContent = "center";
+    badgeState.style.padding = "6px 10px";
+    badgeState.style.borderRadius = "999px";
+    badgeState.style.fontSize = "11px";
+    badgeState.style.letterSpacing = "0.06em";
+    badgeState.style.textTransform = "uppercase";
+    badgeState.style.border = "1px solid rgba(255,255,255,0.10)";
+    badgeState.style.background = "rgba(255,255,255,0.04)";
+    badgeState.style.color = "rgba(233,255,243,0.88)";
+    badgeState.style.marginLeft = "10px";
+    badgeState.style.whiteSpace = "nowrap";
+
+    if (nameEl) nameEl.appendChild(badgeState);
+  }
+
+  // cria o kW na direita (no lugar “—” que você quer)
+  let powerEl = relayRow.querySelector("#relayPowerText");
+  if (!powerEl) {
+    powerEl = document.createElement("span");
+    powerEl.id = "relayPowerText";
+    powerEl.style.justifySelf = "end";
+    powerEl.style.textAlign = "right";
+    powerEl.style.whiteSpace = "nowrap";
+    powerEl.style.fontWeight = "700";
+    powerEl.style.color = "rgba(233,255,243,0.92)";
+    powerEl.style.opacity = "0.95";
+    powerEl.style.textShadow = "0 0 12px rgba(57,229,140,0.10)";
+
+    // garante grid com 3 colunas (dot | nome | direita)
+    relayRow.style.gridTemplateColumns = "14px 1fr auto";
+    relayRow.appendChild(powerEl);
+  }
+
+  // cria o timestamp discretinho abaixo do nome (opcional)
+  let tsEl = relayRow.querySelector("#relayTsText");
+  if (!tsEl) {
+    tsEl = document.createElement("div");
+    tsEl.id = "relayTsText";
+    tsEl.style.marginTop = "4px";
+    tsEl.style.fontSize = "12px";
+    tsEl.style.opacity = "0.75";
+    tsEl.style.color = "rgba(154,219,184,0.85)";
+
+    // coloca dentro do device-name (abaixo do texto)
+    if (nameEl) nameEl.appendChild(tsEl);
+  }
+
+  return { relayRow, nameEl, dotEl, badgeOnline, badgeState, powerEl, tsEl };
+}
+
+function renderRelayCard(relayItem) {
+  const ui = ensureRelayUiScaffold();
+  if (!ui) return;
+
+  const { relayRow, badgeOnline, badgeState, powerEl, tsEl } = ui;
+
+  // sem dados ainda
+  if (!relayItem) {
+    relayRow.classList.remove("online", "offline");
+    badgeOnline.textContent = "—";
+    badgeState.textContent = "—";
+    powerEl.textContent = "— kW";
+    tsEl.textContent = "Última atualização: —";
+    return;
+  }
+
+  const isOnline = relayItem.is_online === true;
+  const relayOn = relayItem.relay_on; // true/false/null
+  const lastUpdate = relayItem.last_update ?? null;
+
+  const kw = relayItem?.analog?.active_power_kw;
+  const kwText = (kw === null || kw === undefined || Number.isNaN(Number(kw)))
+    ? "— kW"
+    : `${numFixedOrDash(kw, 1)} kW`;
+
+  // classes do row (para a bolinha)
+  relayRow.classList.remove("online", "offline");
+  relayRow.classList.add(isOnline ? "online" : "offline");
+
+  // badge online/offline
+  badgeOnline.textContent = isOnline ? "ONLINE" : "OFFLINE";
+  badgeOnline.style.borderColor = isOnline ? "rgba(57,229,140,0.26)" : "rgba(255,92,92,0.25)";
+  badgeOnline.style.background = isOnline ? "rgba(57,229,140,0.08)" : "rgba(255,92,92,0.08)";
+  badgeOnline.style.color = isOnline ? "rgba(233,255,243,0.92)" : "rgba(255,255,255,0.92)";
+
+  // badge ON/OFF
+  let stateText = "—";
+  if (relayOn === true) stateText = "ON";
+  else if (relayOn === false) stateText = "OFF";
+
+  badgeState.textContent = stateText;
+
+  if (stateText === "ON") {
+    badgeState.style.borderColor = "rgba(57,229,140,0.30)";
+    badgeState.style.background = "rgba(57,229,140,0.10)";
+    badgeState.style.color = "rgba(233,255,243,0.95)";
+    badgeState.style.boxShadow = "0 0 18px rgba(57,229,140,0.12)";
+  } else if (stateText === "OFF") {
+    badgeState.style.borderColor = "rgba(255,92,92,0.28)";
+    badgeState.style.background = "rgba(255,92,92,0.08)";
+    badgeState.style.color = "rgba(255,255,255,0.95)";
+    badgeState.style.boxShadow = "0 0 16px rgba(255,92,92,0.10)";
+  } else {
+    badgeState.style.borderColor = "rgba(255,255,255,0.10)";
+    badgeState.style.background = "rgba(255,255,255,0.04)";
+    badgeState.style.color = "rgba(233,255,243,0.88)";
+    badgeState.style.boxShadow = "none";
+  }
+
+  // kW à direita
+  powerEl.textContent = kwText;
+
+  // timestamp
+  tsEl.textContent = `Última atualização: ${fmtDatePtBR(lastUpdate)}`;
+}
+
+// ======================================================
 // ✅ RENDER — INVERTERS (KPIs por inversor) ✅
 // ======================================================
 function fillInverterRowSpans(rowEl, values) {
@@ -521,7 +822,6 @@ function isOnlineByFreshness(inv) {
 }
 
 function renderInverterRowKpis(rowEl, inv) {
-  // ✅ pega os campos em múltiplos nomes possíveis
   const powerKw = inv.active_power_kw ?? inv.power_kw ?? inv.power ?? inv.active_power;
   const effPct  = inv.efficiency_pct ?? inv.efficiency ?? inv.eff_pct;
   const tempC   = inv.temperature_internal_c ?? inv.temperature_c ?? inv.temp_c ?? inv.temperature_current ?? inv.temperature;
@@ -538,7 +838,6 @@ function renderInverterRowKpis(rowEl, inv) {
 
   const prPct = normalizePercentMaybe(prRaw);
 
-  // ✅ IMPORTANT: se vier 0 / "0.0" precisa renderizar 0 (numFixedOrDash faz isso)
   const powerText = powerKw != null ? `${numFixedOrDash(powerKw, 0)} kW` : "—";
   const effText   = effPct  != null ? `${numFixedOrDash(effPct, 1)} %` : "—";
   const tempText  = tempC   != null ? `${numFixedOrDash(tempC, 1)} °C` : "—";
@@ -749,7 +1048,8 @@ function renderDailyChart() {
           tension: 0.4,
           pointRadius: 0,
           borderWidth: 2,
-          yAxisID: "yPower"
+          yAxisID: "yPower",
+          spanGaps: true
         },
         {
           data: DAILY.irradiance,
@@ -759,7 +1059,8 @@ function renderDailyChart() {
           tension: 0.3,
           pointRadius: 0,
           borderWidth: 2,
-          yAxisID: "yIrr"
+          yAxisID: "yIrr",
+          spanGaps: true
         }
       ]
     },
@@ -824,16 +1125,13 @@ function normalizeMonthlyPayload(payload) {
     mtd = daily.map(v => (acc += (Number(v) || 0)));
   }
 
-  // 1) unidade (Wh->kWh)
   const converted = maybeConvertWhToKwh(daily, mtd);
   daily = converted.daily;
   mtd = converted.mtd;
 
-  // 2) outlier (ex: dia 09 gigante)
   const capped = capMonthlyOutliers(daily);
   daily = capped.daily;
 
-  // 3) recalcula acumulado a partir do daily capado (consistência)
   let acc = 0;
   mtd = daily.map(v => (acc += (Number(v) || 0)));
 
@@ -988,7 +1286,7 @@ async function refreshOpenStringsPanels() {
 }
 
 // ======================================================
-// ✅ REFRESH (realtime + alarms + inverters rows + strings abertas)
+// ✅ REFRESH (realtime + alarms + inverters rows + strings abertas + relay)
 // ======================================================
 async function refreshRealtimeEverything() {
   try {
@@ -1026,6 +1324,11 @@ async function refreshRealtimeEverything() {
     INVERTERS_REALTIME = await fetchInvertersRealtime(PLANT_ID);
     renderInvertersRows(INVERTERS_REALTIME);
 
+    // ✅ RELAY realtime (novo shape)
+    const relayPayload = await fetchRelayRealtime(PLANT_ID);
+    RELAY_REALTIME = relayPayload?.item ?? null;
+    renderRelayCard(RELAY_REALTIME);
+
     await refreshOpenStringsPanels();
   } catch (e) {
     console.error("[refreshRealtimeEverything] erro", e);
@@ -1054,9 +1357,10 @@ document.addEventListener("DOMContentLoaded", async () => {
       }
     }
 
+    // ✅ DAILY: normaliza para sempre começar em 00:00
     const daily = await fetchDailyEnergy(PLANT_ID);
     if (daily?.labels?.length) {
-      DAILY = daily;
+      DAILY = normalizeDailyPayload(daily);
       renderDailyChart();
     }
 
