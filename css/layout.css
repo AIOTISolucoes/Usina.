@@ -1271,6 +1271,43 @@ td {
     margin-right: auto;
   }
 
+  #eventsView .events-filters-bar{
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    align-items: end;
+    padding: 10px;
+    position: sticky;
+    top: 6px;
+    z-index: 20;
+    background: rgba(5, 19, 14, 0.95);
+    border-radius: 10px;
+  }
+
+  #eventsView .filter-group{
+    min-width: 0;
+  }
+
+  #eventsView .filter-group input,
+  #eventsView .filter-group select{
+    width: 100%;
+    min-width: 0;
+  }
+
+  #eventsView .filter-actions{
+    grid-column: 1 / -1;
+    display: flex;
+    justify-content: stretch;
+    gap: 8px;
+    margin-left: 0;
+  }
+
+  #eventsView .btn-clear,
+  #eventsView .btn-apply{
+    flex: 1;
+    min-height: 38px;
+  }
+
   .alarms-tabs{
     display: flex;
     flex-wrap: nowrap;
@@ -1294,9 +1331,7 @@ td {
     scrollbar-width: thin;
   }
 
-  .alarms-table-wrapper::after,
-  .events-table-wrapper-full::after,
-  .portfolio-table-wrapper::after{
+   .portfolio-table-wrapper::after{
     content: "← arraste para ver mais →";
     display: block;
     text-align: center;
@@ -1309,6 +1344,76 @@ td {
   .alarms-table,
   .events-table-full{
     min-width: 860px;
+  }
+
+  /* Alarmes/Eventos no celular em layout legível (sem corte de descrição) */
+  .alarms-table,
+  .events-table-full{
+    min-width: 0;
+    width: 100% !important;
+    border-collapse: separate;
+    border-spacing: 0 10px;
+  }
+
+  .alarms-table thead,
+  .events-table-full thead{
+    display: none;
+  }
+
+  .alarms-table tbody tr,
+  .events-table-full tbody tr{
+    display: block;
+    background: rgba(10, 24, 19, 0.92);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 10px;
+    padding: 10px;
+    margin-bottom: 10px;
+  }
+
+  .alarms-table tbody td,
+  .events-table-full tbody td{
+    display: grid;
+    grid-template-columns: 100px 1fr;
+    gap: 8px;
+    align-items: start;
+    padding: 6px 2px;
+    border-bottom: 1px dashed rgba(255,255,255,0.08);
+    white-space: normal;
+    word-break: break-word;
+    overflow-wrap: anywhere;
+    font-size: 12px;
+  }
+
+  .alarms-table tbody td:last-child,
+  .events-table-full tbody td:last-child{
+    border-bottom: 0;
+  }
+
+  .alarms-table tbody td::before,
+  .events-table-full tbody td::before{
+    color: var(--text-muted);
+    font-weight: 700;
+    text-transform: uppercase;
+    font-size: 10px;
+    letter-spacing: 0.04em;
+    content: attr(data-label);
+  }
+
+  .alarms-table tbody td:nth-child(1)::before{ content: "Pathname"; }
+  .alarms-table tbody td:nth-child(2)::before{ content: "Description"; }
+  .alarms-table tbody td:nth-child(3)::before{ content: "State"; }
+  .alarms-table tbody td:nth-child(4)::before{ content: "Timestamp"; }
+
+  .events-table-full tbody td:nth-child(1)::before{ content: "Timestamp"; }
+  .events-table-full tbody td:nth-child(2)::before{ content: "Point"; }
+  .events-table-full tbody td:nth-child(3)::before{ content: "Equipment"; }
+  .events-table-full tbody td:nth-child(4)::before{ content: "Description"; }
+  .events-table-full tbody td:nth-child(5)::before{ content: "State"; }
+  .events-table-full tbody td:nth-child(6)::before{ content: "Severity"; }
+
+  .alarms-table-wrapper,
+  .events-table-wrapper-full{
+    overflow-x: visible;
   }
 
   .portfolio-table th,

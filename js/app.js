@@ -74,6 +74,7 @@ let EVENTS_STATE = {
 
 // Abort controller pra evitar race condition
 let eventsAbortController = null;
+let ALARMS_RENDER_SEQ = 0;
 
 // ✅ MODO PADRÃO DO EVENTS
 let EVENTS_VIEW_MODE = "round_robin";
@@ -138,6 +139,33 @@ function getAlarmDescription(eventCode) {
     9: "Sobretensão"
   };
   return map[eventCode] || `Evento ${eventCode}`;
+}
+
+
+function dedupeAlarms(list) {
+  const items = Array.isArray(list) ? list : [];
+  const seen = new Set();
+  const out = [];
+
+  items.forEach(a => {
+    const key =
+      a.alarm_id ??
+      a.id ??
+      [
+        a.power_plant_id ?? a.power_plant_name ?? "",
+        a.device_id ?? a.device_name ?? "",
+        a.event_code ?? a.event_name ?? "",
+        a.alarm_state ?? a.state ?? "",
+        a.started_at ?? a.last_event_ts ?? a.ack_at ?? a.cleared_at ?? ""
+      ].join("|");
+
+    const normalized = String(key || "").trim();
+    if (!normalized || seen.has(normalized)) return;
+    seen.add(normalized);
+    out.push(a);
+  });
+
+  return out;
 }
 
 // =============================================================================
@@ -845,6 +873,8 @@ function stopEventsAutoRefresh() {
 async function renderAlarmsTable(isRecognized = false) {
   const tbody = document.getElementById("alarmsTbody");
   if (!tbody) return;
+
+  const renderSeq = ++ALARMS_RENDER_SEQ;
   tbody.innerHTML = "";
 
   let alarms = [];
@@ -859,12 +889,17 @@ async function renderAlarmsTable(isRecognized = false) {
     console.error("Erro ao buscar alarmes:", err);
   }
 
+  if (renderSeq !== ALARMS_RENDER_SEQ) return;
+
+  alarms = dedupeAlarms(alarms);
+
   if (!alarms || alarms.length === 0) {
     tbody.innerHTML = `<tr><td colspan="4" style="text-align:center; opacity:0.6; padding:40px;">${isRecognized ? "Nenhum alerta reconhecido" : "Nenhum alerta ativo"}</td></tr>`;
     return;
   }
 
   alarms.forEach(alarm => {
+    if (renderSeq !== ALARMS_RENDER_SEQ) return;
     const tr = document.createElement("tr");
     const sev = normalizeAlarmSeverity(
       alarm.severity || alarm.alarm_severity || alarm.level || alarm.alarm_level
