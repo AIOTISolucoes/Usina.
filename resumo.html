@@ -80,17 +80,17 @@
   <div class="psf-inner">
     <div class="psf-rated">
       <div class="psf-rated-label">Rated Power</div>
-      <div class="psf-rated-value" id="psfRatedPower">20.700 kW</div>
+      <div class="psf-rated-value" id="psfRatedPower">—</div>
     </div>
 
     <div class="psf-active">
       <div class="psf-active-label">Active Power</div>
-      <div class="psf-active-value" id="psfActivePower">-- kW</div>
+      <div class="psf-active-value" id="psfActivePower">—</div>
     </div>
 
     <div class="psf-gauge">
       <div class="psf-gauge-circle">
-        <span id="psfCapacityPct">--%</span>
+        <span id="psfCapacityPct">—</span>
       </div>
     </div>
 
@@ -115,7 +115,12 @@
       </div>
 
       <div class="psf-status off">
-        <img src="./img/off.svg" alt="Off" />
+        <svg class="psf-off-icon" viewBox="0 0 24 24" aria-hidden="true">
+          <path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+            d="M12 3v9" />
+          <path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+            d="M7.8 5.8a8 8 0 1 0 8.4 0" />
+        </svg>
         <span>Off <span id="countOff">0</span></span>
       </div>
     </div>

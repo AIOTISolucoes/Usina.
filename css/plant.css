@@ -822,15 +822,15 @@ body::before{
 }
 
 .inverter-strings.open{
-  max-height: 600px;
+  max-height: 420px;
   opacity: 1;
 }
 
 .strings-grid{
   display: grid;
-  grid-template-columns: repeat(7, 1fr);
-  gap: 12px;
-  padding: 16px;
+  grid-template-columns: repeat(8, 1fr);
+  gap: 10px;
+  padding: 12px 12px 10px;
 }
 
 /* =========================================================
@@ -839,7 +839,7 @@ body::before{
 .string-card{
   position: relative;
   border-radius: 12px;
-  padding: 12px 10px;
+  padding: 10px 8px;
   font-size: 12px;
   text-align: center;
   letter-spacing: .2px;
@@ -899,6 +899,43 @@ body::before{
 
 .string-card:active{
   transform: translateY(0px) scale(.99);
+}
+
+
+.string-card.removing{
+  animation: stringRemoveOut .18s ease forwards;
+}
+
+@keyframes stringRemoveOut{
+  from{
+    opacity: 1;
+    transform: scale(1);
+  }
+  to{
+    opacity: 0;
+    transform: scale(.85);
+  }
+}
+
+.string-card-add{
+  border: 1px dashed rgba(57,229,140,.55);
+  background: linear-gradient(180deg, rgba(10, 42, 28, .92), rgba(6, 28, 19, .92));
+  color: var(--neon);
+  display: grid;
+  place-items: center;
+  gap: 2px;
+}
+
+.string-card-add .plus{
+  font-size: 20px;
+  font-weight: 900;
+  line-height: 1;
+  text-shadow: 0 0 12px rgba(57,229,140,.35);
+}
+
+.string-card-add strong{
+  margin-top: 2px;
+  color: rgba(233,255,243,.95);
 }
 
 .string-card.nodata{
@@ -1505,5 +1542,112 @@ body::before{
 
   .strings-grid{
     grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+/* Mobile alignment polish for plant page */
+@media (max-width: 640px){
+  .plant-top,
+  .plant-title-wrap,
+  .plant-kpis,
+  .card-header,
+  .card-title{
+    text-align: center;
+    justify-content: center;
+  }
+
+  .weather-item,
+  .alarm-row,
+  .inverter-row,
+  .relay-row{
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .inverters-section,
+  .relay-table{
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+}
+
+
+/* Entrada suave da tela da usina */
+body.plant-enter .card,
+body.plant-enter .plant-charts-grid,
+body.plant-enter .inverters-section,
+body.plant-enter #relaySection{
+  animation: plantCardEnter .42s cubic-bezier(.22,.61,.36,1);
+}
+
+@keyframes plantCardEnter{
+  from{
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to{
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Cross-device tuning (PC + Android + iPhone) */
+.inverters-section,
+.inverter-strings{
+  overscroll-behavior: contain;
+}
+
+.string-card,
+.string-card-add{
+  min-height: 58px;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+@media (max-width: 900px){
+  .inverter-strings.open{
+    max-height: 380px;
+  }
+
+  .strings-grid{
+    gap: 8px;
+    padding: 10px 8px;
+  }
+}
+
+@media (max-width: 640px){
+  .inverter-strings.open{
+    max-height: 340px;
+  }
+
+  .strings-grid{
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    padding: 8px 6px 10px;
+  }
+
+  .string-card,
+  .string-card-add{
+    min-height: 52px;
+    padding: 8px 6px;
+    font-size: 11px;
+  }
+
+  .string-card strong,
+  .string-card-add strong{
+    margin-top: 4px;
+    font-size: 11px;
+  }
+}
+
+@media (max-width: 430px){
+  .inverter-strings.open{
+    max-height: 300px;
+  }
+
+  .string-card,
+  .string-card-add{
+    min-height: 48px;
+    border-radius: 10px;
   }
 }

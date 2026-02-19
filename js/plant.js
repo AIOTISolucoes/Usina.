@@ -2,19 +2,20 @@
 // ESTADO ÚNICO DA USINA (FONTE DA VERDADE NO FRONT)
 // ======================================================
 let PLANT_STATE = {
-  name: "Usina Acopiara",
-  rated_power_kwp: 2070.0,
-  active_power_kw: 985.9,
-  capacity_percent: 47.6,
-  inverter_total: 8,
-  inverter_online: 7,
-  pr_percent: 47.6
+  name: "—",
+  rated_power_kwp: 0,
+  active_power_kw: 0,
+  capacity_percent: 0,
+  inverter_total: 0,
+  inverter_online: 0,
+  pr_percent: 0
 };
 
 // ======================================================
 // CONFIG (ONLINE/OFFLINE)
 // ======================================================
 const INVERTER_ONLINE_AFTER_MS = 8 * 60 * 1000; // 8 min (ajuste aqui)
+const INVERTER_NO_COMM_AFTER_MS = 8 * 60 * 1000; // 8 min (telemetria chips)
 
 // ======================================================
 // FUNÇÕES AUXILIARES
@@ -280,22 +281,6 @@ function normalizeDailyPayload(payload) {
 
 
 // ======================================================
-// MOCK STRINGS (pra não depender da API)
-// ======================================================
-function buildMockStringsPayload(inverterId, count = 28) {
-  return {
-    inverter_id: Number(inverterId),
-    strings: Array.from({ length: count }, (_, idx) => ({
-      string_index: idx + 1,
-      enabled: true,
-      has_data: false,
-      current_a: null,
-      last_ts: null
-    }))
-  };
-}
-
-// ======================================================
 // SÉRIES REAIS (API)
 // ======================================================
 let DAILY = null;
@@ -303,9 +288,19 @@ let MONTHLY = null;
 let ACTIVE_ALARMS = [];
 let INVERTERS_REALTIME = [];
 let RELAY_REALTIME = null; // ✅ NEW
+let OPEN_INVERTER_REAL_ID = null;
+let STRINGS_REFRESH_SEQ = 0;
+
+let PLANT_CATALOG = {
+  inverters: [],
+  hasRelay: false
+};
+
+let RELAY_SUPPORTED = null; // null = desconhecido / true / false
 
 const API_BASE = "https://jgeg9i0js1.execute-api.us-east-1.amazonaws.com";
-const PLANT_ID = new URLSearchParams(window.location.search).get("plant_id") || "1";
+const PLANT_REFRESH_INTERVAL_MS = 10000;
+const PLANT_ID = new URLSearchParams(window.location.search).get("plant_id");
 
 function normalizeApiBody(data) {
   if (data && data.body) {
@@ -403,15 +398,30 @@ async function fetchMonthlyEnergy(plantId) {
   return normalizeApiBody(data);
 }
 
-// ✅ NEW: relay realtime
-async function fetchRelayRealtime(plantId) {
+async function safeFetchRelayIfSupported(plantId) {
+  if (RELAY_SUPPORTED === false) return null;
+
   const url = `${API_BASE}/plants/${plantId}/relay/realtime`;
   const res = await fetch(url, { headers: buildAuthHeaders() });
+
+  if (res.status === 404) {
+    RELAY_SUPPORTED = false;
+    return null;
+  }
+
   if (!res.ok) {
     console.warn(`[relay/realtime] HTTP ${res.status} em ${url}`);
-    return { item: null };
+    return null;
   }
-  return normalizeApiBody(await res.json());
+
+  RELAY_SUPPORTED = true;
+  const payload = normalizeApiBody(await res.json());
+  return payload?.item ?? null;
+}
+
+function setRelaySectionVisible(visible) {
+  const relaySection = document.getElementById("relaySection");
+  if (relaySection) relaySection.style.display = visible ? "" : "none";
 }
 
 // ✅ realtime por inversor
@@ -474,26 +484,6 @@ async function patchInverterString(plantId, inverterRealId, stringIndex, enabled
   return normalizeApiBody(await res.json());
 }
 
-// ======================================================
-// ✅ RESOLVER UI inverter (1..8) -> inverter_id REAL (device_id)
-//   FIX PRINCIPAL: aceitar nomes "Inversor1", "Inverter1", "INVERSOR_1", etc.
-// ======================================================
-function getUiInverterNumberFromName(name) {
-  if (!name) return null;
-  const s = String(name).trim();
-
-  // aceita:
-  // - "Inversor 1" / "Inversor1" / "INVERSOR_1" / "inverter-1" / "Inverter 01"
-  const m = s.match(/(inversor|inverter)\s*[_-]?\s*0*([1-8])$/i);
-  if (m) return Number(m[2]);
-
-  // fallback: se vier apenas "1"..."8"
-  const n = s.match(/^0*([1-8])$/);
-  if (n) return Number(n[1]);
-
-  return null;
-}
-
 function getInvTsMs(inv) {
   const iso =
     inv.last_reading_at ??
@@ -507,47 +497,174 @@ function getInvTsMs(inv) {
   return Number.isFinite(ms) ? ms : 0;
 }
 
-function buildInvertersIndex(inverters) {
-  const map = new Map();
-
-  (Array.isArray(inverters) ? inverters : []).forEach(inv => {
-    // ✅ pega “nome” de vários campos possíveis
-    const name =
-      inv.inverter_name ??
-      inv.device_name ??
-      inv.deviceName ??
-      inv.name ??
-      inv.device_type ??
-      inv.deviceType ??
-      null;
-
-    const uiId = getUiInverterNumberFromName(name);
-    if (!uiId) return;
-
-    const key = String(uiId);
-    const prev = map.get(key);
-
-    // fica com o mais recente
-    if (!prev || getInvTsMs(inv) > getInvTsMs(prev)) {
-      map.set(key, inv);
-    }
-  });
-
-  return map;
+function parseTsToMs(anyTs) {
+  if (!anyTs) return 0;
+  const ms = Date.parse(anyTs);
+  return Number.isFinite(ms) ? ms : 0;
 }
 
-function resolveInverterRealIdFromUi(uiId) {
-  const idx = buildInvertersIndex(INVERTERS_REALTIME);
-  const inv = idx.get(String(uiId));
-  if (!inv) return null;
+function dedupInvertersById(list) {
+  const map = new Map();
 
+  for (const inv of (list || [])) {
+    const id = inv.inverter_id ?? inv.device_id ?? inv.id;
+    if (id == null) continue;
+
+    const ts = parseTsToMs(
+      inv.last_ts ??
+      inv.timestamp ??
+      inv.event_ts ??
+      inv.ts ??
+      inv.last_reading_at ??
+      inv.last_reading_ts
+    );
+
+    const prev = map.get(id);
+    const prevTs = prev ? parseTsToMs(
+      prev.last_ts ??
+      prev.timestamp ??
+      prev.event_ts ??
+      prev.ts ??
+      prev.last_reading_at ??
+      prev.last_reading_ts
+    ) : -1;
+
+    if (!prev || ts >= prevTs) map.set(id, inv);
+  }
+
+  return [...map.values()];
+}
+
+function computeInverterChipsByTelemetry(invertersRaw) {
+  const inverters = dedupInvertersById(invertersRaw);
+  const now = Date.now();
+
+  let noComm = 0;
+  let gen = 0;
+  let off = 0;
+
+  for (const inv of inverters) {
+    const lastMs = parseTsToMs(
+      inv.last_ts ??
+      inv.timestamp ??
+      inv.event_ts ??
+      inv.ts ??
+      inv.last_reading_at ??
+      inv.last_reading_ts
+    );
+    const age = lastMs ? (now - lastMs) : Number.POSITIVE_INFINITY;
+
+    if (age > INVERTER_NO_COMM_AFTER_MS) {
+      noComm++;
+      continue;
+    }
+
+    const working =
+      inv.working === true ||
+      inv.status === "working" ||
+      inv.is_working === true;
+
+    if (working) gen++;
+    else off++;
+  }
+
+  const total = inverters.length;
+  gen = Math.min(gen, total);
+  off = Math.min(off, total);
+  noComm = Math.min(noComm, total);
+
+  return { total, gen, off, noComm };
+}
+
+function setChipCount(id, value) {
+  const el = document.getElementById(id);
+  if (el) el.textContent = String(value);
+}
+
+function refreshInverterStatusChips(invertersRaw) {
+  const { total, gen, off, noComm } = computeInverterChipsByTelemetry(invertersRaw);
+
+  setChipCount("countGen", gen);
+  setChipCount("countNoComm", noComm);
+  setChipCount("countOff", off);
+
+  console.log("[INV CHIPS]", { plantId: PLANT_ID, total, gen, off, noComm });
+}
+
+function getInverterRealId(inv) {
+  return inv?.device_id ?? inv?.inverter_id ?? inv?.deviceId ?? inv?.id ?? null;
+}
+
+function getInverterDisplayName(inv, fallbackIndex = 0) {
   return (
-    inv.inverter_id ??
-    inv.device_id ??
-    inv.deviceId ??
-    inv.id ??
-    null
+    inv?.device_name ??
+    inv?.inverter_name ??
+    inv?.name ??
+    `Inversor ${fallbackIndex + 1}`
   );
+}
+
+function ensureInverterRowsFromRealtime(inverters) {
+  const container = document.getElementById("invertersContainer");
+  if (!container) return;
+
+  const preservedOpenId = OPEN_INVERTER_REAL_ID;
+  const uniq = dedupInvertersById(Array.isArray(inverters) ? inverters : []);
+
+  uniq.sort((a, b) => {
+    const an = String(getInverterDisplayName(a, 0) || "");
+    const bn = String(getInverterDisplayName(b, 0) || "");
+    if (an && bn) return an.localeCompare(bn, "pt-BR", { numeric: true, sensitivity: "base" });
+    return Number(getInverterRealId(a) || 0) - Number(getInverterRealId(b) || 0);
+  });
+
+  container.innerHTML = "";
+
+  uniq.forEach((inv, idx) => {
+    const realId = getInverterRealId(inv);
+    if (realId == null) return;
+
+    const title = getInverterDisplayName(inv, idx);
+
+    const row = document.createElement("div");
+    row.className = "inverter-toggle inverter-row";
+    row.dataset.inverterRealId = String(realId);
+    row.innerHTML = `
+      <span class="status-dot"></span>
+      <span class="inverter-name">${title}<i class="arrow fa-solid fa-chevron-down"></i></span>
+      <span>—</span><span>—</span><span>—</span><span>—</span><span>—</span><span>—</span>
+    `;
+
+    const panel = document.createElement("div");
+    panel.className = "inverter-strings";
+    panel.id = `strings-${realId}`;
+    panel.innerHTML = `<div class="strings-grid" data-inverter-real-id="${realId}"></div>`;
+
+    container.appendChild(row);
+    container.appendChild(panel);
+  });
+
+  if (preservedOpenId != null) {
+    const row = container.querySelector(`.inverter-toggle[data-inverter-real-id="${preservedOpenId}"]`);
+    const panel = document.getElementById(`strings-${preservedOpenId}`);
+    if (row && panel) {
+      row.classList.add("open");
+      panel.classList.add("open");
+      panel.style.opacity = "1";
+      panel.style.maxHeight = panel.scrollHeight + "px";
+    } else {
+      OPEN_INVERTER_REAL_ID = null;
+    }
+  }
+}
+
+function countOnlineInverters(invertersRaw) {
+  const inverters = dedupInvertersById(invertersRaw);
+  let online = 0;
+  inverters.forEach(inv => {
+    if (isOnlineByFreshness(inv) && !isZeroSnapshot(inv)) online++;
+  });
+  return online;
 }
 
 // ======================================================
@@ -568,29 +685,25 @@ function renderHeaderSummary() {
 // RENDER — WEATHER
 // ======================================================
 function renderWeather(data) {
-  if (!data) return;
-
   const elIrr = document.getElementById("weatherIrradiance");
   const elAir = document.getElementById("weatherAirTemp");
   const elModule = document.getElementById("weatherModuleTemp");
 
+  const hasWeather = !!(data && typeof data === "object");
+
   if (elIrr) {
-    const value = data.irradiance_poa_wm2 ?? data.irradiance_ghi_wm2;
+    const value = hasWeather ? (data.irradiance_poa_wm2 ?? data.irradiance_ghi_wm2) : null;
     elIrr.textContent = value != null ? `${Number(value).toFixed(0)} W/m²` : "—";
   }
 
   if (elAir) {
-    elAir.textContent =
-      data.air_temperature_c != null
-        ? `${Number(data.air_temperature_c).toFixed(1)} °C`
-        : "—";
+    const value = hasWeather ? data.air_temperature_c : null;
+    elAir.textContent = value != null ? `${Number(value).toFixed(1)} °C` : "—";
   }
 
   if (elModule) {
-    elModule.textContent =
-      data.module_temperature_c != null
-        ? `${Number(data.module_temperature_c).toFixed(1)} °C`
-        : "—";
+    const value = hasWeather ? data.module_temperature_c : null;
+    elModule.textContent = value != null ? `${Number(value).toFixed(1)} °C` : "—";
   }
 }
 
@@ -821,6 +934,15 @@ function isOnlineByFreshness(inv) {
   return ageMs <= INVERTER_ONLINE_AFTER_MS;
 }
 
+function isZeroSnapshot(inv) {
+  const powerKw = asNumber(inv.active_power_kw ?? inv.power_kw ?? inv.power ?? inv.active_power, 0);
+  const freqHz = asNumber(inv.frequency_hz ?? inv.freq_hz ?? inv.frequency, 0);
+  const tempC = asNumber(inv.temperature_internal_c ?? inv.temperature_c ?? inv.temp_c ?? inv.temperature_current ?? inv.temperature, 0);
+
+  // pacote "morto": 0 kW + 0 Hz + 0°C
+  return powerKw === 0 && freqHz === 0 && tempC === 0;
+}
+
 function renderInverterRowKpis(rowEl, inv) {
   const powerKw = inv.active_power_kw ?? inv.power_kw ?? inv.power ?? inv.active_power;
   const effPct  = inv.efficiency_pct ?? inv.efficiency ?? inv.eff_pct;
@@ -854,19 +976,25 @@ function renderInverterRowKpis(rowEl, inv) {
     last: lastText
   });
 
-  const online = isOnlineByFreshness(inv);
+  const freshOnline = isOnlineByFreshness(inv);
+  const online = freshOnline && !isZeroSnapshot(inv);
   setRowOnlineUi(rowEl, online);
 }
 
 function renderInvertersRows(inverters) {
-  const idx = buildInvertersIndex(inverters);
+  const map = new Map();
 
-  const rows = document.querySelectorAll(".inverter-toggle[data-inverter]");
+  dedupInvertersById(Array.isArray(inverters) ? inverters : []).forEach(inv => {
+    const id = getInverterRealId(inv);
+    if (id != null) map.set(String(id), inv);
+  });
+
+  const rows = document.querySelectorAll(".inverter-toggle[data-inverter-real-id]");
   if (!rows || !rows.length) return;
 
   rows.forEach(row => {
-    const uiId = row.dataset.inverter;
-    const inv = idx.get(String(uiId));
+    const id = row.dataset.inverterRealId;
+    const inv = map.get(String(id));
 
     if (!inv) {
       fillInverterRowSpans(row, {
@@ -927,66 +1055,105 @@ function mergeStringsPayload(configPayload, realtimePayload, inverterRealId) {
 function renderStringsGrid(gridEl, payload) {
   if (!gridEl) return;
 
-  const strings = payload?.strings ?? [];
+  const strings = Array.isArray(payload?.strings) ? payload.strings : [];
+  const inverterRealId = payload?.inverter_id;
+
   gridEl.innerHTML = "";
 
-  if (!strings.length) {
+  if (!strings.length || inverterRealId == null) {
     gridEl.innerHTML = `<div style="color:#9adbb8; opacity:.7; padding:6px 2px;">Sem dados de strings</div>`;
     return;
   }
 
-  const inverterRealId = payload.inverter_id;
+  const isEffectiveEnabled = (str) => {
+    const disabledByPref = isDisabledPref(inverterRealId, str.string_index);
+    return disabledByPref ? false : !!str.enabled;
+  };
 
-  strings.forEach(s => {
+  const rerender = () => {
+    renderStringsGrid(gridEl, {
+      ...payload,
+      strings
+    });
+  };
+
+  const visibleStrings = strings.filter(isEffectiveEnabled);
+  const hiddenStrings = strings.filter(s => !isEffectiveEnabled(s));
+
+  visibleStrings.forEach(str => {
     const el = document.createElement("div");
     el.className = "string-card";
-    el.dataset.string = s.string_index;
+    el.dataset.string = str.string_index;
 
-    const disabledByPref = isDisabledPref(inverterRealId, s.string_index);
-    const effectiveEnabled = disabledByPref ? false : !!s.enabled;
-
-    if (!effectiveEnabled) el.classList.add("disabled");
-    else if (!s.has_data) el.classList.add("nodata");
+    if (!str.has_data) el.classList.add("nodata");
     else el.classList.add("active");
 
-    el.dataset.inverterId = inverterRealId;
-    el.dataset.stringIndex = s.string_index;
-    el.dataset.enabled = String(effectiveEnabled);
-
-    const ampText = s.has_data ? fmtAmp(s.current_a) : "—";
+    const ampText = str.has_data ? fmtAmp(str.current_a) : "—";
 
     el.innerHTML = `
-      S${s.string_index}
+      S${str.string_index}
       <strong>${ampText}</strong>
     `;
 
     el.addEventListener("click", async (e) => {
       e.stopPropagation();
 
-      const currentEnabled = el.dataset.enabled === "true";
-      const nextEnabled = !currentEnabled;
+      el.classList.add("removing");
 
-      setDisabledPref(inverterRealId, s.string_index, !nextEnabled);
+      setTimeout(async () => {
+        setDisabledPref(inverterRealId, str.string_index, true);
+        rerender();
 
-      el.dataset.enabled = String(nextEnabled);
-      if (nextEnabled) {
-        el.classList.remove("disabled");
-        el.classList.toggle("nodata", !s.has_data);
-        el.classList.toggle("active", !!s.has_data);
-      } else {
-        el.classList.add("disabled");
-        el.classList.remove("nodata", "active");
-      }
-
-      try {
-        await patchInverterString(PLANT_ID, inverterRealId, s.string_index, nextEnabled);
-      } catch (error) {
-        console.warn("PATCH falhou (mantendo preferência local):", error?.message || error);
-      }
+        try {
+          await patchInverterString(PLANT_ID, inverterRealId, str.string_index, false);
+          str.enabled = false;
+        } catch (error) {
+          console.warn("PATCH falhou ao desativar string (rollback local):", error?.message || error);
+          setDisabledPref(inverterRealId, str.string_index, false);
+          rerender();
+        }
+      }, 180);
     });
 
     gridEl.appendChild(el);
   });
+
+  if (hiddenStrings.length > 0) {
+    const addBtn = document.createElement("button");
+    addBtn.type = "button";
+    addBtn.className = "string-card string-card-add";
+
+    const next = hiddenStrings
+      .slice()
+      .sort((a, b) => Number(a.string_index) - Number(b.string_index))[0];
+
+    addBtn.title = `Reativar ${next ? `S${next.string_index}` : "string"}`;
+    addBtn.innerHTML = `
+      <span class="plus">+</span>
+      <strong>${next ? `S${next.string_index}` : `${hiddenStrings.length} off`}</strong>
+    `;
+
+    addBtn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+
+      if (!next) return;
+
+      setDisabledPref(inverterRealId, next.string_index, false);
+      next.enabled = true;
+      rerender();
+
+      try {
+        await patchInverterString(PLANT_ID, inverterRealId, next.string_index, true);
+      } catch (error) {
+        console.warn("PATCH falhou ao reativar string (rollback local):", error?.message || error);
+        setDisabledPref(inverterRealId, next.string_index, true);
+        next.enabled = false;
+        rerender();
+      }
+    });
+
+    gridEl.appendChild(addBtn);
+  }
 }
 
 // ======================================================
@@ -1225,64 +1392,72 @@ function setupInverterToggles() {
     const row = e.target.closest(".inverter-toggle");
     if (!row) return;
 
-    const uiId = row.dataset.inverter; // "1".."8"
-    const panel = document.getElementById(`strings-${uiId}`);
+    const inverterRealId = row.dataset.inverterRealId;
+    const panel = document.getElementById(`strings-${inverterRealId}`);
     if (!panel) return;
 
     const willOpen = !row.classList.contains("open");
 
-    document.querySelectorAll(".inverter-row.open, .inverter-toggle.open").forEach(r => r.classList.remove("open"));
+    document.querySelectorAll(".inverter-toggle.open").forEach(r => r.classList.remove("open"));
     document.querySelectorAll(".inverter-strings.open").forEach(p => {
       p.classList.remove("open");
       p.style.maxHeight = "0px";
       p.style.opacity = "0";
     });
 
-    if (!willOpen) return;
+    if (!willOpen) {
+      OPEN_INVERTER_REAL_ID = null;
+      return;
+    }
 
+    OPEN_INVERTER_REAL_ID = inverterRealId;
     row.classList.add("open");
     panel.classList.add("open");
-
     panel.style.opacity = "1";
     panel.style.maxHeight = panel.scrollHeight + "px";
 
-    await refreshStringsForUiInverter(uiId);
-    panel.style.maxHeight = panel.scrollHeight + "px";
+    refreshStringsForRealInverter(inverterRealId).finally(() => {
+      const samePanel = document.getElementById(`strings-${inverterRealId}`);
+      if (samePanel && samePanel.classList.contains("open")) {
+        samePanel.style.maxHeight = samePanel.scrollHeight + "px";
+      }
+    });
   });
 }
 
-// ======================================================
-// ✅ Atualiza strings de um inversor UI (1..8) chamando API
-// ======================================================
-async function refreshStringsForUiInverter(uiId) {
-  const grid = document.querySelector(`.strings-grid[data-inverter-id="${uiId}"]`);
+async function refreshStringsForRealInverter(inverterRealId) {
+  const grid = document.querySelector(`.strings-grid[data-inverter-real-id="${inverterRealId}"]`);
   if (!grid) return;
 
-  const inverterRealId = resolveInverterRealIdFromUi(uiId);
-
-  if (!inverterRealId) {
-    const mock = buildMockStringsPayload(uiId, 28);
-    renderStringsGrid(grid, mock);
-    return;
-  }
+  const reqSeq = ++STRINGS_REFRESH_SEQ;
 
   const [cfg, rt] = await Promise.all([
     fetchInverterStrings(PLANT_ID, inverterRealId),
     fetchInverterStringsRealtime(PLANT_ID, inverterRealId)
   ]);
 
+  if (reqSeq !== STRINGS_REFRESH_SEQ) return;
+
   const merged = mergeStringsPayload(cfg, rt, inverterRealId);
   renderStringsGrid(grid, merged);
+
+  const panel = document.getElementById(`strings-${inverterRealId}`);
+  if (panel && panel.classList.contains("open")) {
+    panel.style.maxHeight = panel.scrollHeight + "px";
+  }
 }
 
-// ======================================================
-// ✅ Atualiza apenas o inversor que estiver ABERTO
-// ======================================================
 async function refreshOpenStringsPanels() {
-  const openRow = document.querySelector(".inverter-toggle.open[data-inverter]");
+  const trackedId = OPEN_INVERTER_REAL_ID;
+  if (trackedId != null) {
+    await refreshStringsForRealInverter(trackedId);
+    return;
+  }
+
+  const openRow = document.querySelector(".inverter-toggle.open[data-inverter-real-id]");
   if (!openRow) return;
-  const uiId = openRow.dataset.inverter;
-  await refreshStringsForUiInverter(uiId);
+  OPEN_INVERTER_REAL_ID = openRow.dataset.inverterRealId;
+  await refreshStringsForRealInverter(openRow.dataset.inverterRealId);
 }
 
 // ======================================================
@@ -1295,13 +1470,6 @@ async function refreshRealtimeEverything() {
     if (realtime) {
       const rated = asNumber(realtime.rated_power_kw, PLANT_STATE.rated_power_kwp);
       const active = asNumber(realtime.active_power_kw, PLANT_STATE.active_power_kw);
-
-      const avail = realtime.inverter_availability_pct; // esperado 0..1
-      const invOnline =
-        Number.isFinite(Number(avail))
-          ? Math.round(Number(avail) * Number(PLANT_STATE.inverter_total || 0))
-          : PLANT_STATE.inverter_online;
-
       const prPct = normalizePercentMaybe(realtime.performance_ratio);
 
       PLANT_STATE = {
@@ -1309,25 +1477,36 @@ async function refreshRealtimeEverything() {
         rated_power_kwp: rated,
         active_power_kw: active,
         capacity_percent: rated > 0 ? (active / rated) * 100 : PLANT_STATE.capacity_percent,
-        inverter_online: invOnline,
         pr_percent: prPct != null ? prPct : PLANT_STATE.pr_percent
       };
     }
-
-    renderHeaderSummary();
-    if (realtime?.weather) renderWeather(realtime.weather);
-    renderSummaryStrip();
 
     ACTIVE_ALARMS = await fetchActiveAlarms(PLANT_ID);
     renderAlarms(ACTIVE_ALARMS);
 
     INVERTERS_REALTIME = await fetchInvertersRealtime(PLANT_ID);
-    renderInvertersRows(INVERTERS_REALTIME);
+    const dedup = dedupInvertersById(INVERTERS_REALTIME);
 
-    // ✅ RELAY realtime (novo shape)
-    const relayPayload = await fetchRelayRealtime(PLANT_ID);
-    RELAY_REALTIME = relayPayload?.item ?? null;
-    renderRelayCard(RELAY_REALTIME);
+    PLANT_CATALOG.inverters = dedup;
+    PLANT_STATE = {
+      ...PLANT_STATE,
+      inverter_total: dedup.length,
+      inverter_online: countOnlineInverters(dedup)
+    };
+
+    ensureInverterRowsFromRealtime(INVERTERS_REALTIME);
+    renderInvertersRows(INVERTERS_REALTIME);
+    refreshInverterStatusChips(INVERTERS_REALTIME);
+
+    const relayItem = await safeFetchRelayIfSupported(PLANT_ID);
+    RELAY_REALTIME = relayItem;
+    PLANT_CATALOG.hasRelay = !!relayItem;
+    setRelaySectionVisible(RELAY_SUPPORTED !== false);
+    if (RELAY_SUPPORTED !== false) renderRelayCard(relayItem);
+
+    renderHeaderSummary();
+    renderWeather(realtime?.weather ?? null);
+    renderSummaryStrip();
 
     await refreshOpenStringsPanels();
   } catch (e) {
@@ -1341,17 +1520,25 @@ async function refreshRealtimeEverything() {
 // INIT
 // ======================================================
 document.addEventListener("DOMContentLoaded", async () => {
+  document.body.classList.add("plant-enter");
+  setTimeout(() => document.body.classList.remove("plant-enter"), 500);
+  if (!PLANT_ID) {
+    console.warn("[plant] plant_id ausente na URL; mantendo tela sem dados de fallback.");
+    renderHeaderSummary();
+    renderSummaryStrip();
+    return;
+  }
   setupInverterToggles();
 
   try {
     await refreshRealtimeEverything();
 
-    const grids = document.querySelectorAll(".strings-grid[data-inverter-id]");
+    const grids = document.querySelectorAll(".strings-grid[data-inverter-real-id]");
     for (const grid of grids) {
-      const uiId = grid.dataset.inverterId; // "1".."8"
-      await refreshStringsForUiInverter(uiId);
+      const realId = grid.dataset.inverterRealId;
+      await refreshStringsForRealInverter(realId);
 
-      const panel = document.getElementById(`strings-${uiId}`);
+      const panel = document.getElementById(`strings-${realId}`);
       if (panel?.classList.contains("open")) {
         panel.style.maxHeight = panel.scrollHeight + "px";
       }
@@ -1370,7 +1557,17 @@ document.addEventListener("DOMContentLoaded", async () => {
       renderMonthlyChart();
     }
 
-    setInterval(refreshRealtimeEverything, 30000);
+    setInterval(refreshRealtimeEverything, PLANT_REFRESH_INTERVAL_MS);
+
+    document.addEventListener("visibilitychange", async () => {
+      if (!document.hidden) {
+        await refreshRealtimeEverything();
+      }
+    });
+
+    window.addEventListener("focus", async () => {
+      await refreshRealtimeEverything();
+    });
   } catch (e) {
     console.error(e);
     renderHeaderSummary();

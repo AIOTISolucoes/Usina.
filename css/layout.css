@@ -412,8 +412,8 @@ td {
   position: relative;
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding-left: 15px;
+  gap: 10px;
+  padding-left: 0;
 }
 
 .plant-icon {
@@ -423,7 +423,7 @@ td {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  margin-right: 10px;
+  margin-right: 0;
   font-size: 16px;
   background: rgba(255, 255, 255, 0.04);
   transition: all 0.25s ease;
@@ -455,6 +455,10 @@ td {
 
 .plant-name-text {
   font-weight: 600;
+}
+
+.portfolio-table td:first-child .plant-cell{
+  margin-left: 0;
 }
 
 /* ===============================
@@ -571,6 +575,58 @@ td {
 .hidden { display: none !important; }
 
 /* ===============================
+   VIEW TRANSITIONS (dashboard)
+================================ */
+.view-section{
+  will-change: opacity, transform, filter;
+}
+
+.view-section.view-enter{
+  animation: viewFadeSlideIn .34s cubic-bezier(.22,.61,.36,1);
+}
+
+.view-section.view-enter .card,
+.view-section.view-enter .events-filters-bar,
+.view-section.view-enter .alarms-tabs{
+  animation: contentRiseIn .42s cubic-bezier(.22,.61,.36,1);
+}
+
+.sidebar-btn,
+.tab-btn{
+  transition: transform .18s ease, box-shadow .18s ease, background .18s ease, color .18s ease;
+}
+
+.sidebar-btn:active,
+.tab-btn:active{
+  transform: translateY(1px) scale(.985);
+}
+
+@keyframes viewFadeSlideIn{
+  from{
+    opacity: 0;
+    transform: translateY(10px);
+    filter: blur(2px);
+  }
+  to{
+    opacity: 1;
+    transform: translateY(0);
+    filter: blur(0);
+  }
+}
+
+@keyframes contentRiseIn{
+  from{
+    opacity: 0;
+    transform: translateY(12px) scale(.995);
+  }
+  to{
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+
+/* ===============================
    PORTFOLIO METRICS (SCADA GLOW)
 ================================ */
 .metric-neutral {
@@ -635,7 +691,11 @@ td {
   .psf-status-icons::before,
   .plant-icon--ok,
   .plant-icon--medium,
-  .plant-icon--high{
+  .plant-icon--high,
+  .view-section.view-enter,
+  .view-section.view-enter .card,
+  .view-section.view-enter .events-filters-bar,
+  .view-section.view-enter .alarms-tabs{
     animation: none !important;
   }
 }
@@ -753,19 +813,16 @@ td {
   justify-content: center;
   gap: 8px;
 
-  height: 36px;            /* ✅ mesma altura */
-  padding: 0 12px;         /* ✅ mesma largura visual */
-  border-radius: 12px;
+  height: 36px;
+  padding: 0 6px;
+  border-radius: 0;
 
-  background: rgba(12, 18, 16, 0.55);
-  border: 1px solid rgba(42,255,123,0.22);
+  background: transparent;
+  border: none;
+  box-shadow: none;
 
-  color: var(--accent-green); /* ✅ todos verdinhos */
+  color: var(--accent-green);
   font-size: 13px;
-
-  box-shadow:
-    0 0 0 1px rgba(42,255,123,0.06) inset,
-    0 0 16px rgba(42,255,123,0.08);
 }
 
 /* ícones IMG (gen/off) */
@@ -781,6 +838,17 @@ td {
 
 /* ícone SVG do no comm */
 .psf-no-comm{
+  width: 18px;
+  height: 18px;
+  display: block;
+  color: var(--accent-green);
+  filter:
+    drop-shadow(0 0 6px rgba(42,255,123,.28))
+    drop-shadow(0 0 14px rgba(42,255,123,.16));
+  opacity: .95;
+}
+
+.psf-off-icon{
   width: 18px;
   height: 18px;
   display: block;
@@ -985,7 +1053,8 @@ td {
 
   .topbar-right{
     width: 100%;
-    justify-content: space-between;
+    justify-content: center;
+    gap: 10px;
   }
 
   .status-pill,
@@ -1003,21 +1072,36 @@ td {
       "active"
       "gauge"
       "status";
-    text-align: left;
+    text-align: center;
     padding: 10px;
+    justify-items: center;
   }
 
-  .psf-gauge{ justify-self: start; }
+  .psf-rated,
+  .psf-active,
+  .psf-gauge,
+  .psf-status-icons{
+    justify-self: center;
+    width: 100%;
+  }
+
+  .psf-gauge{
+    display: grid;
+    place-items: center;
+  }
 
   .psf-status-icons{
-    justify-content: flex-start;
-    gap: 8px;
+    justify-content: center;
+    gap: 10px;
+    flex-wrap: wrap;
   }
 
   .psf-status{
-    height: 32px;
-    padding: 0 10px;
+    height: auto;
+    padding: 0 4px;
     font-size: 12px;
+    border: none;
+    box-shadow: none;
   }
 
   .content{ padding: 10px; }
@@ -1054,5 +1138,73 @@ td {
   .btn-apply{
     flex: 1;
     min-height: 36px;
+  }
+}
+
+/* ===============================
+   MOBILE UX — centralização + tabelas completas (alarms/events)
+================================ */
+@media (max-width: 640px){
+  .topbar,
+  .topbar-right,
+  .content,
+  .card-header,
+  .alarms-tabs{
+    justify-content: center;
+    text-align: center;
+  }
+
+  .plant-name,
+  .plant-location,
+  .card-title{
+    text-align: center;
+    width: 100%;
+  }
+
+  .events-container-full,
+  .alarms-container,
+  .card{
+    margin-left: auto;
+    margin-right: auto;
+  }
+
+  .alarms-tabs{
+    display: flex;
+    flex-wrap: nowrap;
+    gap: 8px;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    padding-bottom: 4px;
+  }
+
+  .alarms-tabs .tab-btn{
+    flex: 0 0 auto;
+  }
+
+  .alarms-table-wrapper,
+  .events-table-wrapper-full,
+  .portfolio-table-wrapper{
+    position: relative;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: thin;
+  }
+
+  .alarms-table-wrapper::after,
+  .events-table-wrapper-full::after,
+  .portfolio-table-wrapper::after{
+    content: "← arraste para ver mais →";
+    display: block;
+    text-align: center;
+    font-size: 11px;
+    color: var(--text-muted);
+    padding: 6px 0 2px;
+  }
+
+  .portfolio-table,
+  .alarms-table,
+  .events-table-full{
+    min-width: 860px;
   }
 }

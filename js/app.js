@@ -22,6 +22,9 @@ function logout() {
 // API FETCH COM CONTEXTO DO USUÁRIO LOGADO
 // =============================================================================
 const API_BASE = "https://jgeg9i0js1.execute-api.us-east-1.amazonaws.com";
+const INVERTER_NO_COMM_AFTER_MS = 15 * 60 * 1000; // legado (chips usam status do mart)
+const DASHBOARD_REFRESH_INTERVAL_MS = 10000;
+const EVENTS_REFRESH_INTERVAL_MS = 10000;
 
 function apiFetch(path, options = {}) {
   const user = JSON.parse(localStorage.getItem("user") || "{}");
@@ -44,6 +47,17 @@ function apiFetch(path, options = {}) {
 // =============================================================================
 let lastValidPlants = [];
 let lastAlarmSeverityByPlant = new Map();
+let CURRENT_PLANT_ID = null; // planta selecionada no dashboard
+
+function loadSelectedPlantId() {
+  const v = localStorage.getItem("selectedPlantId");
+  return v && /^\d+$/.test(v) ? Number(v) : null;
+}
+
+function saveSelectedPlantId(id) {
+  if (id == null) return;
+  localStorage.setItem("selectedPlantId", String(id));
+}
 
 // EVENTS
 let EVENTS_STATE = {
@@ -127,60 +141,179 @@ function getAlarmDescription(eventCode) {
 }
 
 // =============================================================================
-// ✅ TOP CHIPS (GEN / NO COMM / OFF) — AJUSTADO PRO SEU HTML
+// ✅ TOP CHIPS (GEN / NO COMM / OFF) — TELEMETRIA POR USINA
 // ----------------------------------------------------------------------------
-// Seu HTML usa:
-//   - countGen
-//   - countNoComm
-//   - countOff
-// e o /plants retorna (no seu print/curl):
-//   inverter_total, inverter_generating, inverter_no_comm, inverter_off
+// Regras por status (mart_inverter_realtime, sem depender do clock do browser):
+// Gen     = RUNNING (code 2)
+// No comm = OFFLINE (code 0)
+// Off     = STANDBY + FAULT (codes 1 + 3)
 // =============================================================================
-function asInt(v, fallback = 0) {
-  const n = Number(v);
-  return Number.isFinite(n) ? Math.trunc(n) : fallback;
+function parseTsToMs(anyTs) {
+  if (!anyTs) return 0;
+  const ms = Date.parse(anyTs);
+  return Number.isFinite(ms) ? ms : 0;
 }
 
-function pickFirstNumber(obj, keys, fallback = 0) {
-  for (const k of keys) {
-    const v = obj?.[k];
-    const n = Number(v);
-    if (Number.isFinite(n)) return Math.trunc(n);
+function dedupInvertersById(list) {
+  const map = new Map();
+
+  for (const inv of (list || [])) {
+    const id = inv.inverter_id ?? inv.device_id ?? inv.id;
+    if (id == null) continue;
+
+    const ts = parseTsToMs(
+      inv.last_ts ??
+      inv.timestamp ??
+      inv.event_ts ??
+      inv.ts ??
+      inv.last_reading_at ??
+      inv.last_reading_ts
+    );
+
+    const prev = map.get(id);
+    const prevTs = prev ? parseTsToMs(
+      prev.last_ts ??
+      prev.timestamp ??
+      prev.event_ts ??
+      prev.ts ??
+      prev.last_reading_at ??
+      prev.last_reading_ts
+    ) : -1;
+
+    if (!prev || ts >= prevTs) map.set(id, inv);
   }
-  return fallback;
+
+  return [...map.values()];
 }
 
-function updateInverterStatusChips(plants) {
-  const list = Array.isArray(plants) ? plants : [];
+function normalizeInvStatus(inv) {
+  const s =
+    inv.status ??
+    inv.inverter_status ??
+    inv.inverterStatus ??
+    null;
 
-  const totals = list.reduce(
-    (acc, p) => {
-      // aceita variações de nomes (por segurança)
-      acc.total += pickFirstNumber(p, ["inverter_total", "inverter_count", "inverters_total"], 0);
-      acc.gen += pickFirstNumber(p, ["inverter_generating", "inverter_gen", "generating_inverters"], 0);
-      acc.noComm += pickFirstNumber(p, ["inverter_no_comm", "inverter_nocomm", "inverter_noCommunication"], 0);
-      acc.off += pickFirstNumber(p, ["inverter_off", "inverter_off_count", "off_inverters"], 0);
-      return acc;
-    },
-    { total: 0, gen: 0, noComm: 0, off: 0 }
-  );
+  if (s) return String(s).trim().toUpperCase();
 
-  // ✅ IDs do seu HTML
-  const elGen = document.getElementById("countGen");
-  const elNo = document.getElementById("countNoComm");
-  const elOff = document.getElementById("countOff");
+  const code =
+    inv.inverter_status_code ??
+    inv.status_code ??
+    inv.inverterStatusCode ??
+    null;
 
-  if (elGen) {
-    elGen.textContent = String(totals.gen);
-    elGen.title = `Gerando: ${totals.gen} de ${totals.total}`;
+  if (code === 0) return "OFFLINE";
+  if (code === 1) return "STANDBY";
+  if (code === 2) return "RUNNING";
+  if (code === 3) return "FAULT";
+  return "UNKNOWN";
+}
+
+function computeInverterChipsByTelemetry(invertersRaw) {
+  const inverters = dedupInvertersById(invertersRaw);
+
+  let noComm = 0;
+  let gen = 0;
+  let off = 0;
+
+  for (const inv of inverters) {
+    const st = normalizeInvStatus(inv);
+
+    if (st === "OFFLINE") noComm++;
+    else if (st === "RUNNING") gen++;
+    else if (st === "STANDBY" || st === "FAULT") off++;
+    else {
+      // se vier UNKNOWN, joga em off pra não sumir
+      off++;
+    }
   }
-  if (elNo) {
-    elNo.textContent = String(totals.noComm);
-    elNo.title = `Sem comunicação: ${totals.noComm} de ${totals.total}`;
+
+  const total = inverters.length;
+  return { total, gen, off, noComm };
+}
+
+
+function computeGlobalChipsFromPlants(plantsRaw) {
+  const plants = Array.isArray(plantsRaw) ? plantsRaw : [];
+
+  let total = 0;
+  let gen = 0;
+  let noComm = 0;
+  let off = 0;
+
+  for (const p of plants) {
+    total += Number(p.inverter_total ?? 0) || 0;
+    gen += Number(p.inverter_generating ?? 0) || 0;
+    noComm += Number(p.inverter_no_comm ?? 0) || 0;
+    off += Number(p.inverter_off ?? 0) || 0;
   }
-  if (elOff) {
-    elOff.textContent = String(totals.off);
-    elOff.title = `Desligados: ${totals.off} de ${totals.total}`;
+
+  total = Math.max(0, total);
+  gen = Math.max(0, gen);
+  noComm = Math.max(0, noComm);
+  off = Math.max(0, off);
+
+  const sum = gen + noComm + off;
+  if (total === 0 && sum > 0) total = sum;
+
+  return { total, gen, noComm, off };
+}
+
+function refreshTopChipsGlobalFromPlants(plants) {
+  const r = computeGlobalChipsFromPlants(plants);
+
+  setChipCount("countGen", r.gen, `Gerando (global): ${r.gen} de ${r.total}`);
+  setChipCount("countNoComm", r.noComm, `Sem comunicação (global): ${r.noComm} de ${r.total}`);
+  setChipCount("countOff", r.off, `Off (global): ${r.off} de ${r.total}`);
+
+  console.log("[INV CHIPS - GLOBAL]", r);
+}
+
+function setChipCount(id, value, title = "") {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.textContent = String(value);
+  if (title) el.title = title;
+}
+
+async function fetchInvertersRealtimeByPlant(plantId) {
+  const res = await apiFetch(`/plants/${plantId}/inverters/realtime`);
+  if (!res.ok) {
+    console.warn(`[INV CHIPS] HTTP ${res.status} em /plants/${plantId}/inverters/realtime`);
+    return [];
+  }
+
+  const data = await res.json();
+  const normalized = (data && data.body)
+    ? (typeof data.body === "string" ? JSON.parse(data.body) : data.body)
+    : data;
+
+  return (Array.isArray(normalized?.inverters) ? normalized.inverters : null) ||
+         (Array.isArray(normalized?.items) ? normalized.items : null) ||
+         (Array.isArray(normalized) ? normalized : []);
+}
+
+async function refreshInverterStatusChipsForPlant(plantId) {
+  if (plantId == null) {
+    setChipCount("countGen", 0);
+    setChipCount("countNoComm", 0);
+    setChipCount("countOff", 0);
+    return;
+  }
+
+  try {
+    const inverters = await fetchInvertersRealtimeByPlant(plantId);
+    const r = computeInverterChipsByTelemetry(inverters);
+
+    setChipCount("countGen", r.gen, `Gerando: ${r.gen} de ${r.total}`);
+    setChipCount("countNoComm", r.noComm, `Sem comunicação: ${r.noComm} de ${r.total}`);
+    setChipCount("countOff", r.off, `Desligados: ${r.off} de ${r.total}`);
+
+    console.log("[INV CHIPS - PLANT]", { plantId, ...r });
+  } catch (e) {
+    console.warn("[INV CHIPS] falha:", e?.message || e);
+    setChipCount("countGen", 0);
+    setChipCount("countNoComm", 0);
+    setChipCount("countOff", 0);
   }
 }
 
@@ -288,7 +421,7 @@ const themeToggleBtn = document.getElementById("themeToggleBtn");
 const themeIcon = document.getElementById("themeIcon");
 const body = document.body;
 
-const savedTheme = localStorage.getItem("theme") || "light";
+const savedTheme = localStorage.getItem("theme") || "dark";
 body.classList.add(`theme-${savedTheme}`);
 if (themeIcon) themeIcon.className = savedTheme === "dark" ? "fa-solid fa-sun" : "fa-solid fa-moon";
 
@@ -673,7 +806,7 @@ function startEventsAutoRefresh() {
     const evView = document.getElementById("eventsView");
     const isVisible = evView && !evView.classList.contains("hidden");
     if (isVisible) loadEvents(EVENTS_STATE.page || 1, { silent: true });
-  }, 30000);
+  }, EVENTS_REFRESH_INTERVAL_MS);
 }
 
 function stopEventsAutoRefresh() {
@@ -964,6 +1097,17 @@ function renderPortfolioTable(plants) {
       window.location.href = `plant.html?plant_id=${plant.power_plant_id}`;
     });
 
+    tr.style.cursor = "pointer";
+    tr.addEventListener("click", async (e) => {
+      if (e.target.closest(".plant-link-btn")) return;
+
+      CURRENT_PLANT_ID = plant.power_plant_id ?? plant.plant_id ?? plant.id;
+      saveSelectedPlantId(CURRENT_PLANT_ID);
+
+      // chips continuam globais, não mudam ao clicar na usina
+      updateSummaryUI([plant]);
+    });
+
     tbody.appendChild(tr);
   });
 }
@@ -971,6 +1115,18 @@ function renderPortfolioTable(plants) {
 // =============================================================================
 // NAVEGAÇÃO E INICIALIZAÇÃO
 // =============================================================================
+
+function animateViewEntrance(viewEl) {
+  if (!viewEl) return;
+  viewEl.classList.remove("view-enter");
+  // força reflow para reiniciar animação sem mexer em API/state
+  void viewEl.offsetWidth;
+  viewEl.classList.add("view-enter");
+
+  const done = () => viewEl.classList.remove("view-enter");
+  viewEl.addEventListener("animationend", done, { once: true });
+}
+
 const views = {
   overview: document.getElementById("overviewView"),
   alarms: document.getElementById("alarmsView"),
@@ -981,7 +1137,10 @@ const views = {
 function showView(viewName) {
   localStorage.setItem("currentView", viewName);
   Object.values(views).forEach(v => { if (v) v.classList.add("hidden"); });
-  if (views[viewName]) views[viewName].classList.remove("hidden");
+  if (views[viewName]) {
+    views[viewName].classList.remove("hidden");
+    animateViewEntrance(views[viewName]);
+  }
 
   document.querySelectorAll(".sidebar-btn").forEach(b => b.classList.remove("active"));
   const activeBtn = document.getElementById(`btn${viewName.charAt(0).toUpperCase()}${viewName.slice(1)}`);
@@ -1017,8 +1176,29 @@ document.querySelectorAll(".tab-btn").forEach(btn => {
     btn.classList.add("active");
     const isRecognized = btn.textContent.includes("RECONHECIDOS");
     await renderAlarmsTable(isRecognized);
+
+    const alarmsView = document.getElementById("alarmsView");
+    animateViewEntrance(alarmsView);
   });
 });
+
+function isAlarmsRecognizedTabActive() {
+  const activeTab = document.querySelector(".alarms-tabs .tab-btn.active");
+  return Boolean(activeTab?.textContent?.toUpperCase().includes("RECONHECID"));
+}
+
+async function refreshVisibleViewData() {
+  const alarmsView = document.getElementById("alarmsView");
+  const eventsView = document.getElementById("eventsView");
+
+  if (alarmsView && !alarmsView.classList.contains("hidden")) {
+    await renderAlarmsTable(isAlarmsRecognizedTabActive());
+  }
+
+  if (eventsView && !eventsView.classList.contains("hidden")) {
+    await loadEvents(EVENTS_STATE.page || 1, { silent: true });
+  }
+}
 
 async function refreshDashboard() {
   try {
@@ -1027,17 +1207,39 @@ async function refreshDashboard() {
 
     lastAlarmSeverityByPlant = buildPlantAlarmSeverityMap(alarms);
 
-    // ✅ chips (Gen/NoComm/Off)
-    updateInverterStatusChips(lastValidPlants);
+    if (CURRENT_PLANT_ID == null) {
+      CURRENT_PLANT_ID = loadSelectedPlantId();
+    }
 
-    updateSummaryUI(lastValidPlants);
+    if (CURRENT_PLANT_ID == null && lastValidPlants.length) {
+      CURRENT_PLANT_ID = lastValidPlants[0].power_plant_id ?? lastValidPlants[0].plant_id ?? lastValidPlants[0].id;
+      saveSelectedPlantId(CURRENT_PLANT_ID);
+    }
+
+    // ✅ chips globais (admin = todas usinas / cliente = usinas dele)
+    refreshTopChipsGlobalFromPlants(lastValidPlants);
+
+    const selected = lastValidPlants.find(
+      p => (p.power_plant_id ?? p.plant_id ?? p.id) === CURRENT_PLANT_ID
+    );
+    if (selected) updateSummaryUI([selected]);
+    else updateSummaryUI(lastValidPlants);
+
     renderPortfolioTable(lastValidPlants);
+    await refreshVisibleViewData();
   } catch (err) {
     console.error("Erro ao atualizar dashboard:", err);
 
-    updateInverterStatusChips(lastValidPlants);
-    updateSummaryUI(lastValidPlants);
+    refreshTopChipsGlobalFromPlants(lastValidPlants);
+
+    const selected = lastValidPlants.find(
+      p => (p.power_plant_id ?? p.plant_id ?? p.id) === CURRENT_PLANT_ID
+    );
+    if (selected) updateSummaryUI([selected]);
+    else updateSummaryUI(lastValidPlants);
+
     renderPortfolioTable(lastValidPlants);
+    await refreshVisibleViewData();
   }
 }
 
@@ -1046,7 +1248,17 @@ document.addEventListener("DOMContentLoaded", async () => {
   showView(savedView);
 
   await refreshDashboard();
-  setInterval(refreshDashboard, 30000);
+  setInterval(refreshDashboard, DASHBOARD_REFRESH_INTERVAL_MS);
+
+  document.addEventListener("visibilitychange", async () => {
+    if (!document.hidden) {
+      await refreshDashboard();
+    }
+  });
+
+  window.addEventListener("focus", async () => {
+    await refreshDashboard();
+  });
 
   document.querySelector(".logout-icon")?.addEventListener("click", logout);
   document.querySelector(".sidebar-logout")?.addEventListener("click", logout);

@@ -91,6 +91,7 @@
         <strong id="weatherModuleTemp">—</strong>
       </div>
     </div>
+    </section>
 
   </section>
 
@@ -100,13 +101,7 @@
   <section class="card plant-alarms-card">
     <h3 class="card-title">Alarmes Ativos</h3>
 
-    <div id="plantActiveAlarms">
-      <div class="alarm-row critical">
-        <span>Inversor • Inversor 03</span>
-        <span>Evento 32</span>
-        <span>05/02/2026 10:01</span>
-      </div>
-    </div>
+    <div id="plantActiveAlarms"></div>
   </section>
 
   <!-- =================================================
@@ -193,149 +188,7 @@
         <span>Última leitura</span>
       </div>
 
-      <div class="inverter-row online inverter-toggle" data-inverter="1">
-        <span class="status-dot"></span>
-        <span class="inverter-name">
-          Inversor 1
-          <i class="arrow fa-solid fa-chevron-down"></i>
-        </span>
-        <span>136 kW</span>
-        <span>98.6 %</span>
-        <span>41.8 °C</span>
-        <span>60.04 Hz</span>
-        <span>1.00</span>
-        <span>05/02/2026 11:10</span>
-      </div>
-
-      <div class="inverter-strings" id="strings-1" data-inverter="1">
-        <div class="strings-grid" data-inverter-id="1"></div>
-      </div>
-
-      <div class="inverter-row online inverter-toggle" data-inverter="2">
-        <span class="status-dot"></span>
-        <span class="inverter-name">
-          Inversor 2
-          <i class="arrow fa-solid fa-chevron-down"></i>
-        </span>
-        <span>135 kW</span>
-        <span>98.4 %</span>
-        <span>42.2 °C</span>
-        <span>60.03 Hz</span>
-        <span>1.00</span>
-        <span>05/02/2026 11:10</span>
-      </div>
-
-      <div class="inverter-strings" id="strings-2" data-inverter="2">
-        <div class="strings-grid" data-inverter-id="2"></div>
-      </div>
-
-      <div class="inverter-row offline inverter-toggle" data-inverter="3">
-        <span class="status-dot"></span>
-        <span class="inverter-name">
-          Inversor 3
-          <i class="arrow fa-solid fa-chevron-down"></i>
-        </span>
-        <span>—</span>
-        <span>—</span>
-        <span>—</span>
-        <span>—</span>
-        <span>—</span>
-        <span>05/02/2026 10:01</span>
-      </div>
-
-      <div class="inverter-strings" id="strings-3" data-inverter="3">
-        <div class="strings-grid" data-inverter-id="3"></div>
-      </div>
-
-      <div class="inverter-row online inverter-toggle" data-inverter="4">
-        <span class="status-dot"></span>
-        <span class="inverter-name">
-          Inversor 4
-          <i class="arrow fa-solid fa-chevron-down"></i>
-        </span>
-        <span>137 kW</span>
-        <span>98.5 %</span>
-        <span>41.9 °C</span>
-        <span>60.04 Hz</span>
-        <span>1.00</span>
-        <span>05/02/2026 11:10</span>
-      </div>
-
-      <div class="inverter-strings" id="strings-4" data-inverter="4">
-        <div class="strings-grid" data-inverter-id="4"></div>
-      </div>
-
-      <div class="inverter-row online inverter-toggle" data-inverter="5">
-        <span class="status-dot"></span>
-        <span class="inverter-name">
-          Inversor 5
-          <i class="arrow fa-solid fa-chevron-down"></i>
-        </span>
-        <span>132 kW</span>
-        <span>98.1 %</span>
-        <span>41.6 °C</span>
-        <span>60.03 Hz</span>
-        <span>1.00</span>
-        <span>05/02/2026 11:10</span>
-      </div>
-
-      <div class="inverter-strings" id="strings-5" data-inverter="5">
-        <div class="strings-grid" data-inverter-id="5"></div>
-      </div>
-
-      <div class="inverter-row online inverter-toggle" data-inverter="6">
-        <span class="status-dot"></span>
-        <span class="inverter-name">
-          Inversor 6
-          <i class="arrow fa-solid fa-chevron-down"></i>
-        </span>
-        <span>140 kW</span>
-        <span>98.7 %</span>
-        <span>42.0 °C</span>
-        <span>60.05 Hz</span>
-        <span>1.00</span>
-        <span>05/02/2026 11:10</span>
-      </div>
-
-      <div class="inverter-strings" id="strings-6" data-inverter="6">
-        <div class="strings-grid" data-inverter-id="6"></div>
-      </div>
-
-      <div class="inverter-row online inverter-toggle" data-inverter="7">
-        <span class="status-dot"></span>
-        <span class="inverter-name">
-          Inversor 7
-          <i class="arrow fa-solid fa-chevron-down"></i>
-        </span>
-        <span>136 kW</span>
-        <span>98.6 %</span>
-        <span>41.8 °C</span>
-        <span>60.04 Hz</span>
-        <span>1.00</span>
-        <span>05/02/2026 11:10</span>
-      </div>
-
-      <div class="inverter-strings" id="strings-7" data-inverter="7">
-        <div class="strings-grid" data-inverter-id="7"></div>
-      </div>
-
-      <div class="inverter-row online inverter-toggle" data-inverter="8">
-        <span class="status-dot"></span>
-        <span class="inverter-name">
-          Inversor 8
-          <i class="arrow fa-solid fa-chevron-down"></i>
-        </span>
-        <span>134 kW</span>
-        <span>98.3 %</span>
-        <span>41.7 °C</span>
-        <span>60.03 Hz</span>
-        <span>1.00</span>
-        <span>05/02/2026 11:10</span>
-      </div>
-
-      <div class="inverter-strings" id="strings-8" data-inverter="8">
-        <div class="strings-grid" data-inverter-id="8"></div>
-      </div>
+      <div id="invertersContainer"></div>
 
     </div>
 
@@ -343,7 +196,8 @@
     <div id="sec-relay" class="scroll-anchor"></div>
 
     <!-- RELÉ -->
-    <h3 class="card-title" style="margin-top:24px">Relé</h3>
+    <section id="relaySection" style="margin-top:24px">
+    <h3 class="card-title">Relé</h3>
 
     <!-- ✅ RELÉ CLEAN: bolinha + nome + badge ON/OFF + timestamp + kW -->
     <div class="relay-row" id="relayRow">
@@ -359,6 +213,8 @@
         <span class="relay-power" id="relayPowerText">— kW</span>
       </div>
     </div>
+
+  </section>
 
   </section>
 

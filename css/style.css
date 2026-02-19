@@ -228,3 +228,22 @@ body {
 }
 
 .hidden { display: none !important; }
+
+/* Base mobile alignment helpers (resumo/app) */
+@media (max-width: 640px) {
+  body {
+    overflow-x: hidden;
+  }
+
+  .main {
+    width: 100%;
+    margin: 0 auto;
+  }
+
+  .topbar-left,
+  .topbar-right {
+    width: 100%;
+    text-align: center;
+    justify-content: center;
+  }
+}
