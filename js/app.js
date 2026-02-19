@@ -866,6 +866,9 @@ async function renderAlarmsTable(isRecognized = false) {
 
   alarms.forEach(alarm => {
     const tr = document.createElement("tr");
+    const sev = normalizeAlarmSeverity(
+      alarm.severity || alarm.alarm_severity || alarm.level || alarm.alarm_level
+    ) || "low";
 
     const timestamp =
       alarm.ack_at ||
@@ -896,11 +899,12 @@ async function renderAlarmsTable(isRecognized = false) {
     tr.innerHTML = `
       <td>${plantLabel} • ${deviceLabel}</td>
       <td>${desc}</td>
-      <td style="font-weight:bold; color:${stateColor};">${state}</td>
+      <td class="alarm-state-pill" style="font-weight:bold; color:${stateColor};">${state}</td>
       <td>${tsFormatted}</td>
     `;
 
     if (!isRecognized) {
+      tr.classList.add("alarm-row-attention", `alarm-row-attention--${sev}`);
       const alarmId = alarm.alarm_id ?? alarm.id;
       tr.style.cursor = "pointer";
       tr.title = "Clique duplo para reconhecer";
@@ -1089,19 +1093,30 @@ function renderPortfolioTable(plants) {
   tbody.innerHTML = "";
 
   validPlants.forEach(plant => {
+    const plantId = plant.power_plant_id ?? plant.plant_id ?? plant.id;
+    const openPlantPage = () => {
+      if (plantId == null) return;
+      window.location.href = `plant.html?plant_id=${encodeURIComponent(plantId)}`;
+    };
+
     const tr = document.createElement("tr");
+    tr.classList.add("portfolio-row-linkable");
+    tr.setAttribute("role", "link");
+    tr.setAttribute("tabindex", "0");
 
     const alarmSeverity = normalizeAlarmSeverity(plant.alarm_severity);
     const plantIconClass = alarmSeverity ? `plant-icon plant-icon--${alarmSeverity}` : "plant-icon plant-icon--ok";
 
     tr.innerHTML = `
       <td>
-        <div class="plant-cell">
-          <span class="${plantIconClass}" title="${alarmSeverity || "ok"}">
-            <i class="fa-solid fa-seedling"></i>
+        <button class="plant-cell-btn" title="Abrir usina ${valueOrDash(plant.power_plant_name)}">
+          <span class="plant-cell">
+            <span class="${plantIconClass}" title="${alarmSeverity || "ok"}">
+              <i class="fa-solid fa-seedling"></i>
+            </span>
+            <span class="plant-name-text">${valueOrDash(plant.power_plant_name)}</span>
           </span>
-          <span class="plant-name-text">${valueOrDash(plant.power_plant_name)}</span>
-        </div>
+        </button>
       </td>
       <td class="metric-neutral">${Number(plant.rated_power_kw ?? 0).toFixed(1)} kWp</td>
       <td class="metric-active">${Number(plant.active_power_kw ?? 0).toFixed(1)} kW</td>
@@ -1111,26 +1126,31 @@ function renderPortfolioTable(plants) {
       <td>${plant.relay_availability_pct != null ? (plant.relay_availability_pct * 100).toFixed(1) + "%" : "—"}</td>
       <td>${plant.performance_ratio != null ? Number(plant.performance_ratio).toFixed(1) + "%" : "—"}</td>
       <td style="text-align:center;">
-        <button class="plant-link-btn" title="Abrir usina" data-plant-id="${plant.power_plant_id}"
-          style="background:none;border:none;cursor:pointer;color:#00e676;">
+        <button class="plant-link-btn" title="Abrir usina" data-plant-id="${plantId}">
           <i class="fa-solid fa-arrow-up-right-from-square"></i>
         </button>
       </td>
     `;
 
-    tr.querySelector(".plant-link-btn").addEventListener("click", () => {
-      window.location.href = `plant.html?plant_id=${plant.power_plant_id}`;
+    tr.querySelector(".plant-link-btn").addEventListener("click", (e) => {
+      e.stopPropagation();
+      openPlantPage();
     });
 
-    tr.style.cursor = "pointer";
-    tr.addEventListener("click", async (e) => {
-      if (e.target.closest(".plant-link-btn")) return;
+    tr.querySelector(".plant-cell-btn").addEventListener("click", (e) => {
+      e.stopPropagation();
+      openPlantPage();
+    });
 
-      CURRENT_PLANT_ID = plant.power_plant_id ?? plant.plant_id ?? plant.id;
-      saveSelectedPlantId(CURRENT_PLANT_ID);
+    tr.addEventListener("click", (e) => {
+      if (e.target.closest("button")) return;
+      openPlantPage();
+    });
 
-      // chips continuam globais, não mudam ao clicar na usina
-      updateSummaryUI([plant]);
+    tr.addEventListener("keydown", (e) => {
+      if (e.key !== "Enter" && e.key !== " ") return;
+      e.preventDefault();
+      openPlantPage();
     });
 
     tbody.appendChild(tr);

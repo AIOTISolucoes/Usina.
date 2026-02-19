@@ -618,6 +618,20 @@ function ensureInverterRowsFromRealtime(inverters) {
     return Number(getInverterRealId(a) || 0) - Number(getInverterRealId(b) || 0);
   });
 
+  const nextIds = uniq
+    .map(inv => getInverterRealId(inv))
+    .filter(id => id != null)
+    .map(id => String(id));
+  const nextSignature = nextIds.join("|");
+
+  if (LAST_INVERTER_ROWS_SIGNATURE === nextSignature && container.children.length > 0) {
+    if (preservedOpenId != null && !nextIds.includes(String(preservedOpenId))) {
+      OPEN_INVERTER_REAL_ID = null;
+    }
+    return;
+  }
+
+  LAST_INVERTER_ROWS_SIGNATURE = nextSignature;
   container.innerHTML = "";
 
   uniq.forEach((inv, idx) => {
@@ -714,11 +728,21 @@ function renderAlarms(alarms) {
   const container = document.getElementById("plantActiveAlarms");
   if (!container) return;
 
+  const sublineEl = document.getElementById("plantSubline");
   container.innerHTML = "";
 
   if (!alarms || !alarms.length) {
     container.textContent = "Nenhum alarme ativo";
+    if (sublineEl) {
+      sublineEl.textContent = "Nenhum alarme ativo";
+      sublineEl.classList.remove("plant-subline--alarm");
+    }
     return;
+  }
+
+  if (sublineEl) {
+    sublineEl.textContent = `${alarms.length} alarme(s) ativo(s)`;
+    sublineEl.classList.add("plant-subline--alarm");
   }
 
   alarms.forEach(a => {
@@ -1178,6 +1202,7 @@ function renderSummaryStrip() {
 // ======================================================
 let dailyChartInstance = null;
 let monthlyChartInstance = null;
+let LAST_INVERTER_ROWS_SIGNATURE = "";
 
 // ======================================================
 // GRÁFICO DIÁRIO

@@ -457,8 +457,109 @@ td {
   font-weight: 600;
 }
 
+
+@keyframes alarmRedPulse {
+  0%, 100% {
+    transform: scale(1);
+    box-shadow:
+      0 0 0 2px rgba(255, 92, 92, 0.45),
+      0 0 10px rgba(255, 92, 92, 0.55),
+      inset 0 0 6px rgba(255, 92, 92, 0.28);
+    filter: brightness(1);
+  }
+  50% {
+    transform: scale(0.92);
+    box-shadow:
+      0 0 0 2px rgba(255, 92, 92, 0.72),
+      0 0 18px rgba(255, 92, 92, 0.95),
+      inset 0 0 10px rgba(255, 92, 92, 0.42);
+    filter: brightness(1.08);
+  }
+}
+
+@keyframes alarmRowPulse {
+  0%, 100% {
+    box-shadow:
+      inset 2px 0 0 rgba(255, 92, 92, 0.55),
+      0 0 0 rgba(255, 92, 92, 0);
+    background: rgba(255, 92, 92, 0.05);
+  }
+  50% {
+    box-shadow:
+      inset 2px 0 0 rgba(255, 92, 92, 0.9),
+      0 0 22px rgba(255, 92, 92, 0.22);
+    background: rgba(255, 92, 92, 0.12);
+  }
+}
+
 .portfolio-table td:first-child .plant-cell{
   margin-left: 0;
+}
+
+
+.plant-cell-btn {
+  display: inline-flex;
+  align-items: center;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+.plant-cell-btn:focus-visible,
+.portfolio-row-linkable:focus-visible,
+.plant-link-btn:focus-visible {
+  outline: 2px solid rgba(42, 255, 123, 0.9);
+  outline-offset: 2px;
+  border-radius: 8px;
+}
+
+.portfolio-row-linkable {
+  cursor: pointer;
+  transition: background 0.2s ease;
+}
+
+.portfolio-row-linkable:hover {
+  background: rgba(42, 255, 123, 0.05);
+}
+
+.plant-link-btn {
+  background: none;
+  border: none;
+  color: #00e676;
+  cursor: pointer;
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+
+.plant-icon--high {
+  animation: alarmRedPulse 1.45s ease-in-out infinite;
+}
+
+.alarm-state-pill {
+  display: inline-block;
+}
+
+.alarms-table tbody tr.alarm-row-attention {
+  animation: alarmRowPulse 1.8s ease-in-out infinite;
+}
+
+.alarms-table tbody tr.alarm-row-attention--critical,
+.alarms-table tbody tr.alarm-row-attention--high {
+  border-left: 2px solid rgba(255, 92, 92, 0.8);
+}
+
+.alarms-table tbody tr.alarm-row-attention--medium {
+  animation-duration: 2.3s;
 }
 
 /* ===============================
@@ -695,7 +796,9 @@ td {
   .view-section.view-enter,
   .view-section.view-enter .card,
   .view-section.view-enter .events-filters-bar,
-  .view-section.view-enter .alarms-tabs{
+  .view-section.view-enter .alarms-tabs,
+  .alarms-table tbody tr.alarm-row-attention,
+  .alarm-state-pill{
     animation: none !important;
   }
 }
@@ -1206,5 +1309,31 @@ td {
   .alarms-table,
   .events-table-full{
     min-width: 860px;
+  }
+
+  .portfolio-table th,
+  .portfolio-table td{
+    padding: 14px 12px;
+    font-size: 12px;
+    white-space: nowrap;
+  }
+
+  .portfolio-table th:first-child,
+  .portfolio-table td:first-child{
+    position: sticky;
+    left: 0;
+    z-index: 2;
+    background: #03110d;
+  }
+
+  .portfolio-table th:first-child{ z-index: 3; }
+
+  .plant-link-btn{
+    width: 40px;
+    height: 40px;
+  }
+
+  .plant-cell{
+    min-width: 160px;
   }
 }
