@@ -14,8 +14,8 @@ let PLANT_STATE = {
 // ======================================================
 // CONFIG (ONLINE/OFFLINE)
 // ======================================================
-const INVERTER_ONLINE_AFTER_MS = 8 * 60 * 1000; // 8 min (ajuste aqui)
-const INVERTER_NO_COMM_AFTER_MS = 8 * 60 * 1000; // 8 min (telemetria chips)
+const INVERTER_ONLINE_AFTER_MS = 15 * 60 * 1000; // 15 min
+const INVERTER_NO_COMM_AFTER_MS = 15 * 60 * 1000; // 15 min
 
 // ======================================================
 // FUNÇÕES AUXILIARES

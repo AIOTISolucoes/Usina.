@@ -461,6 +461,31 @@ async function fetchPlants() {
   return Array.isArray(data) ? data : [];
 }
 
+
+async function fetchPlantsSummary() {
+  const res = await apiFetch("/plants/summary");
+  if (!res.ok) throw new Error("Erro ao buscar summary global");
+
+  const data = await res.json();
+  if (data && data.body) {
+    return typeof data.body === "string" ? JSON.parse(data.body) : data.body;
+  }
+  return data; // esperado: {gen,no_comm,off,total}
+}
+
+function refreshTopChipsGlobalFromSummary(summary) {
+  const gen = Number(summary?.gen ?? 0) || 0;
+  const noComm = Number(summary?.no_comm ?? summary?.noComm ?? 0) || 0;
+  const off = Number(summary?.off ?? 0) || 0;
+  const total = Number(summary?.total ?? (gen + noComm + off) ?? 0) || 0;
+
+  setChipCount("countGen", gen, `Gerando (global): ${gen} de ${total}`);
+  setChipCount("countNoComm", noComm, `Sem comunicação (global): ${noComm} de ${total}`);
+  setChipCount("countOff", off, `Off (global): ${off} de ${total}`);
+
+  console.log("[INV CHIPS - GLOBAL SUMMARY]", { total, gen, noComm, off });
+}
+
 // ✅ ALARMES: NÃO MEXI
 async function fetchActiveAlarms() {
   const res = await apiFetch("/alarms/active");
@@ -1202,7 +1227,10 @@ async function refreshVisibleViewData() {
 
 async function refreshDashboard() {
   try {
-    const [plants, alarms] = await Promise.all([fetchPlants(), fetchActiveAlarms()]);
+    const [plants, alarms] = await Promise.all([
+      fetchPlants(),
+      fetchActiveAlarms()
+    ]);
     if (Array.isArray(plants) && plants.length > 0) lastValidPlants = plants;
 
     lastAlarmSeverityByPlant = buildPlantAlarmSeverityMap(alarms);
@@ -1216,8 +1244,14 @@ async function refreshDashboard() {
       saveSelectedPlantId(CURRENT_PLANT_ID);
     }
 
-    // ✅ chips globais (admin = todas usinas / cliente = usinas dele)
-    refreshTopChipsGlobalFromPlants(lastValidPlants);
+    // ✅ chips globais via endpoint (fonte da verdade)
+    try {
+      const summary = await fetchPlantsSummary();
+      refreshTopChipsGlobalFromSummary(summary);
+    } catch (e) {
+      console.warn("[SUMMARY] falhou, fallback via /plants:", e?.message || e);
+      refreshTopChipsGlobalFromPlants(lastValidPlants);
+    }
 
     const selected = lastValidPlants.find(
       p => (p.power_plant_id ?? p.plant_id ?? p.id) === CURRENT_PLANT_ID
@@ -1230,7 +1264,13 @@ async function refreshDashboard() {
   } catch (err) {
     console.error("Erro ao atualizar dashboard:", err);
 
-    refreshTopChipsGlobalFromPlants(lastValidPlants);
+    try {
+      const summary = await fetchPlantsSummary();
+      refreshTopChipsGlobalFromSummary(summary);
+    } catch (e) {
+      console.warn("[SUMMARY] falhou, fallback via /plants:", e?.message || e);
+      refreshTopChipsGlobalFromPlants(lastValidPlants);
+    }
 
     const selected = lastValidPlants.find(
       p => (p.power_plant_id ?? p.plant_id ?? p.id) === CURRENT_PLANT_ID
