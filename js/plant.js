@@ -290,6 +290,7 @@ let INVERTERS_REALTIME = [];
 let RELAY_REALTIME = null; // ✅ NEW
 let OPEN_INVERTER_REAL_ID = null;
 let STRINGS_REFRESH_SEQ = 0;
+let INVERTER_EXTRAS_BY_ID = new Map(); // inverter_id (string) -> objeto inv completo
 
 let PLANT_CATALOG = {
   inverters: [],
@@ -604,6 +605,37 @@ function getInverterDisplayName(inv, fallbackIndex = 0) {
   );
 }
 
+function getInverterSvgModern() {
+  return `
+    <svg class="inv-icon" viewBox="0 0 140 140" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <defs>
+        <linearGradient id="invS" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stop-color="rgba(255,255,255,0.35)"/>
+          <stop offset="1" stop-color="rgba(255,255,255,0.10)"/>
+        </linearGradient>
+        <filter id="invSoft" x="-30%" y="-30%" width="160%" height="160%">
+          <feDropShadow dx="0" dy="8" stdDeviation="8" flood-color="rgba(0,0,0,0.55)"/>
+        </filter>
+      </defs>
+
+      <g filter="url(#invSoft)">
+        <rect x="18" y="18" width="104" height="104" rx="18"
+              fill="rgba(0,0,0,0)"
+              stroke="url(#invS)" stroke-width="3"/>
+      </g>
+
+      <path d="M42 88 H78" stroke="rgba(233,255,243,0.62)" stroke-width="4" stroke-linecap="round"/>
+      <path d="M42 98 H78" stroke="rgba(233,255,243,0.35)" stroke-width="4" stroke-linecap="round" stroke-dasharray="8 7"/>
+
+      <path d="M74 56
+               C80 42, 88 42, 94 56
+               C100 70, 108 70, 114 56"
+            fill="none" stroke="rgba(233,255,243,0.62)" stroke-width="4"
+            stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+  `;
+}
+
 function ensureInverterRowsFromRealtime(inverters) {
   const container = document.getElementById("invertersContainer");
   if (!container) return;
@@ -652,7 +684,60 @@ function ensureInverterRowsFromRealtime(inverters) {
     const panel = document.createElement("div");
     panel.className = "inverter-strings";
     panel.id = `strings-${realId}`;
-    panel.innerHTML = `<div class="strings-grid" data-inverter-real-id="${realId}"></div>`;
+    panel.innerHTML = `
+      <div class="inv-flow" data-inverter-real-id="${realId}">
+        <svg class="inv-flow-arrows" viewBox="0 0 1000 260" preserveAspectRatio="none" aria-hidden="true">
+          <defs>
+            <filter id="arrowGlow" x="-40%" y="-40%" width="180%" height="180%">
+              <feGaussianBlur stdDeviation="3.8" result="b"/>
+              <feMerge>
+                <feMergeNode in="b"/>
+                <feMergeNode in="SourceGraphic"/>
+              </feMerge>
+            </filter>
+
+            <marker id="arrowHead" viewBox="0 0 10 10" refX="9" refY="5"
+                    markerWidth="9" markerHeight="9" orient="auto">
+              <path d="M0,0 L10,5 L0,10 Z" fill="rgba(57,229,140,0.95)"/>
+            </marker>
+          </defs>
+
+          <path class="arrow-path arrow-path--ac"
+                d="M 500 88
+                   C 390 66, 250 66, 128 90
+                   C 92 98, 62 112, 46 136
+                   C 34 154, 34 176, 50 192"
+                marker-end="url(#arrowHead)"/>
+
+          <path class="arrow-path arrow-path--dc"
+                d="M 520 108
+                   C 630 86, 770 86, 892 110
+                   C 928 118, 958 132, 974 156
+                   C 986 174, 986 196, 970 212"
+                marker-end="url(#arrowHead)"/>
+        </svg>
+
+        <div class="inv-center">
+          ${getInverterSvgModern()}
+          <div class="inv-center-tags">
+            <span class="inv-tag">AC</span>
+            <span class="inv-tag">DC</span>
+          </div>
+        </div>
+
+        <div class="inv-side inv-side--ac">
+          <div class="inv-side-title">AC</div>
+          <div class="inv-side-row" data-row="ac"></div>
+        </div>
+
+        <div class="inv-side inv-side--dc">
+          <div class="inv-side-title">DC</div>
+          <div class="inv-side-row" data-row="dc"></div>
+        </div>
+      </div>
+
+      <div class="strings-grid" data-inverter-real-id="${realId}"></div>
+    `;
 
     container.appendChild(row);
     container.appendChild(panel);
@@ -931,13 +1016,37 @@ function fillInverterRowSpans(rowEl, values) {
   const spans = rowEl.querySelectorAll(":scope > span");
   if (!spans || spans.length < 8) return false;
 
-  spans[2].textContent = values.power;
-  spans[3].textContent = values.eff;
-  spans[4].textContent = values.temp;
-  spans[5].textContent = values.freq;
-  spans[6].textContent = values.pr;
+  setInverterMetricCell(spans[2], values.power);
+  setInverterMetricCell(spans[3], values.eff);
+  setInverterMetricCell(spans[4], values.temp);
+  setInverterMetricCell(spans[5], values.freq);
+  setInverterMetricCell(spans[6], values.pr);
   spans[7].textContent = values.last;
   return true;
+}
+
+function setInverterMetricCell(cellEl, metricText) {
+  if (!cellEl) return;
+
+  if (!metricText || metricText === "—") {
+    cellEl.textContent = "—";
+    return;
+  }
+
+  const parts = String(metricText).trim().split(/\s+/);
+  const numberPart = parts.shift();
+  const unitPart = parts.join(" ");
+
+  if (!numberPart) {
+    cellEl.textContent = metricText;
+    return;
+  }
+
+  const unitHtml = unitPart
+    ? `<span class="metric-unit"> ${unitPart}</span>`
+    : "";
+
+  cellEl.innerHTML = `<span class="metric-number">${numberPart}</span>${unitHtml}`;
 }
 
 function setRowOnlineUi(rowEl, online) {
@@ -1178,6 +1287,93 @@ function renderStringsGrid(gridEl, payload) {
 
     gridEl.appendChild(addBtn);
   }
+}
+
+// ======================================================
+// ✅ EXTRAS DO INVERSOR (chips agrupados abaixo das strings)
+// ======================================================
+function ensureInverterExtrasContainer(inverterRealId) {
+  const panel = document.getElementById(`strings-${inverterRealId}`);
+  if (!panel) return null;
+  return panel;
+}
+
+function makeChip(label, value) {
+  const el = document.createElement("div");
+  el.className = "inv-chip";
+  el.innerHTML = `
+    <span class="inv-chip__label">${label}</span>
+    <strong class="inv-chip__value">${value ?? "—"}</strong>
+  `;
+  return el;
+}
+
+function renderInverterExtras(inverterRealId, inv) {
+  const wrap = ensureInverterExtrasContainer(inverterRealId);
+  if (!wrap) return;
+
+  const rowAc = wrap.querySelector(`.inv-side-row[data-row="ac"]`);
+  const rowDc = wrap.querySelector(`.inv-side-row[data-row="dc"]`);
+  if (!rowAc || !rowDc) return;
+
+  rowAc.innerHTML = "";
+  rowDc.innerHTML = "";
+
+  const get = (k) => (inv && typeof inv === "object") ? inv[k] : null;
+
+  // helpers de format (NÃO escondem zero)
+  const f = (v, digits, unit) => {
+    const n = Number(typeof v === "string" ? v.replace(",", ".") : v);
+    if (!Number.isFinite(n)) return "—";
+    return `${n.toFixed(digits)} ${unit}`;
+  };
+
+  const f0 = (v, unit) => {
+    const n = Number(typeof v === "string" ? v.replace(",", ".") : v);
+    if (!Number.isFinite(n)) return "—";
+    return `${n.toFixed(0)} ${unit}`;
+  };
+
+  // ===== AC: Potências / FP + Tensões / Correntes =====
+  rowAc.appendChild(makeChip("S aparente", f(get("apparent_power_kva"), 2, "kVA")));
+  rowAc.appendChild(makeChip("FP", (() => {
+    const v = get("power_factor");
+    const n = Number(typeof v === "string" ? v.replace(",", ".") : v);
+    if (!Number.isFinite(n)) return "—";
+    return n.toFixed(3);
+  })()));
+  rowAc.appendChild(makeChip("Q reativa", f(get("power_reactive_kvar"), 2, "kvar")));
+  rowAc.appendChild(makeChip("Energia dia", f(get("daily_active_energy_kwh"), 1, "kWh")));
+  rowAc.appendChild(makeChip("Energia total", f(get("cumulative_active_energy_kwh"), 1, "kWh")));
+
+  rowAc.appendChild(makeChip("V AB", f0(get("line_voltage_ab"), "V")));
+  rowAc.appendChild(makeChip("V BC", f0(get("line_voltage_bc"), "V")));
+  rowAc.appendChild(makeChip("V CA", f0(get("line_voltage_ca"), "V")));
+
+  rowAc.appendChild(makeChip("Ia", (() => {
+    const v = get("current_phase_a");
+    const n = Number(typeof v === "string" ? v.replace(",", ".") : v);
+    return Number.isFinite(n) ? `${n.toFixed(2)} A` : "—";
+  })()));
+  rowAc.appendChild(makeChip("Ib", (() => {
+    const v = get("current_phase_b");
+    const n = Number(typeof v === "string" ? v.replace(",", ".") : v);
+    return Number.isFinite(n) ? `${n.toFixed(2)} A` : "—";
+  })()));
+  rowAc.appendChild(makeChip("Ic", (() => {
+    const v = get("current_phase_c");
+    const n = Number(typeof v === "string" ? v.replace(",", ".") : v);
+    return Number.isFinite(n) ? `${n.toFixed(2)} A` : "—";
+  })()));
+
+  // ===== DC: Energia / DC / Isolação =====
+  rowDc.appendChild(makeChip("P DC", f(get("power_dc_kw"), 2, "kW")));
+  rowDc.appendChild(makeChip("V string", f0(get("string_voltage_v"), "V")));
+  rowDc.appendChild(makeChip("R isol.", (() => {
+    const v = get("resistance_insulation_mohm");
+    const n = Number(typeof v === "string" ? v.replace(",", ".") : v);
+    return Number.isFinite(n) ? `${n.toFixed(2)} MΩ` : "—";
+  })()));
 }
 
 // ======================================================
@@ -1442,6 +1638,10 @@ function setupInverterToggles() {
     panel.style.maxHeight = panel.scrollHeight + "px";
 
     refreshStringsForRealInverter(inverterRealId).finally(() => {
+      // ✅ renderiza extras (chips amarelos) abaixo das strings
+      const inv = INVERTER_EXTRAS_BY_ID.get(String(inverterRealId));
+      renderInverterExtras(inverterRealId, inv);
+
       const samePanel = document.getElementById(`strings-${inverterRealId}`);
       if (samePanel && samePanel.classList.contains("open")) {
         samePanel.style.maxHeight = samePanel.scrollHeight + "px";
@@ -1510,6 +1710,13 @@ async function refreshRealtimeEverything() {
     renderAlarms(ACTIVE_ALARMS);
 
     INVERTERS_REALTIME = await fetchInvertersRealtime(PLANT_ID);
+    // ✅ guarda os extras por inverter_id (pra render abaixo das strings)
+    INVERTER_EXTRAS_BY_ID = new Map();
+    dedupInvertersById(INVERTERS_REALTIME).forEach(inv => {
+      const id = getInverterRealId(inv);
+      if (id != null) INVERTER_EXTRAS_BY_ID.set(String(id), inv);
+    });
+
     const dedup = dedupInvertersById(INVERTERS_REALTIME);
 
     PLANT_CATALOG.inverters = dedup;
@@ -1534,6 +1741,12 @@ async function refreshRealtimeEverything() {
     renderSummaryStrip();
 
     await refreshOpenStringsPanels();
+
+    // ✅ se tiver inversor aberto, renderiza os chips amarelos abaixo das strings
+    if (OPEN_INVERTER_REAL_ID != null) {
+      const inv = INVERTER_EXTRAS_BY_ID.get(String(OPEN_INVERTER_REAL_ID));
+      renderInverterExtras(OPEN_INVERTER_REAL_ID, inv);
+    }
   } catch (e) {
     console.error("[refreshRealtimeEverything] erro", e);
     renderHeaderSummary();

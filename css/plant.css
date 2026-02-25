@@ -304,9 +304,9 @@ body::before{
 ========================================================= */
 .header-grid{
   display: grid;
-  grid-template-columns: 2.3fr 1.4fr;
+  grid-template-columns: minmax(520px, 1fr) auto;
   gap: 28px;
-  align-items: center;
+  align-items: start;
 }
 
 /* =========================================================
@@ -320,14 +320,6 @@ body::before{
 }
 
 
-.header-panels{
-  display: grid;
-  grid-template-columns: minmax(360px, 1fr) auto;
-  gap: 18px;
-  margin-top: 14px;
-  align-items: start;
-}
-
 .summary-station,
 .weather-station{
   background: transparent;
@@ -339,10 +331,12 @@ body::before{
 
 .summary-station{
   justify-self: start;
+  width: 100%;
 }
 
 .weather-station{
   justify-self: end;
+  margin-left: auto;
   text-align: left;
 }
 
@@ -371,10 +365,11 @@ body::before{
    HEADER (TOPO ESQUERDO) — REWORK
 ========================================================= */
 .plant-header-title{
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 10px;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: start;
+  column-gap: 14px;
+  row-gap: 4px;
   margin-top: 0;
 }
 
@@ -413,7 +408,9 @@ body::before{
     inset 0 1px 0 rgba(255,255,255,0.06);
 
   transition: transform .12s ease, box-shadow .18s ease, border-color .18s ease, background .18s ease;
-  margin-top: -16px;
+  margin-top: 0;
+  grid-row: 1 / span 2;
+  align-self: start;
 }
 
 .back-btn--modern:hover{
@@ -441,6 +438,7 @@ body::before{
   display: flex;
   align-items: center;
   gap: 12px;
+  margin-top: 2px;
 }
 
 /* Badge plantinha */
@@ -545,6 +543,7 @@ body::before{
   flex-direction: column;
   justify-content: center;
   align-self: stretch;
+  align-items: flex-end;
 }
 
 .weather-title{
@@ -561,6 +560,7 @@ body::before{
   display: grid;
   grid-template-columns: repeat(3, minmax(120px, auto));
   gap: 14px;
+  justify-content: end;
 }
 
 .weather-item{
@@ -836,6 +836,34 @@ body::before{
   align-items: center;
   gap: 8px;
   cursor: pointer;
+  font-size: 16px;
+  font-weight: 700;
+  color: #2fd27d;
+  text-shadow:
+    0 0 10px rgba(47,210,125,.28),
+    0 0 24px rgba(47,210,125,.15);
+}
+
+.inverter-row > span{
+  min-width: 0;
+}
+
+.inverter-row > span:not(.inverter-name){
+  color: rgba(233,255,243,0.96);
+  font-size: 14px;
+}
+
+.metric-number{
+  color: #49ffa8;
+  font-weight: 700;
+  text-shadow:
+    0 0 10px rgba(73,255,168,.28),
+    0 0 22px rgba(73,255,168,.16);
+}
+
+.metric-unit{
+  color: rgba(245,255,250,0.98);
+  font-weight: 600;
 }
 
 .arrow{
@@ -884,13 +912,13 @@ body::before{
 /* Strings */
 .inverter-strings{
   max-height: 0;
-  overflow: hidden;
+  overflow: clip;
   transition: max-height 0.35s ease, opacity 0.25s ease;
   opacity: 0;
 }
 
 .inverter-strings.open{
-  max-height: 420px;
+  max-height: 900px;
   opacity: 1;
 }
 
@@ -1469,14 +1497,14 @@ body::before{
     gap: 14px;
   }
 
-  .header-panels{
-    grid-template-columns: 1fr;
-    gap: 12px;
-  }
-
   .weather-station,
   .summary-station{
     justify-self: stretch;
+  }
+
+  .plant-header-title{
+    grid-template-columns: auto 1fr;
+    align-items: center;
   }
 
   .plant-title-row{
@@ -1517,6 +1545,7 @@ body::before{
 
   .weather-station{
     padding: 10px 4px 2px;
+    align-items: stretch;
   }
 
   .weather-items-row{
@@ -1574,7 +1603,7 @@ body::before{
 
   .inverter-header,
   .inverter-row{
-    min-width: 920px;
+    min-width: 820px;
     grid-template-columns: 14px 1.2fr 0.95fr 0.9fr 0.8fr 0.8fr 0.6fr 1.2fr;
     font-size: 12px;
     gap: 10px;
@@ -1715,7 +1744,9 @@ body.plant-enter #relaySection{
 /* Cross-device tuning (PC + Android + iPhone) */
 .inverters-section,
 .inverter-strings{
-  overscroll-behavior: contain;
+  overscroll-behavior-y: auto;
+  overscroll-behavior-x: contain;
+  touch-action: pan-x pan-y;
 }
 
 .string-card,
@@ -1727,18 +1758,37 @@ body.plant-enter #relaySection{
 
 @media (max-width: 900px){
   .inverter-strings.open{
-    max-height: 380px;
+    max-height: 1100px;
   }
 
   .strings-grid{
     gap: 8px;
     padding: 10px 8px;
   }
+
+  .inverter-name{
+    font-size: 15px;
+  }
+
+  .inverter-row > span:not(.inverter-name){
+    font-size: 13px;
+  }
 }
 
 @media (max-width: 640px){
+  .inverters-section{
+    overflow-x: auto;
+    overflow-y: visible;
+  }
+
+  .inverter-header,
+  .inverter-row{
+    min-width: 700px;
+  }
+
   .inverter-strings.open{
-    max-height: 340px;
+    max-height: 1100px;
+    overflow: visible;
   }
 
   .strings-grid{
@@ -1759,18 +1809,209 @@ body.plant-enter #relaySection{
     margin-top: 4px;
     font-size: 11px;
   }
+
+  .inverter-name{
+    font-size: 14px;
+  }
+
+  .inverter-row > span:not(.inverter-name){
+    font-size: 12px;
+  }
 }
 
 @media (max-width: 430px){
   .summary-station .kpi strong{ font-size: 20px; }
   .summary-station, .weather-station{ padding: 10px; }
-  .inverter-strings.open{
-    max-height: 300px;
-  }
+  .inverter-strings.open{ max-height: 1100px; }
 
   .string-card,
   .string-card-add{
     min-height: 48px;
     border-radius: 10px;
   }
+}
+
+/* =========================================================
+   ✅ INVERSOR EXTRAS — flow com setas AC/DC
+========================================================= */
+.inv-flow{
+  position: relative;
+  padding: 16px 12px 10px;
+  display: grid;
+  grid-template-columns: 1fr 220px 1fr;
+  grid-template-rows: 150px auto;
+  column-gap: 22px;
+  row-gap: 14px;
+  align-items: start;
+}
+
+.inv-flow-arrows{
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  width: 100%;
+  height: 200px;
+  pointer-events: none;
+  opacity: 0.95;
+}
+
+.arrow-path{
+  fill: none;
+  stroke: rgba(57,229,140,0.95);
+  stroke-width: 2.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  filter: drop-shadow(0 0 10px rgba(57,229,140,0.35))
+          drop-shadow(0 0 22px rgba(57,229,140,0.18));
+}
+
+.arrow-path--ac{ opacity: 0.95; }
+.arrow-path--dc{ opacity: 0.75; }
+
+.inv-center{
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  display: grid;
+  place-items: center;
+  margin-top: 0;
+}
+
+.inv-icon{
+  width: 150px;
+  height: 150px;
+  opacity: 0.95;
+  filter: drop-shadow(0 0 18px rgba(57,229,140,0.10));
+}
+
+.inv-center-tags{
+  margin-top: 2px;
+  display: flex;
+  gap: 10px;
+}
+
+.inv-tag{
+  font-size: 11px;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(57,229,140,0.20);
+  background: rgba(12,20,17,0.42);
+  color: rgba(154,219,184,0.85);
+  box-shadow: 0 0 14px rgba(57,229,140,0.08);
+}
+
+.inv-side{
+  margin-top: 0;
+  padding: 10px 10px 12px;
+  border-radius: 14px;
+  background: linear-gradient(180deg, rgba(12,20,17,0.35), rgba(7,14,11,0.35));
+  border: 1px solid rgba(255,255,255,0.05);
+  box-shadow: 0 10px 22px rgba(0,0,0,0.25);
+}
+
+.inv-side--ac{
+  grid-column: 1;
+  grid-row: 2;
+  align-self: start;
+  margin-top: 0;
+}
+
+.inv-side--dc{
+  grid-column: 3;
+  grid-row: 2;
+  align-self: start;
+  justify-self: start;
+  width: 100%;
+  margin-top: 0;
+}
+
+.inv-side--dc .inv-side-row{
+  justify-content: flex-start;
+  align-content: flex-start;
+}
+
+.inv-side-title{
+  font-size: 11px;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: rgba(154,219,184,0.75);
+  margin-bottom: 10px;
+}
+
+.inv-side-row{
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.inv-flow + .strings-grid{
+  margin-top: 0;
+}
+
+/* mantém compatibilidade caso exista wrapper legado */
+.inv-extras{ display:none; }
+
+/* chip verde (mesma linguagem do site) */
+.inv-chip{
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+
+  padding: 8px 12px;
+  border-radius: 999px;
+  white-space: nowrap;
+  user-select: none;
+
+  background: linear-gradient(180deg, rgba(14,28,22,0.80), rgba(7,14,11,0.80));
+  border: 1px solid rgba(57,229,140,0.18);
+
+  box-shadow:
+    inset 0 0 0 1px rgba(57,229,140,0.08),
+    0 10px 20px rgba(0,0,0,0.28),
+    0 0 18px rgba(57,229,140,0.06);
+}
+
+.inv-chip__label{
+  font-weight: 650;
+  font-size: 12px;
+  opacity: 0.82;
+  letter-spacing: 0.02em;
+  color: rgba(233,255,243,0.88);
+}
+
+.inv-chip__value{
+  font-weight: 850;
+  font-size: 12px;
+  color: var(--neon);
+  text-shadow:
+    0 0 10px rgba(57,229,140,0.18),
+    0 0 18px rgba(57,229,140,0.10);
+}
+
+.inv-chip:hover{
+  transform: translateY(-1px);
+  border-color: rgba(57,229,140,0.30);
+  box-shadow:
+    inset 0 0 0 1px rgba(57,229,140,0.12),
+    0 14px 28px rgba(0,0,0,0.34),
+    0 0 26px rgba(57,229,140,0.10);
+}
+
+/* mobile */
+@media (max-width: 900px){
+  .inv-flow{
+    grid-template-columns: 1fr;
+    grid-template-rows: auto auto auto;
+  }
+  .inv-center{ grid-column: 1; grid-row: 1; }
+  .inv-side--ac{ grid-column: 1; grid-row: 2; }
+  .inv-side--dc{ grid-column: 1; grid-row: 3; }
+  .inv-side{ margin-top: 0; }
+  .inv-flow-arrows{ display:none; }
+
+  .inv-side-row{ gap: 8px; }
+  .inv-chip{ padding: 7px 10px; }
+  .inv-chip__label, .inv-chip__value{ font-size: 11px; }
 }
