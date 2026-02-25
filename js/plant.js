@@ -1346,23 +1346,29 @@ function renderInverterExtras(inverterRealId, inv) {
   rowAc.appendChild(makeChip("Energia dia", f(get("daily_active_energy_kwh"), 1, "kWh")));
   rowAc.appendChild(makeChip("Energia total", f(get("cumulative_active_energy_kwh"), 1, "kWh")));
 
-  rowAc.appendChild(makeChip("V AB", f0(get("line_voltage_ab"), "V")));
-  rowAc.appendChild(makeChip("V BC", f0(get("line_voltage_bc"), "V")));
-  rowAc.appendChild(makeChip("V CA", f0(get("line_voltage_ca"), "V")));
+  // ===== AC: Tensões / Correntes (usar nomes reais do backend + aliases) =====
+  const vab = get("line_voltage_ab_v") ?? get("line_voltage_ab");
+  const vbc = get("line_voltage_bc_v") ?? get("line_voltage_bc");
+  const vca = get("line_voltage_ca_v") ?? get("line_voltage_ca");
+
+  rowAc.appendChild(makeChip("V AB", f0(vab, "V")));
+  rowAc.appendChild(makeChip("V BC", f0(vbc, "V")));
+  rowAc.appendChild(makeChip("V CA", f0(vca, "V")));
+
+  const ia = get("current_phase_a_a") ?? get("current_phase_a");
+  const ib = get("current_phase_b_a") ?? get("current_phase_b");
+  const ic = get("current_phase_c_a") ?? get("current_phase_c");
 
   rowAc.appendChild(makeChip("Ia", (() => {
-    const v = get("current_phase_a");
-    const n = Number(typeof v === "string" ? v.replace(",", ".") : v);
+    const n = Number(typeof ia === "string" ? ia.replace(",", ".") : ia);
     return Number.isFinite(n) ? `${n.toFixed(2)} A` : "—";
   })()));
   rowAc.appendChild(makeChip("Ib", (() => {
-    const v = get("current_phase_b");
-    const n = Number(typeof v === "string" ? v.replace(",", ".") : v);
+    const n = Number(typeof ib === "string" ? ib.replace(",", ".") : ib);
     return Number.isFinite(n) ? `${n.toFixed(2)} A` : "—";
   })()));
   rowAc.appendChild(makeChip("Ic", (() => {
-    const v = get("current_phase_c");
-    const n = Number(typeof v === "string" ? v.replace(",", ".") : v);
+    const n = Number(typeof ic === "string" ? ic.replace(",", ".") : ic);
     return Number.isFinite(n) ? `${n.toFixed(2)} A` : "—";
   })()));
 
