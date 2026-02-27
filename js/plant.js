@@ -1691,12 +1691,26 @@ async function refreshOpenStringsPanels() {
   await refreshStringsForRealInverter(openRow.dataset.inverterRealId);
 }
 
+function renderPlantName(realtime) {
+  const name =
+    realtime?.power_plant_name ??
+    realtime?.powerPlantName ??
+    realtime?.name ??
+    "—";
+
+  PLANT_STATE = { ...PLANT_STATE, name };
+
+  const el = document.getElementById("plantName") || document.querySelector(".plant-name");
+  if (el) el.textContent = name;
+}
+
 // ======================================================
 // ✅ REFRESH (realtime + alarms + inverters rows + strings abertas + relay)
 // ======================================================
 async function refreshRealtimeEverything() {
   try {
     const realtime = await fetchPlantRealtime(PLANT_ID);
+    renderPlantName(realtime);
 
     if (realtime) {
       const rated = asNumber(realtime.rated_power_kw, PLANT_STATE.rated_power_kwp);
