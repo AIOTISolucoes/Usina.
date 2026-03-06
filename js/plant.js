@@ -16,6 +16,7 @@ let PLANT_STATE = {
 // ======================================================
 const INVERTER_ONLINE_AFTER_MS = 15 * 60 * 1000; // 15 min
 const INVERTER_NO_COMM_AFTER_MS = 15 * 60 * 1000; // 15 min
+let REFRESH_RUNNING = false;
 
 // ======================================================
 // FUNÇÕES AUXILIARES
@@ -37,6 +38,39 @@ function formatKwhPtBR(v) {
   const n = Number(v);
   if (!Number.isFinite(n)) return "—";
   return `${formatNumberPtBR(n)} kWh`;
+}
+
+// ======================================================
+// WEATHER: parse robusto + stale timeout (30 min)
+// ======================================================
+const WEATHER_STALE_AFTER_MS = 30 * 60 * 1000;
+let WEATHER_CACHE = { data: null, ok_ms: 0 };
+
+function toNumOrNull(v) {
+  if (v === null || v === undefined) return null;
+  const s = String(v).trim().replace(",", ".").toLowerCase();
+  if (!s || s === "null" || s === "nan" || s === "undefined") return null;
+  const n = Number(s);
+  return Number.isFinite(n) ? n : null;
+}
+
+function parseTsToMsSafe(ts) {
+  if (!ts) return 0;
+  const ms = Date.parse(ts);
+  return Number.isFinite(ms) ? ms : 0;
+}
+
+function isWeatherStale(weatherObj) {
+  const ts =
+    weatherObj?.last_update ??
+    weatherObj?.lastUpdate ??
+    weatherObj?.ts ??
+    weatherObj?.timestamp ??
+    null;
+
+  const ms = parseTsToMsSafe(ts);
+  if (!ms) return true;
+  return (Date.now() - ms) > WEATHER_STALE_AFTER_MS;
 }
 
 function buildLastNDaysLabels(n) {
@@ -236,47 +270,61 @@ function normalizeDailyPayload(payload) {
 
   const mins = points.map(p => p.minute).sort((a, b) => a - b);
 
-  // detecta o passo (1,5,10,15...) olhando o menor diff positivo
-  let step = 5; // fallback
-  if (mins.length >= 3) {
-    const diffs = [];
-    for (let i = 1; i < mins.length; i++) {
-      const d = mins[i] - mins[i - 1];
-      if (d > 0 && d <= 60) diffs.push(d);
-    }
-    if (diffs.length) step = Math.max(1, Math.min(...diffs));
-  }
+  let step = 5; // ✅ trava em 5 min (SCADA)
 
   const mapP = new Map();
   const mapI = new Map();
+
+  // ✅ bucket: sempre pro INÍCIO do intervalo (floor), não "round"
+  const toBucket = (minute) => {
+    const b = Math.floor(minute / step) * step;
+    return Math.max(0, Math.min(23 * 60 + 55, b));
+  };
+
+  // ✅ se cair 2+ pontos no mesmo bucket:
+  // - power: mantém o ÚLTIMO (mais recente)
+  // - irradiância: mantém o MAIOR (evita zerar/oscilar)
   points.forEach(p => {
-    mapP.set(p.minute, p.power);
-    mapI.set(p.minute, p.irr);
+    const b = toBucket(p.minute);
+
+    // power: último ganha
+    mapP.set(b, p.power);
+
+    // irradiância: não deixa um 0 sobrescrever um valor bom
+    const prevI = mapI.get(b);
+    const nextI = p.irr;
+
+    if (prevI === undefined) {
+      mapI.set(b, nextI);
+    } else {
+      // pega o maior (pico no bucket) e ignora "0" se já tinha algo >0
+      mapI.set(b, Math.max(Number(prevI) || 0, Number(nextI) || 0));
+    }
   });
 
-  // começa SEMPRE em 00:00 e termina no último minuto que chegou dado hoje
+  // ✅ vai só até o último bucket com dado (não até 23:55)
   const lastMin = Math.max(...mins);
+  const lastBucket = Math.floor(lastMin / step) * step;
 
   const labels = [];
   const activePower = [];
   const irradiance = [];
 
-  for (let m = 0; m <= lastMin; m += step) {
+  let lastIrr = 0;
+
+  for (let m = 0; m <= lastBucket; m += step) {
     const hh = String(Math.floor(m / 60)).padStart(2, "0");
     const mm = String(m % 60).padStart(2, "0");
     labels.push(`${hh}:${mm}`);
 
-    // sem buraco visual: minutos faltantes viram 0
     activePower.push(mapP.has(m) ? mapP.get(m) : 0);
-    irradiance.push(mapI.has(m) ? mapI.get(m) : 0);
+
+    // irradiância: carry-forward dentro do range
+    if (mapI.has(m)) lastIrr = mapI.get(m);
+    irradiance.push(lastIrr);
   }
 
-  return {
-    ...payload,
-    labels,
-    activePower,
-    irradiance
-  };
+  return { ...payload, labels, activePower, irradiance };
 }
 
 
@@ -285,8 +333,13 @@ function normalizeDailyPayload(payload) {
 // ======================================================
 let DAILY = null;
 let MONTHLY = null;
+let LAST_DAILY_FETCH_MS = 0;
+const DAILY_REFRESH_EVERY_MS = 60 * 1000; // 1 min
+let DAILY_DAY_KEY = null;
 let ACTIVE_ALARMS = [];
 let INVERTERS_REALTIME = [];
+let INVERTERS_CACHE = { items: [], ok_ms: 0 };
+const INVERTERS_CACHE_TTL_MS = 2 * 60 * 1000; // 2 min
 let RELAY_REALTIME = null; // ✅ NEW
 let OPEN_INVERTER_REAL_ID = null;
 let STRINGS_REFRESH_SEQ = 0;
@@ -433,19 +486,41 @@ async function fetchInvertersRealtime(plantId) {
   ];
 
   for (const url of candidates) {
-    const res = await fetch(url, { headers: buildAuthHeaders() });
-    if (res.ok) {
-      const data = normalizeApiBody(await res.json());
-      return Array.isArray(data) ? data : (data?.items || []);
-    }
+    try {
+      const res = await fetch(url, { headers: buildAuthHeaders() });
+      if (!res.ok) {
+        if (res.status === 404) continue;
+        console.warn(`[inverters realtime] HTTP ${res.status} em ${url}`);
+        continue;
+      }
 
-    if (res.status === 404) continue;
-    console.warn(`[inverters realtime] HTTP ${res.status} em ${url}`);
+      const data = normalizeApiBody(await res.json());
+      const items = Array.isArray(data) ? data : (data?.items || []);
+
+      // ✅ só atualiza cache se vier algo minimamente válido
+      if (Array.isArray(items) && items.length > 0) {
+        INVERTERS_CACHE = { items, ok_ms: Date.now() };
+        return items;
+      }
+
+      // se vier vazio, NÃO derruba. tenta próximo endpoint.
+    } catch (e) {
+      console.warn(`[inverters realtime] fetch fail ${url}`, e);
+    }
   }
 
-  console.warn("[inverters realtime] nenhum endpoint disponível -> mantendo estático");
+  // ✅ fallback no cache (igual weather)
+  const canUseCache =
+    Array.isArray(INVERTERS_CACHE.items) &&
+    INVERTERS_CACHE.items.length > 0 &&
+    (Date.now() - INVERTERS_CACHE.ok_ms) <= INVERTERS_CACHE_TTL_MS;
+
+  if (canUseCache) return INVERTERS_CACHE.items;
+
+  // último caso: mantém vazio mesmo
   return [];
 }
+
 
 // config (enabled/has_data)
 async function fetchInverterStrings(plantId, inverterRealId) {
@@ -643,6 +718,9 @@ function ensureInverterRowsFromRealtime(inverters) {
   const preservedOpenId = OPEN_INVERTER_REAL_ID;
   const uniq = dedupInvertersById(Array.isArray(inverters) ? inverters : []);
 
+  // ✅ se vier vazio, não limpa o DOM (evita sumir/piscar)
+  if (uniq.length === 0 && container.children.length > 0) return;
+
   uniq.sort((a, b) => {
     const an = String(getInverterDisplayName(a, 0) || "");
     const bn = String(getInverterDisplayName(b, 0) || "");
@@ -789,22 +867,36 @@ function renderWeather(data) {
   const elModule = document.getElementById("weatherModuleTemp");
 
   const hasWeather = !!(data && typeof data === "object");
+  const staleIncoming = !hasWeather || isWeatherStale(data);
 
-  if (elIrr) {
-    const value = hasWeather ? (data.irradiance_poa_wm2 ?? data.irradiance_ghi_wm2) : null;
-    elIrr.textContent = value != null ? `${Number(value).toFixed(0)} W/m²` : "—";
+  // ✅ se vier bom, atualiza cache
+  if (!staleIncoming) {
+    WEATHER_CACHE = { data, ok_ms: Date.now() };
   }
 
-  if (elAir) {
-    const value = hasWeather ? data.air_temperature_c : null;
-    elAir.textContent = value != null ? `${Number(value).toFixed(1)} °C` : "—";
+  // ✅ se vier ruim, tenta usar cache (até 30 min)
+  const canUseCache =
+    WEATHER_CACHE.data &&
+    (Date.now() - WEATHER_CACHE.ok_ms) <= WEATHER_STALE_AFTER_MS;
+
+  const src = (!staleIncoming ? data : (canUseCache ? WEATHER_CACHE.data : null));
+
+  if (!src) {
+    if (elIrr) elIrr.textContent = "—";
+    if (elAir) elAir.textContent = "—";
+    if (elModule) elModule.textContent = "—";
+    return;
   }
 
-  if (elModule) {
-    const value = hasWeather ? data.module_temperature_c : null;
-    elModule.textContent = value != null ? `${Number(value).toFixed(1)} °C` : "—";
-  }
+  const irr = toNumOrNull(src.irradiance_poa_wm2) ?? toNumOrNull(src.irradiance_ghi_wm2);
+  const air = toNumOrNull(src.air_temperature_c);
+  const module = toNumOrNull(src.module_temperature_c);
+
+  if (elIrr) elIrr.textContent = irr != null ? `${irr.toFixed(0)} W/m²` : "—";
+  if (elAir) elAir.textContent = air != null ? `${air.toFixed(1)} °C` : "—";
+  if (elModule) elModule.textContent = module != null ? `${module.toFixed(1)} °C` : "—";
 }
+
 
 // ======================================================
 // RENDER — ALARMES ATIVOS
@@ -1406,6 +1498,44 @@ let dailyChartInstance = null;
 let monthlyChartInstance = null;
 let LAST_INVERTER_ROWS_SIGNATURE = "";
 
+function dayKeySPNow() {
+  return new Date().toLocaleDateString("en-CA", { timeZone: "America/Sao_Paulo" });
+}
+
+async function refreshDailyChartIfNeeded(force = false) {
+  const now = Date.now();
+
+  const todayKey = dayKeySPNow();
+  if (DAILY_DAY_KEY !== todayKey) {
+    // ✅ virou o dia: reseta e força reload
+    DAILY_DAY_KEY = todayKey;
+    DAILY = null;
+    force = true;
+    if (dailyChartInstance) {
+      dailyChartInstance.destroy();
+      dailyChartInstance = null;
+    }
+  }
+
+  if (!force && (now - LAST_DAILY_FETCH_MS) < DAILY_REFRESH_EVERY_MS) return;
+  LAST_DAILY_FETCH_MS = now;
+
+  const daily = await fetchDailyEnergy(PLANT_ID);
+  if (daily?.labels?.length) {
+    DAILY = normalizeDailyPayload(daily);
+
+    // ✅ se já existe chart, só atualiza dataset (mais leve)
+    if (dailyChartInstance) {
+      dailyChartInstance.data.labels = DAILY.labels;
+      dailyChartInstance.data.datasets[0].data = DAILY.activePower;
+      dailyChartInstance.data.datasets[1].data = DAILY.irradiance;
+      dailyChartInstance.update("none");
+    } else {
+      renderDailyChart();
+    }
+  }
+}
+
 // ======================================================
 // GRÁFICO DIÁRIO
 // ======================================================
@@ -1443,7 +1573,7 @@ function renderDailyChart() {
           pointRadius: 0,
           borderWidth: 2,
           yAxisID: "yPower",
-          spanGaps: true
+          spanGaps: false
         },
         {
           data: DAILY.irradiance,
@@ -1454,7 +1584,7 @@ function renderDailyChart() {
           pointRadius: 0,
           borderWidth: 2,
           yAxisID: "yIrr",
-          spanGaps: true
+          spanGaps: false
         }
       ]
     },
@@ -1692,6 +1822,8 @@ async function refreshOpenStringsPanels() {
 }
 
 function renderPlantName(realtime) {
+  if (!realtime || typeof realtime !== "object") return;
+
   const name =
     realtime?.power_plant_name ??
     realtime?.powerPlantName ??
@@ -1708,8 +1840,20 @@ function renderPlantName(realtime) {
 // ✅ REFRESH (realtime + alarms + inverters rows + strings abertas + relay)
 // ======================================================
 async function refreshRealtimeEverything() {
+  if (REFRESH_RUNNING) return;
+  REFRESH_RUNNING = true;
+
+  let realtime = null;
+  let alarms = [];
+  let inverters = [];
+  let relayItem = null;
+
   try {
-    const realtime = await fetchPlantRealtime(PLANT_ID);
+    try { realtime = await fetchPlantRealtime(PLANT_ID); } catch (e) { console.warn("[realtime] fail", e); }
+    try { alarms = await fetchActiveAlarms(PLANT_ID); } catch (e) { console.warn("[alarms] fail", e); }
+    try { inverters = await fetchInvertersRealtime(PLANT_ID); } catch (e) { console.warn("[inverters] fail", e); }
+    try { relayItem = await safeFetchRelayIfSupported(PLANT_ID); } catch (e) { console.warn("[relay] fail", e); }
+
     renderPlantName(realtime);
 
     if (realtime) {
@@ -1726,11 +1870,10 @@ async function refreshRealtimeEverything() {
       };
     }
 
-    ACTIVE_ALARMS = await fetchActiveAlarms(PLANT_ID);
+    ACTIVE_ALARMS = Array.isArray(alarms) ? alarms : [];
     renderAlarms(ACTIVE_ALARMS);
 
-    INVERTERS_REALTIME = await fetchInvertersRealtime(PLANT_ID);
-    // ✅ guarda os extras por inverter_id (pra render abaixo das strings)
+    INVERTERS_REALTIME = Array.isArray(inverters) ? inverters : [];
     INVERTER_EXTRAS_BY_ID = new Map();
     dedupInvertersById(INVERTERS_REALTIME).forEach(inv => {
       const id = getInverterRealId(inv);
@@ -1738,7 +1881,6 @@ async function refreshRealtimeEverything() {
     });
 
     const dedup = dedupInvertersById(INVERTERS_REALTIME);
-
     PLANT_CATALOG.inverters = dedup;
     PLANT_STATE = {
       ...PLANT_STATE,
@@ -1750,7 +1892,6 @@ async function refreshRealtimeEverything() {
     renderInvertersRows(INVERTERS_REALTIME);
     refreshInverterStatusChips(INVERTERS_REALTIME);
 
-    const relayItem = await safeFetchRelayIfSupported(PLANT_ID);
     RELAY_REALTIME = relayItem;
     PLANT_CATALOG.hasRelay = !!relayItem;
     setRelaySectionVisible(RELAY_SUPPORTED !== false);
@@ -1760,19 +1901,19 @@ async function refreshRealtimeEverything() {
     renderWeather(realtime?.weather ?? null);
     renderSummaryStrip();
 
-    await refreshOpenStringsPanels();
+    try { await refreshOpenStringsPanels(); } catch (e) { console.warn("[strings] fail", e); }
 
-    // ✅ se tiver inversor aberto, renderiza os chips amarelos abaixo das strings
     if (OPEN_INVERTER_REAL_ID != null) {
       const inv = INVERTER_EXTRAS_BY_ID.get(String(OPEN_INVERTER_REAL_ID));
       renderInverterExtras(OPEN_INVERTER_REAL_ID, inv);
     }
-  } catch (e) {
-    console.error("[refreshRealtimeEverything] erro", e);
-    renderHeaderSummary();
-    renderSummaryStrip();
+
+    try { await refreshDailyChartIfNeeded(false); } catch(e) { console.warn("[daily] fail", e); }
+  } finally {
+    REFRESH_RUNNING = false;
   }
 }
+
 
 // ======================================================
 // INIT
@@ -1802,12 +1943,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       }
     }
 
-    // ✅ DAILY: normaliza para sempre começar em 00:00
-    const daily = await fetchDailyEnergy(PLANT_ID);
-    if (daily?.labels?.length) {
-      DAILY = normalizeDailyPayload(daily);
-      renderDailyChart();
-    }
+    await refreshDailyChartIfNeeded(true);
 
     const monthlyRaw = await fetchMonthlyEnergy(PLANT_ID);
     if (monthlyRaw) {
