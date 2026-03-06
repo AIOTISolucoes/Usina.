@@ -14,8 +14,8 @@ let PLANT_STATE = {
 // ======================================================
 // CONFIG (ONLINE/OFFLINE)
 // ======================================================
-const INVERTER_ONLINE_AFTER_MS = 15 * 60 * 1000; // 15 min
-const INVERTER_NO_COMM_AFTER_MS = 15 * 60 * 1000; // 15 min
+const INVERTER_ONLINE_AFTER_MS = 25 * 60 * 1000; // 25 min
+const INVERTER_NO_COMM_AFTER_MS = 25 * 60 * 1000; // 25 min
 let REFRESH_RUNNING = false;
 
 // ======================================================
@@ -476,6 +476,11 @@ async function safeFetchRelayIfSupported(plantId) {
 function setRelaySectionVisible(visible) {
   const relaySection = document.getElementById("relaySection");
   if (relaySection) relaySection.style.display = visible ? "" : "none";
+}
+
+function setMultimeterSectionVisible(visible) {
+  const multimeterSection = document.getElementById("multimeterSection");
+  if (multimeterSection) multimeterSection.style.display = visible ? "" : "none";
 }
 
 // ✅ realtime por inversor
@@ -1928,6 +1933,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     return;
   }
   setupInverterToggles();
+  setMultimeterSectionVisible(false);
 
   try {
     await refreshRealtimeEverything();
