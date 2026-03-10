@@ -123,6 +123,11 @@
         <i class="fa-solid fa-tower-broadcast" aria-hidden="true"></i>
         <span>Relé</span>
       </button>
+
+      <button class="device-nav-btn" type="button" data-target="#sec-multimeter">
+        <i class="fa-solid fa-gauge-high" aria-hidden="true"></i>
+        <span>Multimedidor</span>
+      </button>
     </div>
   </section>
 
@@ -202,24 +207,71 @@
 
     <!-- RELÉ -->
     <section id="relaySection" style="margin-top:24px">
-    <h3 class="card-title">Relé</h3>
+      <h3 class="card-title">Relé</h3>
 
-    <!-- ✅ RELÉ CLEAN: bolinha + nome + badge ON/OFF + timestamp + kW -->
-    <div class="relay-row" id="relayRow">
-      <span class="status-dot" id="relayDot"></span>
+      <div class="relay-row" id="relayRow">
+        <span class="status-dot" id="relayDot"></span>
 
-      <div class="relay-left">
-        <div class="relay-title">Relé</div>
+        <div class="relay-left">
+          <div>
+            <div class="relay-title">Relé</div>
+            <div class="relay-last" id="relayLastUpdateText">—</div>
+          </div>
+        </div>
+
+        <div class="relay-right">
+          <span class="relay-state relay-state--unknown" id="relayOnlineBadge">—</span>
+          <span class="relay-power" id="relayPowerText">— kW</span>
+          <i class="fa-solid fa-chevron-down arrow" id="relayArrow" aria-hidden="true"></i>
+        </div>
       </div>
 
-      <div class="relay-right">
-        <span class="relay-last" id="relayLastUpdateText">—</span>
-        <span class="relay-state relay-state--unknown" id="relayStateBadge">—</span>
-        <span class="relay-power" id="relayPowerText">— kW</span>
-      </div>
-    </div>
+      <div class="relay-details" id="relayDetails">
+        <div class="inv-side">
+          <div class="inv-side-title">Potências</div>
+          <div class="inv-side-row" id="relayPowerRow"></div>
+        </div>
 
-  </section>
+        <div class="inv-side">
+          <div class="inv-side-title">Tensões e Correntes</div>
+          <div class="inv-side-row" id="relayElectricalRow"></div>
+        </div>
+      </div>
+    </section>
+
+    <div id="sec-multimeter" class="scroll-anchor"></div>
+
+    <section id="multimeterSection" style="margin-top:24px; display:none;">
+      <h3 class="card-title">Multimedidor</h3>
+
+      <div class="relay-row" id="multimeterRow">
+        <span class="status-dot" id="multimeterDot"></span>
+
+        <div class="relay-left">
+          <div>
+            <div class="relay-title">Multimedidor</div>
+            <div class="relay-last" id="multimeterLastUpdateText">—</div>
+          </div>
+        </div>
+
+        <div class="relay-right">
+          <span class="relay-state relay-state--unknown" id="multimeterOnlineBadge">—</span>
+          <span class="relay-power" id="multimeterPowerText">— kW</span>
+        </div>
+      </div>
+
+      <div class="multimeter-extras" id="multimeterExtras" style="display:none;">
+        <div class="inv-side">
+          <div class="inv-side-title">AC</div>
+          <div class="inv-side-row" id="multimeterAcRow"></div>
+        </div>
+
+        <div class="inv-side">
+          <div class="inv-side-title">Energia</div>
+          <div class="inv-side-row" id="multimeterEnergyRow"></div>
+        </div>
+      </div>
+    </section>
 
   </section>
 
