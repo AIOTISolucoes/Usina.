@@ -1377,6 +1377,48 @@ body::before{
   box-shadow: 0 0 10px rgba(255,92,92,0.18);
 }
 
+
+.multimeter-extras{
+  margin-top: 14px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+/* =========================================================
+   RELÉ — DETAILS EXPAND
+========================================================= */
+.relay-row{
+  cursor: pointer;
+}
+
+.relay-details{
+  margin-top: 12px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+
+  max-height: 0;
+  overflow: hidden;
+  opacity: 0;
+  transition: max-height .35s ease, opacity .25s ease;
+}
+
+.relay-details.open{
+  max-height: 420px;
+  opacity: 1;
+}
+
+.relay-row.open .arrow{
+  transform: rotate(180deg);
+}
+
+@media (max-width: 900px){
+  .relay-details{
+    grid-template-columns: 1fr;
+  }
+}
+
 .relay-left{
   display: flex;
   align-items: center;
@@ -1759,6 +1801,10 @@ body.plant-enter #relaySection{
 @media (max-width: 900px){
   .inverter-strings.open{
     max-height: 1100px;
+  }
+
+  .multimeter-extras{
+    grid-template-columns: 1fr;
   }
 
   .strings-grid{
