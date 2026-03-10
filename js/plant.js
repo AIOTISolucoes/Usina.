@@ -14,8 +14,9 @@ let PLANT_STATE = {
 // ======================================================
 // CONFIG (ONLINE/OFFLINE)
 // ======================================================
-const INVERTER_ONLINE_AFTER_MS = 25 * 60 * 1000; // 25 min
-const INVERTER_NO_COMM_AFTER_MS = 25 * 60 * 1000; // 25 min
+const INVERTER_ONLINE_AFTER_MS = 60 * 60 * 1000; // 1 hora
+const INVERTER_NO_COMM_AFTER_MS = 60 * 60 * 1000; // 1 hora
+const RELAY_OFFLINE_AFTER_MS = 60 * 60 * 1000; // 1 hora
 let REFRESH_RUNNING = false;
 
 // ======================================================
@@ -341,13 +342,17 @@ let INVERTERS_REALTIME = [];
 let INVERTERS_CACHE = { items: [], ok_ms: 0 };
 const INVERTERS_CACHE_TTL_MS = 2 * 60 * 1000; // 2 min
 let RELAY_REALTIME = null; // ✅ NEW
+let RELAY_OPEN = false;
+let MULTIMETER_REALTIME = null;
+let MULTIMETER_SUPPORTED = null;
 let OPEN_INVERTER_REAL_ID = null;
 let STRINGS_REFRESH_SEQ = 0;
 let INVERTER_EXTRAS_BY_ID = new Map(); // inverter_id (string) -> objeto inv completo
 
 let PLANT_CATALOG = {
   inverters: [],
-  hasRelay: false
+  hasRelay: false,
+  hasMultimeter: false
 };
 
 let RELAY_SUPPORTED = null; // null = desconhecido / true / false
@@ -469,6 +474,27 @@ async function safeFetchRelayIfSupported(plantId) {
   }
 
   RELAY_SUPPORTED = true;
+  const payload = normalizeApiBody(await res.json());
+  return payload?.item ?? null;
+}
+
+async function safeFetchMultimeterIfSupported(plantId) {
+  if (MULTIMETER_SUPPORTED === false) return null;
+
+  const url = `${API_BASE}/plants/${plantId}/multimeter/realtime`;
+  const res = await fetch(url, { headers: buildAuthHeaders() });
+
+  if (res.status === 404) {
+    MULTIMETER_SUPPORTED = false;
+    return null;
+  }
+
+  if (!res.ok) {
+    console.warn(`[multimeter/realtime] HTTP ${res.status} em ${url}`);
+    return null;
+  }
+
+  MULTIMETER_SUPPORTED = true;
   const payload = normalizeApiBody(await res.json());
   return payload?.item ?? null;
 }
@@ -942,168 +968,212 @@ function renderAlarms(alarms) {
 }
 
 // ======================================================
-// ✅ RENDER — RELÉ (NOVO SHAPE DO ENDPOINT /relay/realtime)
-// item: { is_online, relay_on, last_update, analog:{active_power_kw} }
+// ✅ RENDER — RELÉ (EXPANSÍVEL)
 // ======================================================
-function ensureRelayUiScaffold() {
+function setupRelayToggle() {
   const relayRow = document.getElementById("relayRow");
-  if (!relayRow) return null;
+  const relayDetails = document.getElementById("relayDetails");
 
-  const nameEl = relayRow.querySelector(".device-name");
-  const dotEl = document.getElementById("relayDot") || relayRow.querySelector(".status-dot");
+  if (!relayRow || !relayDetails || relayRow.dataset.toggleBound === "1") return;
 
-  // Remove “extras antigos” visualmente (não remove do DOM, só não usa)
-  const oldOnline = document.getElementById("relayOnlineText");
-  const oldAvail = document.getElementById("relayAvailabilityText");
-  const oldLast = document.getElementById("relayLastUpdateText");
+  relayRow.addEventListener("click", () => {
+    RELAY_OPEN = !RELAY_OPEN;
+    relayRow.classList.toggle("open", RELAY_OPEN);
+    relayDetails.classList.toggle("open", RELAY_OPEN);
+  });
 
-  if (oldOnline) oldOnline.textContent = "—";
-  if (oldAvail) oldAvail.textContent = "";
-  if (oldLast) oldLast.textContent = "";
+  relayRow.dataset.toggleBound = "1";
+}
 
-  // cria badge ONLINE/OFFLINE ao lado do nome
-  let badgeOnline = relayRow.querySelector("#relayOnlineBadge");
-  if (!badgeOnline) {
-    badgeOnline = document.createElement("span");
-    badgeOnline.id = "relayOnlineBadge";
-    badgeOnline.style.display = "inline-flex";
-    badgeOnline.style.alignItems = "center";
-    badgeOnline.style.justifyContent = "center";
-    badgeOnline.style.padding = "6px 10px";
-    badgeOnline.style.borderRadius = "999px";
-    badgeOnline.style.fontSize = "11px";
-    badgeOnline.style.letterSpacing = "0.06em";
-    badgeOnline.style.textTransform = "uppercase";
-    badgeOnline.style.border = "1px solid rgba(255,255,255,0.10)";
-    badgeOnline.style.background = "rgba(255,255,255,0.04)";
-    badgeOnline.style.color = "rgba(233,255,243,0.88)";
-    badgeOnline.style.marginLeft = "10px";
-    badgeOnline.style.whiteSpace = "nowrap";
+function renderRelayDetails(relayItem) {
+  const details = document.getElementById("relayDetails");
+  const powerRow = document.getElementById("relayPowerRow");
+  const electricalRow = document.getElementById("relayElectricalRow");
 
-    if (nameEl) nameEl.appendChild(badgeOnline);
-  }
+  if (!details || !powerRow || !electricalRow) return;
 
-  // cria badge ON/OFF do relé
-  let badgeState = relayRow.querySelector("#relayStateBadge");
-  if (!badgeState) {
-    badgeState = document.createElement("span");
-    badgeState.id = "relayStateBadge";
-    badgeState.style.display = "inline-flex";
-    badgeState.style.alignItems = "center";
-    badgeState.style.justifyContent = "center";
-    badgeState.style.padding = "6px 10px";
-    badgeState.style.borderRadius = "999px";
-    badgeState.style.fontSize = "11px";
-    badgeState.style.letterSpacing = "0.06em";
-    badgeState.style.textTransform = "uppercase";
-    badgeState.style.border = "1px solid rgba(255,255,255,0.10)";
-    badgeState.style.background = "rgba(255,255,255,0.04)";
-    badgeState.style.color = "rgba(233,255,243,0.88)";
-    badgeState.style.marginLeft = "10px";
-    badgeState.style.whiteSpace = "nowrap";
+  powerRow.innerHTML = "";
+  electricalRow.innerHTML = "";
 
-    if (nameEl) nameEl.appendChild(badgeState);
-  }
+  if (!relayItem || !relayItem.analog) return;
 
-  // cria o kW na direita (no lugar “—” que você quer)
-  let powerEl = relayRow.querySelector("#relayPowerText");
-  if (!powerEl) {
-    powerEl = document.createElement("span");
-    powerEl.id = "relayPowerText";
-    powerEl.style.justifySelf = "end";
-    powerEl.style.textAlign = "right";
-    powerEl.style.whiteSpace = "nowrap";
-    powerEl.style.fontWeight = "700";
-    powerEl.style.color = "rgba(233,255,243,0.92)";
-    powerEl.style.opacity = "0.95";
-    powerEl.style.textShadow = "0 0 12px rgba(57,229,140,0.10)";
+  const a = relayItem.analog;
 
-    // garante grid com 3 colunas (dot | nome | direita)
-    relayRow.style.gridTemplateColumns = "14px 1fr auto";
-    relayRow.appendChild(powerEl);
-  }
+  powerRow.appendChild(makeChip(
+    "P ativa",
+    a.active_power_kw != null ? `${numFixedOrDash(a.active_power_kw, 2)} kW` : "—"
+  ));
+  powerRow.appendChild(makeChip(
+    "S aparente",
+    a.apparent_power_kva != null ? `${numFixedOrDash(a.apparent_power_kva, 2)} kVA` : "—"
+  ));
+  powerRow.appendChild(makeChip(
+    "Q reativa",
+    a.reactive_power_kvar != null ? `${numFixedOrDash(a.reactive_power_kvar, 2)} kvar` : "—"
+  ));
 
-  // cria o timestamp discretinho abaixo do nome (opcional)
-  let tsEl = relayRow.querySelector("#relayTsText");
-  if (!tsEl) {
-    tsEl = document.createElement("div");
-    tsEl.id = "relayTsText";
-    tsEl.style.marginTop = "4px";
-    tsEl.style.fontSize = "12px";
-    tsEl.style.opacity = "0.75";
-    tsEl.style.color = "rgba(154,219,184,0.85)";
+  electricalRow.appendChild(makeChip(
+    "V AB",
+    a.voltage_ab_v != null ? `${numFixedOrDash(a.voltage_ab_v, 1)} V` : "—"
+  ));
+  electricalRow.appendChild(makeChip(
+    "V BC",
+    a.voltage_bc_v != null ? `${numFixedOrDash(a.voltage_bc_v, 1)} V` : "—"
+  ));
+  electricalRow.appendChild(makeChip(
+    "V CA",
+    a.voltage_ca_v != null ? `${numFixedOrDash(a.voltage_ca_v, 1)} V` : "—"
+  ));
 
-    // coloca dentro do device-name (abaixo do texto)
-    if (nameEl) nameEl.appendChild(tsEl);
-  }
+  electricalRow.appendChild(makeChip(
+    "Ia",
+    a.current_a_a != null ? `${numFixedOrDash(a.current_a_a, 2)} A` : "—"
+  ));
+  electricalRow.appendChild(makeChip(
+    "Ib",
+    a.current_b_a != null ? `${numFixedOrDash(a.current_b_a, 2)} A` : "—"
+  ));
+  electricalRow.appendChild(makeChip(
+    "Ic",
+    a.current_c_a != null ? `${numFixedOrDash(a.current_c_a, 2)} A` : "—"
+  ));
+}
 
-  return { relayRow, nameEl, dotEl, badgeOnline, badgeState, powerEl, tsEl };
+function isRelayOnlineByFreshness(relayItem) {
+  const ts = relayItem?.last_update ?? relayItem?.analog?.timestamp ?? null;
+  const ms = parseTsToMsSafe(ts);
+  if (!ms) return false;
+  return (Date.now() - ms) <= RELAY_OFFLINE_AFTER_MS;
 }
 
 function renderRelayCard(relayItem) {
-  const ui = ensureRelayUiScaffold();
-  if (!ui) return;
+  const relayRow = document.getElementById("relayRow");
+  const dotEl = document.getElementById("relayDot");
+  const onlineBadge = document.getElementById("relayOnlineBadge");
+  const powerEl = document.getElementById("relayPowerText");
+  const lastEl = document.getElementById("relayLastUpdateText");
 
-  const { relayRow, badgeOnline, badgeState, powerEl, tsEl } = ui;
+  if (!relayRow || !dotEl || !onlineBadge || !powerEl || !lastEl) return;
 
-  // sem dados ainda
   if (!relayItem) {
-    relayRow.classList.remove("online", "offline");
-    badgeOnline.textContent = "—";
-    badgeState.textContent = "—";
+    relayRow.classList.remove("online", "offline", "open");
+    onlineBadge.textContent = "—";
+    onlineBadge.classList.remove("relay-state--on", "relay-state--off");
+    onlineBadge.classList.add("relay-state--unknown");
     powerEl.textContent = "— kW";
-    tsEl.textContent = "Última atualização: —";
+    powerEl.classList.remove("relay-power--valid");
+    lastEl.textContent = "—";
+    renderRelayDetails(null);
     return;
   }
 
-  const isOnline = relayItem.is_online === true;
-  const relayOn = relayItem.relay_on; // true/false/null
-  const lastUpdate = relayItem.last_update ?? null;
-
+  const isOnline = isRelayOnlineByFreshness(relayItem);
+  const lastUpdate = relayItem.last_update ?? relayItem?.analog?.timestamp ?? null;
   const kw = relayItem?.analog?.active_power_kw;
-  const kwText = (kw === null || kw === undefined || Number.isNaN(Number(kw)))
-    ? "— kW"
-    : `${numFixedOrDash(kw, 1)} kW`;
 
-  // classes do row (para a bolinha)
   relayRow.classList.remove("online", "offline");
   relayRow.classList.add(isOnline ? "online" : "offline");
 
-  // badge online/offline
-  badgeOnline.textContent = isOnline ? "ONLINE" : "OFFLINE";
-  badgeOnline.style.borderColor = isOnline ? "rgba(57,229,140,0.26)" : "rgba(255,92,92,0.25)";
-  badgeOnline.style.background = isOnline ? "rgba(57,229,140,0.08)" : "rgba(255,92,92,0.08)";
-  badgeOnline.style.color = isOnline ? "rgba(233,255,243,0.92)" : "rgba(255,255,255,0.92)";
+  onlineBadge.textContent = isOnline ? "ONLINE" : "OFFLINE";
+  onlineBadge.classList.remove("relay-state--on", "relay-state--off", "relay-state--unknown");
+  onlineBadge.classList.add(isOnline ? "relay-state--on" : "relay-state--off");
 
-  // badge ON/OFF
-  let stateText = "—";
-  if (relayOn === true) stateText = "ON";
-  else if (relayOn === false) stateText = "OFF";
+  powerEl.textContent =
+    kw === null || kw === undefined || Number.isNaN(Number(kw))
+      ? "— kW"
+      : `${numFixedOrDash(kw, 1)} kW`;
 
-  badgeState.textContent = stateText;
-
-  if (stateText === "ON") {
-    badgeState.style.borderColor = "rgba(57,229,140,0.30)";
-    badgeState.style.background = "rgba(57,229,140,0.10)";
-    badgeState.style.color = "rgba(233,255,243,0.95)";
-    badgeState.style.boxShadow = "0 0 18px rgba(57,229,140,0.12)";
-  } else if (stateText === "OFF") {
-    badgeState.style.borderColor = "rgba(255,92,92,0.28)";
-    badgeState.style.background = "rgba(255,92,92,0.08)";
-    badgeState.style.color = "rgba(255,255,255,0.95)";
-    badgeState.style.boxShadow = "0 0 16px rgba(255,92,92,0.10)";
+  if (kw !== null && kw !== undefined && Number.isFinite(Number(kw))) {
+    powerEl.classList.add("relay-power--valid");
   } else {
-    badgeState.style.borderColor = "rgba(255,255,255,0.10)";
-    badgeState.style.background = "rgba(255,255,255,0.04)";
-    badgeState.style.color = "rgba(233,255,243,0.88)";
-    badgeState.style.boxShadow = "none";
+    powerEl.classList.remove("relay-power--valid");
   }
 
-  // kW à direita
-  powerEl.textContent = kwText;
+  lastEl.textContent = `Última atualização: ${fmtDatePtBR(lastUpdate)}`;
 
-  // timestamp
-  tsEl.textContent = `Última atualização: ${fmtDatePtBR(lastUpdate)}`;
+  renderRelayDetails(relayItem);
+
+  relayRow.classList.toggle("open", RELAY_OPEN);
+  const relayDetails = document.getElementById("relayDetails");
+  if (relayDetails) relayDetails.classList.toggle("open", RELAY_OPEN);
+}
+
+function setMultimeterDotOnline(dotEl, isOnline) {
+  if (!dotEl) return;
+  dotEl.classList.remove("online", "offline");
+  dotEl.classList.add(isOnline ? "online" : "offline");
+}
+
+function makeMultimeterChip(label, value) {
+  const el = document.createElement("div");
+  el.className = "inv-chip";
+  el.innerHTML = `
+    <span class="inv-chip__label">${label}</span>
+    <strong class="inv-chip__value">${value ?? "—"}</strong>
+  `;
+  return el;
+}
+
+function renderMultimeterCard(item) {
+  const section = document.getElementById("multimeterSection");
+  const dot = document.getElementById("multimeterDot");
+  const lastEl = document.getElementById("multimeterLastUpdateText");
+  const badgeEl = document.getElementById("multimeterOnlineBadge");
+  const powerEl = document.getElementById("multimeterPowerText");
+  const extrasEl = document.getElementById("multimeterExtras");
+  const acRow = document.getElementById("multimeterAcRow");
+  const energyRow = document.getElementById("multimeterEnergyRow");
+
+  if (!section || !dot || !lastEl || !badgeEl || !powerEl || !extrasEl || !acRow || !energyRow) {
+    console.warn("[multimeter] HTML não encontrado para renderização");
+    return;
+  }
+
+  if (!item) {
+    setMultimeterSectionVisible(false);
+    return;
+  }
+
+  setMultimeterSectionVisible(true);
+
+  const analog = item.analog || {};
+  const isOnline = item.is_online === true;
+
+  setMultimeterDotOnline(dot, isOnline);
+
+  badgeEl.textContent = isOnline ? "ONLINE" : "OFFLINE";
+  badgeEl.style.borderColor = isOnline ? "rgba(57,229,140,0.26)" : "rgba(255,92,92,0.25)";
+  badgeEl.style.background = isOnline ? "rgba(57,229,140,0.08)" : "rgba(255,92,92,0.08)";
+  badgeEl.style.color = "rgba(233,255,243,0.92)";
+
+  lastEl.textContent = fmtDatePtBR(item.last_update);
+
+  const kw = analog.active_power_kw;
+  powerEl.textContent =
+    kw === null || kw === undefined || Number.isNaN(Number(kw))
+      ? "— kW"
+      : `${numFixedOrDash(kw, 1)} kW`;
+
+  acRow.innerHTML = "";
+  energyRow.innerHTML = "";
+
+  acRow.appendChild(makeMultimeterChip("V AB", analog.volt_uab_line != null ? `${numFixedOrDash(analog.volt_uab_line, 0)} V` : "—"));
+  acRow.appendChild(makeMultimeterChip("V BC", analog.volt_ubc_line != null ? `${numFixedOrDash(analog.volt_ubc_line, 0)} V` : "—"));
+  acRow.appendChild(makeMultimeterChip("V CA", analog.volt_uca_line != null ? `${numFixedOrDash(analog.volt_uca_line, 0)} V` : "—"));
+
+  acRow.appendChild(makeMultimeterChip("Ia", analog.current_a_phase_a != null ? `${numFixedOrDash(analog.current_a_phase_a, 2)} A` : "—"));
+  acRow.appendChild(makeMultimeterChip("Ib", analog.current_b_phase_b != null ? `${numFixedOrDash(analog.current_b_phase_b, 2)} A` : "—"));
+  acRow.appendChild(makeMultimeterChip("Ic", analog.current_c_phase_c != null ? `${numFixedOrDash(analog.current_c_phase_c, 2)} A` : "—"));
+
+  acRow.appendChild(makeMultimeterChip("FP", analog.power_factor != null ? numFixedOrDash(analog.power_factor, 3) : "—"));
+  acRow.appendChild(makeMultimeterChip("Freq", analog.frequency_hz != null ? `${numFixedOrDash(analog.frequency_hz, 2)} Hz` : "—"));
+  acRow.appendChild(makeMultimeterChip("Q reativa", analog.react_power_kvar != null ? `${numFixedOrDash(analog.react_power_kvar, 2)} kvar` : "—"));
+  acRow.appendChild(makeMultimeterChip("S aparente", analog.apparent_power_kva != null ? `${numFixedOrDash(analog.apparent_power_kva, 2)} kVA` : "—"));
+
+  energyRow.appendChild(makeMultimeterChip("Energia imp.", analog.energy_imp_kwh != null ? `${numFixedOrDash(analog.energy_imp_kwh, 1)} kWh` : "—"));
+  energyRow.appendChild(makeMultimeterChip("Energia exp.", analog.energy_exp_kwh != null ? `${numFixedOrDash(analog.energy_exp_kwh, 1)} kWh` : "—"));
+
+  extrasEl.style.display = "";
 }
 
 // ======================================================
@@ -1852,12 +1922,14 @@ async function refreshRealtimeEverything() {
   let alarms = [];
   let inverters = [];
   let relayItem = null;
+  let multimeterItem = null;
 
   try {
     try { realtime = await fetchPlantRealtime(PLANT_ID); } catch (e) { console.warn("[realtime] fail", e); }
     try { alarms = await fetchActiveAlarms(PLANT_ID); } catch (e) { console.warn("[alarms] fail", e); }
     try { inverters = await fetchInvertersRealtime(PLANT_ID); } catch (e) { console.warn("[inverters] fail", e); }
     try { relayItem = await safeFetchRelayIfSupported(PLANT_ID); } catch (e) { console.warn("[relay] fail", e); }
+    try { multimeterItem = await safeFetchMultimeterIfSupported(PLANT_ID); } catch (e) { console.warn("[multimeter] fail", e); }
 
     renderPlantName(realtime);
 
@@ -1902,6 +1974,11 @@ async function refreshRealtimeEverything() {
     setRelaySectionVisible(RELAY_SUPPORTED !== false);
     if (RELAY_SUPPORTED !== false) renderRelayCard(relayItem);
 
+    MULTIMETER_REALTIME = multimeterItem;
+    PLANT_CATALOG.hasMultimeter = !!multimeterItem;
+    setMultimeterSectionVisible(!!multimeterItem);
+    if (multimeterItem) renderMultimeterCard(multimeterItem);
+
     renderHeaderSummary();
     renderWeather(realtime?.weather ?? null);
     renderSummaryStrip();
@@ -1933,6 +2010,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     return;
   }
   setupInverterToggles();
+  setupRelayToggle();
   setMultimeterSectionVisible(false);
 
   try {
