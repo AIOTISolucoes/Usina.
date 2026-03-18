@@ -72,6 +72,39 @@ let EVENTS_STATE = {
   autoTimer: null
 };
 
+// DATA STUDIO
+let DATASTUDIO_STATE = {
+  wired: false,
+  loadingTags: false,
+  loadingSeries: false,
+  savingSelection: false,
+
+  startDate: "",
+  endDate: "",
+  selectedPlantId: null,
+
+  selectedDataKind: "all", // all | analog | discrete
+  selectedSource: "all", // all | historico | consolidado
+  selectedContext: "all", // all | PLANT | inverter | relay | meter etc
+  searchText: "",
+
+  availableTags: [],
+  selectedTags: [],
+
+  selectionId: null,
+
+  aggregationMode: "historico", // historico | consolidado
+  aggregationType: "avg", // avg | integral | median | max | mode | propagation | sum | none
+  consolidationPeriod: "5min", // 5min | daily | weekly | monthly | yearly | hdaily etc
+
+  chartData: null,
+  forceHeroState: false,
+  catalogOpen: false,
+  catalogConfirmed: false
+};
+
+let DATASTUDIO_CHART = null;
+
 // Abort controller pra evitar race condition
 let eventsAbortController = null;
 let ALARMS_RENDER_SEQ = 0;
@@ -1193,6 +1226,1140 @@ function renderPortfolioTable(plants) {
 }
 
 // =============================================================================
+// DATA STUDIO
+// =============================================================================
+
+function dsSafeTrim(v) {
+  if (v == null) return "";
+  return String(v).trim();
+}
+
+function dsIsoStartOfDay(dateYYYYMMDD) {
+  if (!dateYYYYMMDD) return null;
+  const [y, m, d] = String(dateYYYYMMDD).split("-").map(Number);
+  if (!y || !m || !d) return null;
+  const dt = new Date(y, m - 1, d, 0, 0, 0, 0);
+  return Number.isNaN(dt.getTime()) ? null : dt.toISOString();
+}
+
+function dsIsoEndOfDay(dateYYYYMMDD) {
+  if (!dateYYYYMMDD) return null;
+  const [y, m, d] = String(dateYYYYMMDD).split("-").map(Number);
+  if (!y || !m || !d) return null;
+  const dt = new Date(y, m - 1, d, 23, 59, 59, 999);
+  return Number.isNaN(dt.getTime()) ? null : dt.toISOString();
+}
+
+function dsClampRange(startISO, endISO) {
+  if (!startISO || !endISO) return { startISO, endISO };
+  const s = new Date(startISO).getTime();
+  const e = new Date(endISO).getTime();
+  if (!Number.isFinite(s) || !Number.isFinite(e)) return { startISO, endISO };
+  if (e < s) return { startISO: endISO, endISO: startISO };
+  return { startISO, endISO };
+}
+
+function dsNormalizeApiBody(data) {
+  if (data && Object.prototype.hasOwnProperty.call(data, "body")) {
+    return typeof data.body === "string" ? JSON.parse(data.body) : data.body;
+  }
+  return data;
+}
+
+function dsNormalizeContextText(value) {
+  return dsSafeTrim(value)
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function dsContextMatches(tagContext, selectedContext) {
+  if (!selectedContext || selectedContext === "all") return true;
+
+  const tagNorm = dsNormalizeContextText(tagContext);
+  const selectedNorm = dsNormalizeContextText(selectedContext);
+  if (!tagNorm) return false;
+
+  const tagNum = tagNorm.match(/\d+/)?.[0] || null;
+  const selectedNum = selectedNorm.match(/\d+/)?.[0] || null;
+  if (tagNum && selectedNum && tagNum === selectedNum) return true;
+
+  return tagNorm.includes(selectedNorm) || selectedNorm.includes(tagNorm);
+}
+
+function getDataStudioUIElements() {
+  return {
+    startDateInput: document.getElementById("dsStartDateInput"),
+    endDateInput: document.getElementById("dsEndDateInput"),
+    plantSelect: document.getElementById("dsPlantSelect"),
+    openTagsBtn: document.getElementById("dsOpenTagsBtn"),
+    backToHeroBtn: document.getElementById("dsBackToHeroBtn"),
+    exportBtn: document.getElementById("dsExportBtn"),
+    zoomInBtn: document.getElementById("dsZoomInBtn"),
+    zoomOutBtn: document.getElementById("dsZoomOutBtn"),
+    zoomResetBtn: document.getElementById("dsZoomResetBtn"),
+
+    catalogSection: document.getElementById("dsCatalogSection"),
+    contextInfo: document.getElementById("dsContextInfo"),
+
+    dataKindSelect: document.getElementById("dsDataKindSelect"),
+    sourceSelect: document.getElementById("dsSourceSelect"),
+    contextSelect: document.getElementById("dsContextSelect"),
+    searchInput: document.getElementById("dsSearchInput"),
+    tagsApplyBtn: document.getElementById("dsTagsApplyBtn"),
+    tagsClearBtn: document.getElementById("dsTagsClearBtn"),
+    confirmSelectionBtn: document.getElementById("dsConfirmSelectionBtn"),
+    tagsTableBody: document.getElementById("dsTagsTbody"),
+    selectedCount: document.getElementById("dsSelectedCount"),
+    selectedTagsList: document.getElementById("dsSelectedTagsList"),
+    emptyState: document.getElementById("dsEmptyState"),
+    workspace: document.getElementById("dsWorkspace"),
+
+    bulkPanel: document.getElementById("dsBulkPanel"),
+    modeSelect: document.getElementById("dsModeSelect"),
+    aggregationSelect: document.getElementById("dsAggregationSelect"),
+    consolidationSelect: document.getElementById("dsConsolidationSelect"),
+    saveSelectionBtn: document.getElementById("dsSaveSelectionBtn"),
+    loadSeriesBtn: document.getElementById("dsLoadSeriesBtn"),
+
+    chartCanvas: document.getElementById("dsChart")
+  };
+}
+
+
+function selectedTagKey(tagOrPath) {
+  if (typeof tagOrPath === "string") return `path:${dsSafeTrim(tagOrPath)}`;
+  const id = tagOrPath?.id ?? tagOrPath?.tag_id;
+  if (id !== undefined && id !== null && String(id) !== "") return `id:${id}`;
+  return `path:${dsSafeTrim(tagOrPath?.pathname)}`;
+}
+
+function renderSelectedTagsList() {
+  const { selectedTagsList } = getDataStudioUIElements();
+  if (!selectedTagsList) return;
+
+  selectedTagsList.innerHTML = "";
+  const tags = Array.isArray(DATASTUDIO_STATE.selectedTags) ? DATASTUDIO_STATE.selectedTags : [];
+
+  if (!tags.length) {
+    selectedTagsList.classList.add("hidden");
+    return;
+  }
+
+  selectedTagsList.classList.remove("hidden");
+  tags.forEach((tag) => {
+    const chip = document.createElement("div");
+    chip.className = "ds-selected-tag-chip";
+
+    const label = `${valueOrDash(tag?.context)} • ${valueOrDash(tag?.point_name || tag?.description || tag?.pathname)}`;
+    chip.innerHTML = `
+      <span class="ds-selected-tag-chip__text">${label}</span>
+      <button type="button" class="ds-selected-tag-chip__remove" aria-label="Remover medida">×</button>
+    `;
+
+    chip.querySelector(".ds-selected-tag-chip__remove")?.addEventListener("click", () => {
+      removeSelectedTag(tag);
+      renderDataStudioTagsTable(DATASTUDIO_STATE.availableTags);
+      updateSelectedTagsCounter();
+    });
+
+    selectedTagsList.appendChild(chip);
+  });
+}
+
+function populateDataStudioContextSelect(tags) {
+  const { contextSelect } = getDataStudioUIElements();
+  if (!contextSelect) return;
+
+  const prev = dsSafeTrim(contextSelect.value || DATASTUDIO_STATE.selectedContext) || "all";
+  const contexts = Array.from(new Set((Array.isArray(tags) ? tags : [])
+    .map((t) => dsSafeTrim(t?.context))
+    .filter(Boolean))).sort((a, b) => a.localeCompare(b, "pt-BR"));
+
+  contextSelect.innerHTML = "";
+  const allOpt = document.createElement("option");
+  allOpt.value = "all";
+  allOpt.textContent = "Todos contextos";
+  contextSelect.appendChild(allOpt);
+
+  contexts.forEach((ctx) => {
+    const opt = document.createElement("option");
+    opt.value = ctx;
+    opt.textContent = ctx;
+    contextSelect.appendChild(opt);
+  });
+
+  if (contexts.includes(prev)) contextSelect.value = prev;
+  else contextSelect.value = "all";
+
+  DATASTUDIO_STATE.selectedContext = contextSelect.value || "all";
+}
+
+
+function updateDataStudioStageUI() {
+  const { emptyState, workspace, catalogSection, openTagsBtn } = getDataStudioUIElements();
+  if (!emptyState || !workspace) return;
+
+  const hasSelection = Array.isArray(DATASTUDIO_STATE.selectedTags) && DATASTUDIO_STATE.selectedTags.length > 0;
+  const showWorkspace = hasSelection && DATASTUDIO_STATE.catalogConfirmed && !DATASTUDIO_STATE.forceHeroState;
+
+  if (showWorkspace) {
+    emptyState.classList.add("hidden");
+    workspace.classList.remove("hidden");
+  } else {
+    emptyState.classList.remove("hidden");
+    workspace.classList.add("hidden");
+  }
+
+  if (catalogSection) {
+    catalogSection.classList.toggle("is-open", Boolean(DATASTUDIO_STATE.catalogOpen));
+  }
+
+  if (openTagsBtn && !DATASTUDIO_STATE.loadingTags) {
+    openTagsBtn.textContent = DATASTUDIO_STATE.catalogOpen ? "−" : "+";
+  }
+
+  renderSelectedTagsList();
+}
+
+function isTagSelected(tagOrPath) {
+  const key = selectedTagKey(tagOrPath);
+  if (!key || key.endsWith(":")) return false;
+  return DATASTUDIO_STATE.selectedTags.some((t) => selectedTagKey(t) === key);
+}
+
+function addSelectedTag(tag) {
+  if (!tag || !dsSafeTrim(tag.pathname)) return false;
+  if (isTagSelected(tag)) return true;
+  if (DATASTUDIO_STATE.selectedTags.length >= 50) {
+    window.alert("Você pode selecionar no máximo 50 medidas.");
+    return false;
+  }
+  DATASTUDIO_STATE.selectedTags.push(tag);
+  DATASTUDIO_STATE.forceHeroState = false;
+  updateDataStudioStageUI();
+  return true;
+}
+
+function removeSelectedTag(tagOrPath) {
+  const key = selectedTagKey(tagOrPath);
+  DATASTUDIO_STATE.selectedTags = DATASTUDIO_STATE.selectedTags.filter(
+    (t) => selectedTagKey(t) !== key
+  );
+  updateDataStudioStageUI();
+}
+
+function updateSelectedTagsCounter() {
+  const count = String(DATASTUDIO_STATE.selectedTags.length);
+  ["dsSelectedCount", "dsSelectedCountTop", "dsSelectedCountBottom"].forEach((id) => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = count;
+  });
+}
+
+function renderDataStudioTagsTable(tags) {
+  const { tagsTableBody } = getDataStudioUIElements();
+  if (!tagsTableBody) return;
+
+  const rows = Array.isArray(tags) ? tags : [];
+  tagsTableBody.innerHTML = "";
+
+  if (!rows.length) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = '<td colspan="8" style="text-align:center;opacity:.8;">Nenhuma medida encontrada</td>';
+    tagsTableBody.appendChild(tr);
+    updateSelectedTagsCounter();
+    return;
+  }
+
+  rows.forEach((tag) => {
+    const pathname = dsSafeTrim(tag?.pathname || tag?.path_name || tag?.tag);
+    if (!pathname) return;
+
+    const tr = document.createElement("tr");
+    tr.classList.add("ds-table-row-clickable");
+    const checked = isTagSelected(tag) ? "checked" : "";
+    tr.innerHTML = `
+      <td><input type="checkbox" data-ds-pathname="${pathname.replaceAll('"', '&quot;')}" ${checked}></td>
+      <td>${valueOrDash(pathname)}</td>
+      <td>${valueOrDash(tag?.description)}</td>
+      <td>${valueOrDash(tag?.source)}</td>
+      <td>${valueOrDash(tag?.data_kind)}</td>
+      <td>${valueOrDash(tag?.unit)}</td>
+      <td>${valueOrDash(tag?.context)}</td>
+      <td>${valueOrDash(tag?.power_plant_id)}</td>
+    `;
+
+    const checkbox = tr.querySelector("input[type='checkbox']");
+    const syncRowSelectionState = () => {
+      tr.classList.toggle("is-selected", Boolean(checkbox?.checked));
+    };
+
+    const applySelection = (checkedState) => {
+      if (checkedState) {
+        const ok = addSelectedTag({
+          id: tag?.id ?? null,
+          tag_id: tag?.id ?? null,
+          device_type: tag?.device_type ?? null,
+          device_id: tag?.device_id ?? null,
+          point_name: tag?.point_name ?? null,
+          power_plant_id: tag?.power_plant_id ?? null,
+          context: dsSafeTrim(tag?.context) || "PLANT",
+          pathname,
+          source: dsSafeTrim(tag?.source) || "historico",
+          data_kind: dsSafeTrim(tag?.data_kind) || "analog",
+          unit: tag?.unit ?? null,
+          description: tag?.description ?? null
+        });
+        if (!ok && checkbox) checkbox.checked = false;
+      } else {
+        removeSelectedTag(tag);
+      }
+      updateSelectedTagsCounter();
+      syncRowSelectionState();
+    };
+
+    checkbox?.addEventListener("change", (ev) => {
+      applySelection(Boolean(ev.target.checked));
+    });
+
+    tr.addEventListener("click", (ev) => {
+      if (ev.target?.closest("input, button, a")) return;
+      if (!checkbox) return;
+      checkbox.checked = !checkbox.checked;
+      applySelection(Boolean(checkbox.checked));
+    });
+
+    syncRowSelectionState();
+
+    tagsTableBody.appendChild(tr);
+  });
+
+  updateSelectedTagsCounter();
+  updateDataStudioStageUI();
+}
+
+
+function setDataStudioLoadingTags(isLoading) {
+  DATASTUDIO_STATE.loadingTags = Boolean(isLoading);
+  const { openTagsBtn, tagsApplyBtn, tagsClearBtn } = getDataStudioUIElements();
+  if (openTagsBtn) {
+    openTagsBtn.disabled = DATASTUDIO_STATE.loadingTags;
+    openTagsBtn.textContent = DATASTUDIO_STATE.loadingTags
+      ? "Carregando..."
+      : (DATASTUDIO_STATE.catalogOpen ? "−" : "+");
+  }
+  if (tagsApplyBtn) tagsApplyBtn.disabled = DATASTUDIO_STATE.loadingTags;
+  if (tagsClearBtn) tagsClearBtn.disabled = DATASTUDIO_STATE.loadingTags;
+}
+
+function setDataStudioSavingSelection(isLoading) {
+  DATASTUDIO_STATE.savingSelection = Boolean(isLoading);
+  const { saveSelectionBtn } = getDataStudioUIElements();
+  if (!saveSelectionBtn) return;
+  saveSelectionBtn.disabled = DATASTUDIO_STATE.savingSelection;
+  saveSelectionBtn.textContent = DATASTUDIO_STATE.savingSelection ? "Salvando..." : "Salvar seleção";
+}
+
+function setDataStudioLoadingSeries(isLoading) {
+  DATASTUDIO_STATE.loadingSeries = Boolean(isLoading);
+  const { loadSeriesBtn } = getDataStudioUIElements();
+  if (!loadSeriesBtn) return;
+  loadSeriesBtn.disabled = DATASTUDIO_STATE.loadingSeries;
+  loadSeriesBtn.textContent = DATASTUDIO_STATE.loadingSeries ? "Carregando..." : "Carregar séries";
+}
+
+function getDataStudioMainFilters() {
+  const { startDateInput, endDateInput, plantSelect } = getDataStudioUIElements();
+
+  const rawStart = dsSafeTrim(startDateInput?.value || DATASTUDIO_STATE.startDate);
+  const rawEnd = dsSafeTrim(endDateInput?.value || DATASTUDIO_STATE.endDate);
+  const plantRaw = dsSafeTrim(plantSelect?.value || DATASTUDIO_STATE.selectedPlantId);
+
+  const start_ts_raw = dsIsoStartOfDay(rawStart);
+  const end_ts_raw = dsIsoEndOfDay(rawEnd);
+  const { startISO, endISO } = dsClampRange(start_ts_raw, end_ts_raw);
+
+  return {
+    power_plant_id: plantRaw ? Number(plantRaw) : null,
+    start_ts: startISO,
+    end_ts: endISO
+  };
+}
+
+function buildDataStudioSelectionPayload() {
+  const filters = getDataStudioMainFilters();
+
+  if (!filters.power_plant_id) {
+    throw new Error("Selecione uma usina para continuar.");
+  }
+  if (!filters.start_ts || !filters.end_ts) {
+    throw new Error("Preencha um período válido (data inicial e final).");
+  }
+  if (!Array.isArray(DATASTUDIO_STATE.selectedTags) || !DATASTUDIO_STATE.selectedTags.length) {
+    throw new Error("Selecione ao menos uma medida.");
+  }
+  if (DATASTUDIO_STATE.selectedTags.length > 50) {
+    throw new Error("Limite de 50 medidas excedido.");
+  }
+
+  const allowedAgg = new Set(["none", "avg", "integral", "median", "max", "sum"]);
+  const allowedPeriod = new Set(["5min", "daily", "weekly", "monthly", "yearly", "hdaily", "hweekly", "hmonthly", "hyearly"]);
+
+  const aggregationType = allowedAgg.has(DATASTUDIO_STATE.aggregationType)
+    ? DATASTUDIO_STATE.aggregationType
+    : "avg";
+  const consolidationPeriod = allowedPeriod.has(DATASTUDIO_STATE.consolidationPeriod)
+    ? DATASTUDIO_STATE.consolidationPeriod
+    : "5min";
+
+  const invalidTag = DATASTUDIO_STATE.selectedTags.find(
+    (t) => Number(t?.power_plant_id) !== Number(filters.power_plant_id)
+  );
+
+  if (invalidTag) {
+    throw new Error("Há medidas selecionadas de outra usina. Limpe a seleção e selecione novamente.");
+  }
+
+  const items = DATASTUDIO_STATE.selectedTags.slice(0, 50).map((t, idx) => ({
+    tag_id: t?.id ?? t?.tag_id ?? null,
+    pathname: dsSafeTrim(t.pathname),
+    display_type: "line",
+    series_order: idx + 1,
+    source: dsSafeTrim(t.source) || "historico",
+    data_kind: dsSafeTrim(t.data_kind) || "analog",
+    unit: t.unit ?? null,
+    label: dsSafeTrim(t.point_name || t.description || t.pathname) || null
+  }));
+
+  return {
+    selection_name: "Seleção Data Studio",
+    power_plant_id: filters.power_plant_id,
+    start_ts: filters.start_ts,
+    end_ts: filters.end_ts,
+    timezone: "America/Fortaleza",
+    historico_aggregation_default:
+      DATASTUDIO_STATE.aggregationMode === "historico" ? aggregationType : "avg",
+    consolidado_period_default:
+      DATASTUDIO_STATE.aggregationMode === "consolidado" ? consolidationPeriod : "5min",
+    items
+  };
+}
+
+function updateDataStudioContextInfo() {
+  const { contextInfo } = getDataStudioUIElements();
+  if (!contextInfo) return;
+
+  const selectedContext = dsSafeTrim(DATASTUDIO_STATE.selectedContext) || "all";
+  if (selectedContext && selectedContext !== "all") {
+    contextInfo.textContent = `Exibindo medidas de: ${selectedContext}`;
+    contextInfo.classList.remove("hidden");
+  } else {
+    contextInfo.textContent = "Exibindo medidas de: todos contextos";
+    contextInfo.classList.remove("hidden");
+  }
+}
+
+function updateDataStudioExportButton() {
+  const { exportBtn } = getDataStudioUIElements();
+  if (!exportBtn) return;
+  exportBtn.disabled = !DATASTUDIO_STATE.selectionId;
+}
+
+async function exportDataStudioSelection() {
+  if (!DATASTUDIO_STATE.selectionId) {
+    window.alert("Salve uma seleção antes de exportar.");
+    return;
+  }
+
+  const { exportBtn } = getDataStudioUIElements();
+  const oldHtml = exportBtn ? exportBtn.innerHTML : "";
+
+  try {
+    if (exportBtn) {
+      exportBtn.disabled = true;
+      exportBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i>';
+    }
+
+    const url = `${API_BASE}/datastudio/export?selection_id=${encodeURIComponent(DATASTUDIO_STATE.selectionId)}`;
+
+    const user = JSON.parse(localStorage.getItem("user") || "{}");
+    const headers = {};
+    if (user.customer_id) headers["X-Customer-Id"] = user.customer_id;
+    if (user.is_superuser === true) headers["X-Is-Superuser"] = "true";
+
+    const res = await fetch(url, { headers });
+
+    if (!res.ok) {
+      const txt = await res.text().catch(() => "");
+      throw new Error(`Falha ao exportar (${res.status}) ${txt}`);
+    }
+
+    const blob = await res.blob();
+
+    let filename = `datastudio_export_${DATASTUDIO_STATE.selectionId}.csv`;
+    const contentDisposition = res.headers.get("Content-Disposition");
+    const match = contentDisposition && contentDisposition.match(/filename="([^"]+)"/i);
+    if (match && match[1]) {
+      filename = match[1];
+    }
+
+    const blobUrl = window.URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = blobUrl;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.URL.revokeObjectURL(blobUrl);
+  } catch (err) {
+    console.error("[DataStudio] erro ao exportar CSV:", err);
+    window.alert(`Não foi possível exportar o CSV: ${err.message || err}`);
+  } finally {
+    if (exportBtn) {
+      exportBtn.innerHTML = oldHtml || '<i class="fa-solid fa-file-csv"></i>';
+      updateDataStudioExportButton();
+    }
+  }
+}
+
+function zoomDataStudioChart(factor = 1.2) {
+  if (!DATASTUDIO_CHART || typeof DATASTUDIO_CHART.zoom !== "function") return;
+
+  try {
+    DATASTUDIO_CHART.zoom({ x: factor, y: factor });
+  } catch (err) {
+    console.warn("[DataStudio] erro ao aplicar zoom:", err);
+  }
+}
+
+function resetDataStudioChartZoom() {
+  if (!DATASTUDIO_CHART || typeof DATASTUDIO_CHART.resetZoom !== "function") return;
+
+  try {
+    DATASTUDIO_CHART.resetZoom();
+  } catch (err) {
+    console.warn("[DataStudio] erro ao resetar zoom:", err);
+  }
+}
+
+function openDataStudioCatalogInline({ resetFilters = false } = {}) {
+  const { plantSelect, startDateInput, endDateInput } = getDataStudioUIElements();
+
+  DATASTUDIO_STATE.startDate = dsSafeTrim(startDateInput?.value);
+  DATASTUDIO_STATE.endDate = dsSafeTrim(endDateInput?.value);
+  DATASTUDIO_STATE.selectedPlantId = dsSafeTrim(plantSelect?.value) || null;
+
+  const filters = getDataStudioMainFilters();
+  if (!filters.power_plant_id || !filters.start_ts || !filters.end_ts) {
+    window.alert("Selecione usina e período válido antes de abrir as medidas.");
+    return;
+  }
+
+  if (resetFilters) {
+    DATASTUDIO_STATE.selectedDataKind = "all";
+    DATASTUDIO_STATE.selectedSource = "all";
+    DATASTUDIO_STATE.selectedContext = "all";
+    DATASTUDIO_STATE.searchText = "";
+
+    const { dataKindSelect, sourceSelect, contextSelect, searchInput } = getDataStudioUIElements();
+    if (dataKindSelect) dataKindSelect.value = "all";
+    if (sourceSelect) sourceSelect.value = "all";
+    if (contextSelect) contextSelect.value = "all";
+    if (searchInput) searchInput.value = "";
+  }
+
+  DATASTUDIO_STATE.catalogOpen = true;
+  DATASTUDIO_STATE.forceHeroState = false;
+  updateDataStudioStageUI();
+  updateDataStudioContextInfo();
+  fetchDataStudioTags();
+}
+
+function toggleDataStudioCatalogInline() {
+  if (!DATASTUDIO_STATE.catalogOpen) {
+    openDataStudioCatalogInline({ resetFilters: !DATASTUDIO_STATE.availableTags.length });
+    return;
+  }
+  DATASTUDIO_STATE.catalogOpen = false;
+  updateDataStudioStageUI();
+}
+
+function confirmDataStudioCatalogSelection() {
+  if (!Array.isArray(DATASTUDIO_STATE.selectedTags) || !DATASTUDIO_STATE.selectedTags.length) {
+    window.alert("Selecione ao menos uma medida antes de confirmar.");
+    return;
+  }
+
+  DATASTUDIO_STATE.catalogConfirmed = true;
+  DATASTUDIO_STATE.forceHeroState = false;
+  DATASTUDIO_STATE.catalogOpen = false;
+  updateDataStudioStageUI();
+
+  setTimeout(() => {
+    const { bulkPanel } = getDataStudioUIElements();
+    bulkPanel?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, 120);
+}
+
+async function fetchDataStudioTags() {
+  const { plantSelect, dataKindSelect, sourceSelect, contextSelect, searchInput } = getDataStudioUIElements();
+
+  const plantId = dsSafeTrim(plantSelect?.value || DATASTUDIO_STATE.selectedPlantId);
+  const dataKind = dsSafeTrim(dataKindSelect?.value || DATASTUDIO_STATE.selectedDataKind);
+  const source = dsSafeTrim(sourceSelect?.value || DATASTUDIO_STATE.selectedSource);
+  const context = dsSafeTrim(contextSelect?.value || DATASTUDIO_STATE.selectedContext);
+  const q = dsSafeTrim(searchInput?.value || DATASTUDIO_STATE.searchText);
+
+  DATASTUDIO_STATE.selectedPlantId = plantId || null;
+  DATASTUDIO_STATE.selectedDataKind = dataKind || "all";
+  DATASTUDIO_STATE.selectedSource = source || "all";
+  DATASTUDIO_STATE.selectedContext = context || "all";
+  DATASTUDIO_STATE.searchText = q;
+
+  const params = new URLSearchParams();
+  if (plantId) params.set("plant_id", plantId);
+  if (dataKind && dataKind !== "all") params.set("data_kind", dataKind);
+  if (source && source !== "all") params.set("source", source);
+  if (q) params.set("q", q);
+  params.set("limit", "1000");
+
+  const normalizeTagsResponse = (parsed) => {
+    if (Array.isArray(parsed)) return parsed;
+    if (Array.isArray(parsed?.items)) return parsed.items;
+    if (Array.isArray(parsed?.data)) return parsed.data;
+    return [];
+  };
+
+  setDataStudioLoadingTags(true);
+
+  try {
+    const qs = params.toString();
+    const res = await apiFetch(`/datastudio/tags${qs ? `?${qs}` : ""}`);
+    if (!res.ok) throw new Error(`Falha ao buscar medidas (${res.status})`);
+    const data = await res.json();
+    const parsed = dsNormalizeApiBody(data);
+
+    const allTags = normalizeTagsResponse(parsed);
+    console.log("[DataStudio] TAGS RECEBIDAS:", allTags.length);
+
+    populateDataStudioContextSelect(allTags);
+
+    const contextAfterPopulate = dsSafeTrim(contextSelect?.value || DATASTUDIO_STATE.selectedContext || "all");
+    DATASTUDIO_STATE.selectedContext = contextAfterPopulate || "all";
+
+    const filteredTags = (contextAfterPopulate && contextAfterPopulate !== "all")
+      ? allTags.filter((tag) => dsContextMatches(tag?.context, contextAfterPopulate))
+      : allTags;
+
+    DATASTUDIO_STATE.availableTags = filteredTags;
+    updateDataStudioContextInfo();
+    renderDataStudioTagsTable(filteredTags);
+  } catch (err) {
+    console.error("[DataStudio] erro ao buscar tags:", err);
+    DATASTUDIO_STATE.availableTags = [];
+    updateDataStudioContextInfo();
+    renderDataStudioTagsTable([]);
+  } finally {
+    setDataStudioLoadingTags(false);
+  }
+}
+
+async function saveDataStudioSelection() {
+  setDataStudioSavingSelection(true);
+  try {
+    const payload = buildDataStudioSelectionPayload();
+    const res = await apiFetch("/datastudio/selection", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+
+    const data = await res.json().catch(() => ({}));
+    const parsed = dsNormalizeApiBody(data);
+
+    if (!res.ok) {
+      const msg = parsed?.message || `Falha ao salvar seleção (${res.status})`;
+      throw new Error(msg);
+    }
+
+    const selectionId = parsed?.selection_id ?? parsed?.id ?? parsed?.selectionId ?? null;
+    DATASTUDIO_STATE.selectionId = selectionId;
+
+    const { loadSeriesBtn } = getDataStudioUIElements();
+    if (loadSeriesBtn) loadSeriesBtn.disabled = false;
+    updateDataStudioExportButton();
+
+    DATASTUDIO_STATE.forceHeroState = false;
+    updateDataStudioStageUI();
+    window.alert(selectionId ? `Seleção salva! ID ${selectionId}` : "Seleção salva com sucesso.");
+
+    if (selectionId) {
+      await fetchDataStudioSeriesBySelection();
+    }
+  } catch (err) {
+    console.error("[DataStudio] erro ao salvar seleção:", err);
+    window.alert(`Não foi possível salvar a seleção: ${err.message || err}`);
+  } finally {
+    setDataStudioSavingSelection(false);
+  }
+}
+
+async function fetchDataStudioSeriesBySelection() {
+  if (!DATASTUDIO_STATE.selectionId) {
+    window.alert("Salve uma seleção antes de carregar séries.");
+    return;
+  }
+
+  setDataStudioLoadingSeries(true);
+  try {
+    const params = new URLSearchParams({ selection_id: String(DATASTUDIO_STATE.selectionId) });
+    const res = await apiFetch(`/datastudio/series?${params.toString()}`);
+    if (!res.ok) throw new Error(`Falha ao carregar séries (${res.status})`);
+
+    const data = await res.json();
+    const parsed = dsNormalizeApiBody(data);
+    DATASTUDIO_STATE.chartData = parsed;
+    updateDataStudioStageUI();
+    renderDataStudioChart(parsed);
+  } catch (err) {
+    console.error("[DataStudio] erro ao carregar séries:", err);
+    window.alert(`Não foi possível carregar séries: ${err.message || err}`);
+    renderDataStudioChart(null);
+  } finally {
+    setDataStudioLoadingSeries(false);
+  }
+}
+
+function renderDataStudioChart(seriesPayload) {
+  const { chartCanvas } = getDataStudioUIElements();
+  if (!chartCanvas || typeof Chart === "undefined") return;
+
+  if (DATASTUDIO_CHART) {
+    DATASTUDIO_CHART.destroy();
+    DATASTUDIO_CHART = null;
+  }
+
+  const labels = [];
+  const datasets = [];
+
+  const seriesList = Array.isArray(seriesPayload?.series)
+    ? seriesPayload.series
+    : (Array.isArray(seriesPayload?.items) ? seriesPayload.items : []);
+
+  const scales = {
+    x: { ticks: { color: "#9fb0bf" }, grid: { color: "rgba(255,255,255,.08)" } },
+    y: { type: "linear", position: "left", ticks: { color: "#9fb0bf" }, grid: { color: "rgba(255,255,255,.08)" } }
+  };
+  const axisByUnit = new Map([["_default_", "y"]]);
+
+  if (seriesList.length) {
+    const palette = ["#4da3ff", "#39e58c", "#ffd84d", "#ff8a65", "#b39ddb", "#80cbc4"];
+    seriesList.forEach((serie, idx) => {
+      const points = Array.isArray(serie?.points)
+        ? serie.points
+        : (Array.isArray(serie?.data) ? serie.data : []);
+
+      if (!labels.length) {
+        points.forEach((pt) => {
+          const ts = pt?.ts || pt?.timestamp || pt?.x;
+          labels.push(ts ? new Date(ts).toLocaleString("pt-BR") : "");
+        });
+      }
+
+      const unitKey = dsSafeTrim(serie?.unit || "") || "_default_";
+      if (!axisByUnit.has(unitKey)) {
+        const axisIdx = axisByUnit.size;
+        const axisId = axisIdx === 1 ? "y1" : `y${axisIdx}`;
+        axisByUnit.set(unitKey, axisId);
+        scales[axisId] = {
+          type: "linear",
+          position: axisIdx % 2 === 0 ? "left" : "right",
+          grid: { drawOnChartArea: false, color: "rgba(255,255,255,.08)" },
+          ticks: { color: "#9fb0bf" }
+        };
+      }
+
+      datasets.push({
+        label: serie?.label || serie?.pathname || `Série ${idx + 1}`,
+        data: points.map((pt) => Number(pt?.value ?? pt?.y ?? null)),
+        borderColor: palette[idx % palette.length],
+        backgroundColor: palette[idx % palette.length],
+        borderWidth: 2,
+        tension: 0.25,
+        pointRadius: 0,
+        pointHoverRadius: 6,
+        pointHitRadius: 16,
+        fill: false,
+        yAxisID: axisByUnit.get(unitKey) || "y"
+      });
+    });
+  } else {
+    labels.push("Sem dados");
+    datasets.push({
+      label: "Data Studio",
+      data: [0],
+      borderColor: "#4da3ff",
+      backgroundColor: "#4da3ff",
+      borderWidth: 2,
+      tension: 0.25,
+      pointRadius: 0,
+      pointHoverRadius: 6,
+      pointHitRadius: 16,
+      fill: false,
+      yAxisID: "y"
+    });
+  }
+
+  DATASTUDIO_CHART = new Chart(chartCanvas.getContext("2d"), {
+    type: "line",
+    data: { labels, datasets },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: {
+        mode: "index",
+        intersect: false,
+        axis: "x"
+      },
+      hover: {
+        mode: "index",
+        intersect: false
+      },
+      elements: {
+        point: {
+          radius: 0,
+          hoverRadius: 6,
+          hitRadius: 16
+        },
+        line: {
+          borderWidth: 2
+        }
+      },
+      plugins: {
+        legend: { labels: { color: "#dbe7ef" } },
+        tooltip: {
+          enabled: true,
+          mode: "index",
+          intersect: false,
+          displayColors: true,
+          backgroundColor: "rgba(6, 18, 14, 0.96)",
+          borderColor: "rgba(42,255,123,.22)",
+          borderWidth: 1,
+          titleColor: "#dbe7ef",
+          bodyColor: "#dbe7ef",
+          padding: 10,
+          caretSize: 6
+        },
+        zoom: {
+          limits: {
+            x: { minRange: 5 },
+            y: { minRange: 1 }
+          },
+          pan: {
+            enabled: true,
+            mode: "xy"
+          },
+          zoom: {
+            wheel: {
+              enabled: true
+            },
+            pinch: {
+              enabled: true
+            },
+            drag: {
+              enabled: false
+            },
+            mode: "xy"
+          }
+        }
+      },
+      scales
+    }
+  });
+}
+
+
+function populateDataStudioPlantSelect(plants) {
+  const { plantSelect } = getDataStudioUIElements();
+  if (!plantSelect) return;
+
+  const list = Array.isArray(plants) ? plants : [];
+  const currentValue =
+  dsSafeTrim(plantSelect.value) ||
+  dsSafeTrim(DATASTUDIO_STATE.selectedPlantId) ||
+  "";
+
+  const nextOptions = [
+    { value: "", text: "Selecione uma usina" },
+    ...list
+      .map((p) => {
+        const id = p.power_plant_id ?? p.plant_id ?? p.id;
+        const name = p.power_plant_name ?? p.name ?? `Usina ${id}`;
+        return id == null ? null : { value: String(id), text: String(name) };
+      })
+      .filter(Boolean)
+  ];
+
+  const currentSerialized = [...plantSelect.options].map(o => `${o.value}|${o.textContent}`).join("||");
+  const nextSerialized = nextOptions.map(o => `${o.value}|${o.text}`).join("||");
+
+  if (currentSerialized !== nextSerialized) {
+    plantSelect.innerHTML = "";
+    nextOptions.forEach(({ value, text }) => {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = text;
+      plantSelect.appendChild(option);
+    });
+  }
+
+  if (currentValue && nextOptions.some(o => o.value === currentValue)) {
+    plantSelect.value = currentValue;
+  } else if (!plantSelect.value) {
+    plantSelect.value = "";
+  }
+
+  DATASTUDIO_STATE.selectedPlantId = dsSafeTrim(plantSelect.value) || null;
+
+  console.log("[DS] plant options:", [...plantSelect.options].map(o => ({
+    value: o.value,
+    text: o.textContent
+  })));
+}
+
+function syncDataStudioAggregationUI() {
+  const { modeSelect, aggregationSelect, consolidationSelect } = getDataStudioUIElements();
+  if (modeSelect) modeSelect.value = DATASTUDIO_STATE.aggregationMode;
+  if (aggregationSelect) {
+    aggregationSelect.value = DATASTUDIO_STATE.aggregationType;
+    aggregationSelect.disabled = DATASTUDIO_STATE.aggregationMode !== "historico";
+  }
+  if (consolidationSelect) {
+    consolidationSelect.value = DATASTUDIO_STATE.consolidationPeriod;
+    consolidationSelect.disabled = DATASTUDIO_STATE.aggregationMode !== "consolidado";
+  }
+}
+
+function markDataStudioSeriesDirty() {
+  DATASTUDIO_STATE.selectionId = null;
+  DATASTUDIO_STATE.chartData = null;
+
+  const { loadSeriesBtn, saveSelectionBtn } = getDataStudioUIElements();
+
+  if (loadSeriesBtn) {
+    loadSeriesBtn.disabled = true;
+    loadSeriesBtn.textContent = "Carregar séries";
+  }
+
+  if (saveSelectionBtn) {
+    saveSelectionBtn.disabled = false;
+  }
+
+  renderDataStudioChart(null);
+  updateDataStudioExportButton();
+}
+
+function formatDateInputValue(dateObj) {
+  const y = dateObj.getFullYear();
+  const m = String(dateObj.getMonth() + 1).padStart(2, "0");
+  const d = String(dateObj.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+function autoAdjustDataStudioDateRangeByMode() {
+  const { startDateInput, endDateInput } = getDataStudioUIElements();
+  if (!startDateInput || !endDateInput) return;
+
+  const now = new Date();
+  const start = new Date(now);
+
+  const mode = dsSafeTrim(DATASTUDIO_STATE.aggregationMode || "historico");
+  const period = dsSafeTrim(DATASTUDIO_STATE.consolidationPeriod || "5min");
+
+  if (mode === "historico") {
+    start.setDate(now.getDate() - 7);
+  } else {
+    switch (period) {
+      case "5min":
+        start.setDate(now.getDate() - 1);
+        break;
+      case "daily":
+      case "hdaily":
+        start.setDate(now.getDate() - 30);
+        break;
+      case "weekly":
+      case "hweekly":
+        start.setDate(now.getDate() - 90);
+        break;
+      case "monthly":
+      case "hmonthly":
+        start.setMonth(now.getMonth() - 12);
+        break;
+      case "yearly":
+      case "hyearly":
+        start.setFullYear(now.getFullYear() - 5);
+        break;
+      default:
+        start.setDate(now.getDate() - 30);
+        break;
+    }
+  }
+
+  const startStr = formatDateInputValue(start);
+  const endStr = formatDateInputValue(now);
+
+  startDateInput.value = startStr;
+  endDateInput.value = endStr;
+
+  DATASTUDIO_STATE.startDate = startStr;
+  DATASTUDIO_STATE.endDate = endStr;
+}
+
+function wireDataStudioOnce() {
+  if (DATASTUDIO_STATE.wired) return;
+
+  const ui = getDataStudioUIElements();
+  if (!ui.openTagsBtn && !ui.startDateInput && !ui.endDateInput) return;
+
+  DATASTUDIO_STATE.wired = true;
+
+  const now = new Date();
+  const week = new Date();
+  week.setDate(now.getDate() - 7);
+  const asDate = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+
+  if (ui.startDateInput && !ui.startDateInput.value) ui.startDateInput.value = asDate(week);
+  if (ui.endDateInput && !ui.endDateInput.value) ui.endDateInput.value = asDate(now);
+
+  DATASTUDIO_STATE.startDate = dsSafeTrim(ui.startDateInput?.value);
+  DATASTUDIO_STATE.endDate = dsSafeTrim(ui.endDateInput?.value);
+
+  autoAdjustDataStudioDateRangeByMode();
+
+  ui.startDateInput?.addEventListener("change", (e) => {
+    DATASTUDIO_STATE.startDate = dsSafeTrim(e.target.value);
+    DATASTUDIO_STATE.catalogConfirmed = false;
+    markDataStudioSeriesDirty();
+  });
+
+  ui.endDateInput?.addEventListener("change", (e) => {
+    DATASTUDIO_STATE.endDate = dsSafeTrim(e.target.value);
+    DATASTUDIO_STATE.catalogConfirmed = false;
+    markDataStudioSeriesDirty();
+  });
+
+  ui.plantSelect?.addEventListener("change", (e) => {
+    const nextPlantId = dsSafeTrim(e.target.value) || null;
+    DATASTUDIO_STATE.selectedPlantId = nextPlantId;
+
+    DATASTUDIO_STATE.selectedTags = [];
+    DATASTUDIO_STATE.availableTags = [];
+    DATASTUDIO_STATE.selectionId = null;
+    DATASTUDIO_STATE.chartData = null;
+    DATASTUDIO_STATE.selectedContext = "all";
+    DATASTUDIO_STATE.searchText = "";
+
+    if (ui.contextSelect) {
+      ui.contextSelect.innerHTML = "";
+      const opt = document.createElement("option");
+      opt.value = "all";
+      opt.textContent = "Todos contextos";
+      ui.contextSelect.appendChild(opt);
+      ui.contextSelect.value = "all";
+    }
+
+    if (ui.searchInput) ui.searchInput.value = "";
+
+    renderDataStudioTagsTable([]);
+    renderDataStudioChart(null);
+    updateSelectedTagsCounter();
+    updateDataStudioExportButton();
+    updateDataStudioStageUI();
+  });
+
+  ui.dataKindSelect?.addEventListener("change", (e) => {
+    DATASTUDIO_STATE.selectedDataKind = dsSafeTrim(e.target.value) || "all";
+  });
+
+  ui.sourceSelect?.addEventListener("change", (e) => {
+    DATASTUDIO_STATE.selectedSource = dsSafeTrim(e.target.value) || "all";
+  });
+
+  ui.contextSelect?.addEventListener("change", (e) => {
+    DATASTUDIO_STATE.selectedContext = dsSafeTrim(e.target.value) || "all";
+    updateDataStudioContextInfo();
+    fetchDataStudioTags();
+  });
+
+  ui.searchInput?.addEventListener("input", (e) => {
+    DATASTUDIO_STATE.searchText = dsSafeTrim(e.target.value);
+  });
+
+  ui.modeSelect?.addEventListener("change", (e) => {
+    DATASTUDIO_STATE.aggregationMode = dsSafeTrim(e.target.value) || "historico";
+
+    syncDataStudioAggregationUI();
+    autoAdjustDataStudioDateRangeByMode();
+    markDataStudioSeriesDirty();
+  });
+
+  ui.aggregationSelect?.addEventListener("change", (e) => {
+    DATASTUDIO_STATE.aggregationType = dsSafeTrim(e.target.value) || "avg";
+    markDataStudioSeriesDirty();
+  });
+
+  ui.consolidationSelect?.addEventListener("change", (e) => {
+    DATASTUDIO_STATE.consolidationPeriod = dsSafeTrim(e.target.value) || "5min";
+
+    autoAdjustDataStudioDateRangeByMode();
+    markDataStudioSeriesDirty();
+  });
+
+  ui.openTagsBtn?.addEventListener("click", toggleDataStudioCatalogInline);
+  ui.tagsApplyBtn?.addEventListener("click", fetchDataStudioTags);
+  ui.confirmSelectionBtn?.addEventListener("click", confirmDataStudioCatalogSelection);
+
+  ui.tagsClearBtn?.addEventListener("click", () => {
+    DATASTUDIO_STATE.selectedTags = [];
+    DATASTUDIO_STATE.selectionId = null;
+    DATASTUDIO_STATE.chartData = null;
+    DATASTUDIO_STATE.forceHeroState = false;
+    DATASTUDIO_STATE.catalogConfirmed = false;
+    DATASTUDIO_STATE.catalogOpen = true;
+    renderDataStudioTagsTable(DATASTUDIO_STATE.availableTags);
+    updateDataStudioExportButton();
+    updateDataStudioStageUI();
+  });
+
+  ui.saveSelectionBtn?.addEventListener("click", saveDataStudioSelection);
+  ui.loadSeriesBtn?.addEventListener("click", async () => {
+    await saveDataStudioSelection();
+  });
+  ui.exportBtn?.addEventListener("click", exportDataStudioSelection);
+  ui.zoomInBtn?.addEventListener("click", () => zoomDataStudioChart(1.2));
+  ui.zoomOutBtn?.addEventListener("click", () => zoomDataStudioChart(0.8));
+  ui.zoomResetBtn?.addEventListener("click", resetDataStudioChartZoom);
+  ui.backToHeroBtn?.addEventListener("click", () => {
+    DATASTUDIO_STATE.forceHeroState = true;
+    DATASTUDIO_STATE.catalogConfirmed = false;
+    DATASTUDIO_STATE.catalogOpen = true;
+    updateDataStudioStageUI();
+    setTimeout(() => {
+      const { catalogSection } = getDataStudioUIElements();
+      catalogSection?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 120);
+  });
+
+  syncDataStudioAggregationUI();
+  updateSelectedTagsCounter();
+  updateDataStudioExportButton();
+  updateDataStudioStageUI();
+}
+
+// =============================================================================
 // NAVEGAÇÃO E INICIALIZAÇÃO
 // =============================================================================
 
@@ -1211,7 +2378,8 @@ const views = {
   overview: document.getElementById("overviewView"),
   alarms: document.getElementById("alarmsView"),
   events: document.getElementById("eventsView"),
-  diagram: document.getElementById("diagramView")
+  diagram: document.getElementById("diagramView"),
+  datastudio: document.getElementById("dataStudioView")
 };
 
 function showView(viewName) {
@@ -1223,7 +2391,13 @@ function showView(viewName) {
   }
 
   document.querySelectorAll(".sidebar-btn").forEach(b => b.classList.remove("active"));
-  const activeBtn = document.getElementById(`btn${viewName.charAt(0).toUpperCase()}${viewName.slice(1)}`);
+  const btnMap = {
+    overview: "btnOverview",
+    alarms: "btnAlarms",
+    events: "btnEvents",
+    datastudio: "btnDataStudio"
+  };
+  const activeBtn = document.getElementById(btnMap[viewName]);
   if (activeBtn) activeBtn.classList.add("active");
 
   const topSummary = document.getElementById("topSummary");
@@ -1235,6 +2409,12 @@ function showView(viewName) {
     startEventsAutoRefresh();
   } else {
     stopEventsAutoRefresh();
+  }
+
+  if (viewName === "datastudio") {
+    wireDataStudioOnce();
+    populateDataStudioPlantSelect(lastValidPlants);
+    syncDataStudioAggregationUI();
   }
 }
 
@@ -1249,6 +2429,7 @@ document.getElementById("btnAlarms")?.addEventListener("click", async () => {
 });
 
 document.getElementById("btnEvents")?.addEventListener("click", () => showView("events"));
+document.getElementById("btnDataStudio")?.addEventListener("click", () => showView("datastudio"));
 
 document.querySelectorAll(".tab-btn").forEach(btn => {
   btn.addEventListener("click", async () => {
@@ -1280,65 +2461,73 @@ async function refreshVisibleViewData() {
   }
 }
 
+
 async function refreshDashboard() {
+  let plants = [];
+  let alarms = [];
+
   try {
-    const [plants, alarms] = await Promise.all([
-      fetchPlants(),
-      fetchActiveAlarms()
-    ]);
-    if (Array.isArray(plants) && plants.length > 0) lastValidPlants = plants;
-
-    lastAlarmSeverityByPlant = buildPlantAlarmSeverityMap(alarms);
-
-    if (CURRENT_PLANT_ID == null) {
-      CURRENT_PLANT_ID = loadSelectedPlantId();
+    plants = await fetchPlants();
+    if (Array.isArray(plants) && plants.length > 0) {
+      lastValidPlants = plants;
     }
-
-    if (CURRENT_PLANT_ID == null && lastValidPlants.length) {
-      CURRENT_PLANT_ID = lastValidPlants[0].power_plant_id ?? lastValidPlants[0].plant_id ?? lastValidPlants[0].id;
-      saveSelectedPlantId(CURRENT_PLANT_ID);
-    }
-
-    // ✅ chips globais via endpoint (fonte da verdade)
-    try {
-      const summary = await fetchPlantsSummary();
-      refreshTopChipsGlobalFromSummary(summary);
-    } catch (e) {
-      console.warn("[SUMMARY] falhou, fallback via /plants:", e?.message || e);
-      refreshTopChipsGlobalFromPlants(lastValidPlants);
-    }
-
-    const selected = lastValidPlants.find(
-      p => (p.power_plant_id ?? p.plant_id ?? p.id) === CURRENT_PLANT_ID
-    );
-    if (selected) updateSummaryUI([selected]);
-    else updateSummaryUI(lastValidPlants);
-
-    renderPortfolioTable(lastValidPlants);
-    await refreshVisibleViewData();
   } catch (err) {
-    console.error("Erro ao atualizar dashboard:", err);
-
-    try {
-      const summary = await fetchPlantsSummary();
-      refreshTopChipsGlobalFromSummary(summary);
-    } catch (e) {
-      console.warn("[SUMMARY] falhou, fallback via /plants:", e?.message || e);
-      refreshTopChipsGlobalFromPlants(lastValidPlants);
-    }
-
-    const selected = lastValidPlants.find(
-      p => (p.power_plant_id ?? p.plant_id ?? p.id) === CURRENT_PLANT_ID
-    );
-    if (selected) updateSummaryUI([selected]);
-    else updateSummaryUI(lastValidPlants);
-
-    renderPortfolioTable(lastValidPlants);
-    await refreshVisibleViewData();
+    console.error("Erro ao buscar plantas:", err);
+    plants = lastValidPlants;
   }
+
+  const dsViewEl = document.getElementById("dataStudioView");
+  const dsViewVisible = dsViewEl && !dsViewEl.classList.contains("hidden");
+
+  const dsPlantSelect = document.getElementById("dsPlantSelect");
+  const dsNeedPopulate =
+    !dsPlantSelect ||
+    dsPlantSelect.options.length <= 1;
+
+  if (!dsViewVisible || dsNeedPopulate) {
+    populateDataStudioPlantSelect(lastValidPlants);
+  }
+
+  try {
+    alarms = await fetchActiveAlarms();
+  } catch (err) {
+    console.error("Erro ao buscar alarmes ativos:", err);
+    alarms = [];
+  }
+
+  lastAlarmSeverityByPlant = buildPlantAlarmSeverityMap(alarms);
+
+  if (CURRENT_PLANT_ID == null) {
+    CURRENT_PLANT_ID = loadSelectedPlantId();
+  }
+
+  if (CURRENT_PLANT_ID == null && lastValidPlants.length) {
+    CURRENT_PLANT_ID = lastValidPlants[0].power_plant_id ?? lastValidPlants[0].plant_id ?? lastValidPlants[0].id;
+    saveSelectedPlantId(CURRENT_PLANT_ID);
+  }
+
+  try {
+    const summary = await fetchPlantsSummary();
+    refreshTopChipsGlobalFromSummary(summary);
+  } catch (e) {
+    console.warn("[SUMMARY] falhou, fallback via /plants:", e?.message || e);
+    refreshTopChipsGlobalFromPlants(lastValidPlants);
+  }
+
+  const selected = lastValidPlants.find(
+    p => (p.power_plant_id ?? p.plant_id ?? p.id) === CURRENT_PLANT_ID
+  );
+
+  if (selected) updateSummaryUI([selected]);
+  else updateSummaryUI(lastValidPlants);
+
+  renderPortfolioTable(lastValidPlants);
+  await refreshVisibleViewData();
 }
 
 document.addEventListener("DOMContentLoaded", async () => {
+  wireDataStudioOnce();
+
   const savedView = localStorage.getItem("currentView") || "overview";
   showView(savedView);
 
