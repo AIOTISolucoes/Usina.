@@ -713,7 +713,7 @@ function getInverterDisplayName(inv, fallbackIndex = 0) {
 
 function getInverterSvgModern() {
   return `
-    <svg class="inv-icon" viewBox="0 0 140 140" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    <svg class="inv-icon" viewBox="0 0 140 140" xmlns="http://www.w3.org//svg" aria-hidden="true">
       <defs>
         <linearGradient id="invS" x1="0" y1="0" x2="1" y2="1">
           <stop offset="0" stop-color="rgba(255,255,255,0.35)"/>
@@ -1676,7 +1676,7 @@ function renderDailyChart() {
         yPower: {
           position: "left",
           min: 0,
-          max: 2000,
+          max: 1250,
           ticks: { color: "#39e58c", callback: v => `${v} kW` },
           grid: { color: "rgba(255,255,255,0.05)" }
         },
