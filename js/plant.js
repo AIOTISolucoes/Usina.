@@ -1683,7 +1683,7 @@ function renderDailyChart() {
         yIrr: {
           position: "right",
           min: 0,
-          max: 1200,
+          max: 1250,
           ticks: { color: "#ffd84d", callback: v => `${v} W/m²` },
           grid: { drawOnChartArea: false }
         }
