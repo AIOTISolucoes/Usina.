@@ -713,7 +713,7 @@ function getInverterDisplayName(inv, fallbackIndex = 0) {
 
 function getInverterSvgModern() {
   return `
-    <svg class="inv-icon" viewBox="0 0 140 140" xmlns="http://www.w3.org//svg" aria-hidden="true">
+    <svg class="inv-icon" viewBox="0 0 140 140" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
       <defs>
         <linearGradient id="invS" x1="0" y1="0" x2="1" y2="1">
           <stop offset="0" stop-color="rgba(255,255,255,0.35)"/>
@@ -1604,6 +1604,13 @@ async function refreshDailyChartIfNeeded(force = false) {
       dailyChartInstance.data.labels = DAILY.labels;
       dailyChartInstance.data.datasets[0].data = DAILY.activePower;
       dailyChartInstance.data.datasets[1].data = DAILY.irradiance;
+
+      const yPowerMax = computeDailyPowerAxisMax();
+      if (dailyChartInstance.options?.scales?.yPower) {
+        delete dailyChartInstance.options.scales.yPower.max;
+        dailyChartInstance.options.scales.yPower.suggestedMax = yPowerMax;
+      }
+
       dailyChartInstance.update("none");
     } else {
       renderDailyChart();
@@ -1614,6 +1621,14 @@ async function refreshDailyChartIfNeeded(force = false) {
 // ======================================================
 // GRÁFICO DIÁRIO
 // ======================================================
+function computeDailyPowerAxisMax() {
+  const ratedPower = asNumber(PLANT_STATE.rated_power_kwp, 0);
+  const activeSeries = Array.isArray(DAILY?.activePower) ? DAILY.activePower : [];
+  const activeSeriesMax = Math.max(...activeSeries.map(v => asNumber(v, 0)), 0);
+  const yPowerBase = Math.max(ratedPower, activeSeriesMax, 100);
+  return Math.ceil(yPowerBase * 1.10);
+}
+
 function renderDailyChart() {
   const canvas = document.getElementById("plantMainChart");
   if (!canvas || !DAILY?.labels?.length) return;
@@ -1633,6 +1648,8 @@ function renderDailyChart() {
   const yellowGradient = ctx.createLinearGradient(0, 0, 0, 320);
   yellowGradient.addColorStop(0, "rgba(255,216,77,0.45)");
   yellowGradient.addColorStop(1, "rgba(255,216,77,0.05)");
+
+  const yPowerMax = computeDailyPowerAxisMax();
 
   dailyChartInstance = new Chart(ctx, {
     type: "line",
@@ -1676,14 +1693,14 @@ function renderDailyChart() {
         yPower: {
           position: "left",
           min: 0,
-          max: 1250,
+          suggestedMax: yPowerMax,
           ticks: { color: "#39e58c", callback: v => `${v} kW` },
           grid: { color: "rgba(255,255,255,0.05)" }
         },
         yIrr: {
           position: "right",
           min: 0,
-          max: 1250,
+          max: 1200,
           ticks: { color: "#ffd84d", callback: v => `${v} W/m²` },
           grid: { drawOnChartArea: false }
         }
