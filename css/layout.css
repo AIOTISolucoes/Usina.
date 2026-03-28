@@ -1514,9 +1514,8 @@ tbody tr:hover td {
   .events-table-full tbody td:nth-child(1)::before{ content: "Timestamp"; }
   .events-table-full tbody td:nth-child(2)::before{ content: "Point"; }
   .events-table-full tbody td:nth-child(3)::before{ content: "Equipment"; }
-  .events-table-full tbody td:nth-child(4)::before{ content: "Description"; }
-  .events-table-full tbody td:nth-child(5)::before{ content: "State"; }
-  .events-table-full tbody td:nth-child(6)::before{ content: "Severity"; }
+  .events-table-full tbody td:nth-child(4)::before{ content: "Type"; }
+  .events-table-full tbody td:nth-child(5)::before{ content: "Severity"; }
 
   .alarms-table-wrapper,
   .events-table-wrapper-full{
@@ -2388,4 +2387,34 @@ tbody tr:hover td {
 
 .ds-zoom-btn--reset:hover {
   background: rgba(255,255,255,0.12);
+}
+
+.ds-chart-wrap canvas {
+  touch-action: pan-y;
+}
+
+@media (max-width: 768px) {
+  .ds-chart-wrap {
+    height: 520px;
+    min-height: 520px;
+  }
+
+  .ds-chart-toolbar {
+    flex-wrap: wrap;
+    gap: 8px;
+    justify-content: flex-end;
+  }
+
+  .ds-zoom-btn,
+  .ds-export-btn {
+    width: 42px;
+    height: 42px;
+  }
+}
+
+@media (max-width: 480px) {
+  .ds-chart-wrap {
+    height: 560px;
+    min-height: 560px;
+  }
 }
