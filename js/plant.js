@@ -303,7 +303,7 @@ let PLANT_CATALOG = {
 let RELAY_SUPPORTED = null; // null = desconhecido / true / false
 let MULTIMETER_SUPPORTED = null; // null = desconhecido / true / false
 
-const API_BASE = "https://evwdyzzfri.execute-api.us-east-1.amazonaws.com";
+const API_BASE = "https://jgeg9i0js1.execute-api.us-east-1.amazonaws.com";
 const PLANT_REFRESH_INTERVAL_MS = 10000;
 const PLANT_ID = new URLSearchParams(window.location.search).get("plant_id");
 
