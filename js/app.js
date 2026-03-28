@@ -110,7 +110,7 @@ let eventsAbortController = null;
 let ALARMS_RENDER_SEQ = 0;
 
 // ✅ MODO PADRÃO DO EVENTS
-let EVENTS_VIEW_MODE = "round_robin";
+let EVENTS_VIEW_MODE = "normal";
 
 // ✅ quantas “rodadas/seqüências” você quer ver (T1..T5)
 let EVENTS_ROUNDS = 5;
@@ -379,7 +379,7 @@ async function refreshInverterStatusChipsForPlant(plantId) {
 }
 
 // =============================================================================
-// HELPERS DE DATA (EVENTS) — DATE + START TIME + END TIME
+// HELPERS DE DATA (EVENTS)
 // =============================================================================
 function safeTrim(v) {
   if (v == null) return "";
@@ -401,20 +401,19 @@ function isoFromDateAndTime(dateYYYYMMDD, timeHHMM, isEnd = false) {
   if (!yyyy || !mm || !dd) return null;
 
   let HH = 0, MI = 0, SS = 0;
-
   if (timeHHMM) {
     const [h, m] = String(timeHHMM).split(":").map(Number);
     HH = Number.isFinite(h) ? h : 0;
     MI = Number.isFinite(m) ? m : 0;
     SS = isEnd ? 59 : 0;
-  } else {
-    HH = isEnd ? 23 : 0;
-    MI = isEnd ? 59 : 0;
-    SS = isEnd ? 59 : 0;
+  } else if (isEnd) {
+    HH = 23;
+    MI = 59;
+    SS = 59;
   }
 
   const d = new Date(yyyy, mm - 1, dd, HH, MI, SS);
-  return isNaN(d.getTime()) ? null : d.toISOString();
+  return Number.isNaN(d.getTime()) ? null : d.toISOString();
 }
 
 function clampEventRange(startISO, endISO) {
@@ -432,12 +431,9 @@ function clampEventRange(startISO, endISO) {
   return { startISO, endISO };
 }
 
-// =============================================================================
-// PARSER DE EQUIPMENT (Inversor2 / INV-02 / Relé3 / Relay 3 / Weather)
-// =============================================================================
 function parseEquipmentFilter(input) {
   const raw = safeTrim(input);
-  if (!raw) return { source: null, device_id: null, equipment_norm: "" };
+  if (!raw) return { source: null, device_id: null };
 
   const compact = raw.replace(/\s+/g, "").replace(/[^\w]/g, "");
   const lower = compact.toLowerCase();
@@ -446,33 +442,17 @@ function parseEquipmentFilter(input) {
     lower.match(/^inversor(\d+)$/) ||
     lower.match(/^inverter(\d+)$/) ||
     lower.match(/^inv(\d+)$/);
-
-  if (invMatch) {
-    return {
-      source: "inverter",
-      device_id: parseInt(invMatch[1], 10),
-      equipment_norm: `Inversor${invMatch[1]}`
-    };
-  }
+  if (invMatch) return { source: "inverter", device_id: parseInt(invMatch[1], 10) };
 
   const relayMatch =
     lower.match(/^relay(\d+)$/) ||
     lower.match(/^rele(\d+)$/) ||
     lower.match(/^rel(\d+)$/);
+  if (relayMatch) return { source: "relay", device_id: parseInt(relayMatch[1], 10) };
 
-  if (relayMatch) {
-    return {
-      source: "relay",
-      device_id: parseInt(relayMatch[1], 10),
-      equipment_norm: `Relay${relayMatch[1]}`
-    };
-  }
+  if (lower === "weather" || lower === "clima") return { source: "weather", device_id: null };
 
-  if (lower === "weather" || lower === "clima") {
-    return { source: "weather", device_id: null, equipment_norm: "Weather" };
-  }
-
-  return { source: null, device_id: null, equipment_norm: raw };
+  return { source: null, device_id: null };
 }
 
 // =============================================================================
@@ -520,6 +500,20 @@ async function fetchPlants() {
     return Array.isArray(parsed) ? parsed : [];
   }
   return Array.isArray(data) ? data : [];
+}
+
+async function fetchPlantDeviceOptions(plantId) {
+  if (plantId == null || !String(plantId).match(/^\d+$/)) return [];
+
+  const res = await apiFetch(`/plants/${plantId}/devices/options`);
+  if (!res.ok) throw new Error("Erro ao buscar equipamentos da usina");
+
+  const data = await res.json();
+  if (data && data.body) {
+    const parsed = typeof data.body === "string" ? JSON.parse(data.body) : data.body;
+    return Array.isArray(parsed?.items) ? parsed.items : (Array.isArray(parsed) ? parsed : []);
+  }
+  return Array.isArray(data?.items) ? data.items : (Array.isArray(data) ? data : []);
 }
 
 
@@ -586,13 +580,14 @@ async function fetchEventsSafeBackend({
   page_size = 30,
   severity,
   event_type,
+  status,
   q,
   source,
   device_id,
   plant_id,
-  mode = "round_robin",
+  mode = "normal",
   rounds = 5,
-  include_total = false,
+  include_total = true,
   _retry = 0
 } = {}) {
   if (!start_time || !end_time) {
@@ -628,6 +623,10 @@ async function fetchEventsSafeBackend({
   const allowedEventTypes = new Set(["all", "alarm", "event", "status"]);
   if (allowedEventTypes.has(et) && et !== "all") params.append("event_type", et);
 
+  const st = String(status || "").toLowerCase();
+  const allowedStatus = new Set(["all", "active", "inactive"]);
+  if (allowedStatus.has(st) && st !== "all") params.append("status", st);
+
   const src = String(source || "").toLowerCase();
   const allowedSources = new Set(["inverter", "relay", "weather"]);
   if (allowedSources.has(src)) params.append("source", src);
@@ -656,7 +655,7 @@ async function fetchEventsSafeBackend({
     console.warn(`[EVENTS] server ${res.status}. retry em ${waitMs}ms...`);
     await new Promise(r => setTimeout(r, waitMs));
     return fetchEventsSafeBackend({
-      start_time, end_time, page, page_size, severity, event_type, q, source, device_id, plant_id, mode, rounds, include_total,
+      start_time, end_time, page, page_size, severity, event_type, status, q, source, device_id, plant_id, mode, rounds, include_total,
       _retry: _retry + 1
     });
   }
@@ -694,11 +693,8 @@ function getEventsUIElements() {
   const endTime = document.getElementById("eventsEndTimeInput");
 
   const severitySelect = document.getElementById("eventsSeveritySelect");
-  const stateSelect = document.getElementById("eventsStateSelect");
-
   const equipment = document.getElementById("eventsEquipmentInput");
   const point = document.getElementById("eventsPointInput");
-  const desc = document.getElementById("eventsDescriptionInput");
 
   const applyBtn = document.getElementById("eventsApplyBtn") || findButtonByText("apply");
   const clearBtn = document.getElementById("eventsClearBtn") || findButtonByText("clear");
@@ -707,7 +703,11 @@ function getEventsUIElements() {
   const nextBtn = document.getElementById("eventsNextBtn");
   const pageLabel = document.getElementById("eventsPageLabel");
 
-  return { date, startTime, endTime, severitySelect, stateSelect, equipment, point, desc, applyBtn, clearBtn, prevBtn, nextBtn, pageLabel };
+  return {
+    date, startTime, endTime,
+    severitySelect, equipment, point,
+    applyBtn, clearBtn, prevBtn, nextBtn, pageLabel
+  };
 }
 
 function ensureSeveritySelectOptions() {
@@ -721,27 +721,6 @@ function ensureSeveritySelectOptions() {
     { value: "high", text: "High" },
     { value: "medium", text: "Medium" },
     { value: "low", text: "Low" }
-  ].forEach(o => {
-    const opt = document.createElement("option");
-    opt.value = o.value;
-    opt.textContent = o.text;
-    sel.appendChild(opt);
-  });
-
-  if (!sel.value) sel.value = "all";
-}
-
-function ensureStateSelectOptions() {
-  const ui = getEventsUIElements();
-  const sel = ui.stateSelect;
-  if (!sel || sel.tagName !== "SELECT") return;
-
-  sel.innerHTML = "";
-  [
-    { value: "all", text: "All" },
-    { value: "alarm", text: "Alarm" },
-    { value: "event", text: "Event" },
-    { value: "status", text: "Status" }
   ].forEach(o => {
     const opt = document.createElement("option");
     opt.value = o.value;
@@ -778,23 +757,15 @@ function getEventsFiltersFromUI() {
   let severity = "all";
   if (ui.severitySelect) severity = String(ui.severitySelect.value || "all").trim().toLowerCase() || "all";
 
-  let event_type = "all";
-  if (ui.stateSelect) event_type = String(ui.stateSelect.value || "all").trim().toLowerCase() || "all";
-
   const equipmentText = safeTrim(ui.equipment?.value);
   const equip = parseEquipmentFilter(equipmentText);
-
   const source = equip.source;
   const device_id = equip.device_id;
 
   const pointText = safeTrim(ui.point?.value);
-  const descText = safeTrim(ui.desc?.value);
-  const qParts = [pointText, descText].map(s => safeTrim(s)).filter(Boolean);
-  const q = qParts.join(" ");
+  const q = pointText;
 
-  const plant_id = null;
-
-  return { start_time, end_time, plant_id, severity, event_type, q, source, device_id };
+  return { start_time, end_time, plant_id: null, severity, event_type: "all", q, source, device_id };
 }
 
 function updateEventsPaginationUI(pagination) {
@@ -824,7 +795,6 @@ function wireEventsFiltersOnce() {
   EVENTS_STATE.wired = true;
 
   ensureSeveritySelectOptions();
-  ensureStateSelectOptions();
 
   const ui = getEventsUIElements();
 
@@ -835,14 +805,7 @@ function wireEventsFiltersOnce() {
     });
   }
 
-  if (ui.stateSelect) {
-    ui.stateSelect.addEventListener("change", () => {
-      EVENTS_STATE.page = 1;
-      loadEvents(1);
-    });
-  }
-
-  const textInputs = [ui.equipment, ui.point, ui.desc].filter(Boolean);
+  const textInputs = [ui.equipment, ui.point].filter(Boolean);
   textInputs.forEach(el => {
     el.addEventListener("keydown", (e) => {
       if (e.key === "Enter") {
@@ -865,11 +828,7 @@ function wireEventsFiltersOnce() {
 
       if (ui2.equipment) ui2.equipment.value = "";
       if (ui2.point) ui2.point.value = "";
-      if (ui2.desc) ui2.desc.value = "";
-
-      if (ui2.stateSelect) ui2.stateSelect.value = "all";
       if (ui2.severitySelect) ui2.severitySelect.value = "all";
-
       if (ui2.date) ui2.date.value = todayYYYYMMDD();
       if (ui2.startTime) ui2.startTime.value = "";
       if (ui2.endTime) ui2.endTime.value = "";
@@ -994,18 +953,19 @@ async function renderAlarmsTable(isRecognized = false) {
 // =============================================================================
 // EVENTS: render + load
 // =============================================================================
-function ensureEventsHeaderHasSeverity(tbody) {
+function ensureEventsHeader(tbody) {
   const eventsTable = tbody?.closest("table");
   const thead = eventsTable?.querySelector("thead");
   const tr = thead?.querySelector("tr");
   if (!tr) return;
 
-  const headers = Array.from(tr.querySelectorAll("th")).map(th => (th.textContent || "").trim().toLowerCase());
-  if (headers.includes("severity")) return;
-
-  const th = document.createElement("th");
-  th.textContent = "SEVERITY";
-  tr.appendChild(th);
+  tr.innerHTML = `
+    <th>TIMESTAMP</th>
+    <th>POINT</th>
+    <th>EQUIPMENT</th>
+    <th>TYPE</th>
+    <th>SEVERITY</th>
+  `;
 }
 
 async function loadEvents(page = 1, { silent = false } = {}) {
@@ -1019,12 +979,11 @@ async function loadEvents(page = 1, { silent = false } = {}) {
     wireEventsFiltersOnce();
     ensureDefaultEventsDates();
     ensureSeveritySelectOptions();
-    ensureStateSelectOptions();
-    ensureEventsHeaderHasSeverity(tbody);
+    ensureEventsHeader(tbody);
 
     if (!silent) {
       tbody.innerHTML = `
-        <tr><td colspan="6" style="text-align:center; opacity:0.7; padding:40px;">Carregando...</td></tr>
+        <tr><td colspan="5" style="text-align:center; opacity:0.7; padding:40px;">Carregando...</td></tr>
       `;
     }
 
@@ -1051,7 +1010,7 @@ async function loadEvents(page = 1, { silent = false } = {}) {
       plant_id: filters.plant_id,
       mode: EVENTS_VIEW_MODE,
       rounds: EVENTS_ROUNDS,
-      include_total: false
+      include_total: true
     });
 
     const events = response?.items || [];
@@ -1065,7 +1024,7 @@ async function loadEvents(page = 1, { silent = false } = {}) {
 
     if (!events.length) {
       tbody.innerHTML = `
-        <tr><td colspan="6" style="text-align:center; opacity:0.6; padding:40px;">
+        <tr><td colspan="5" style="text-align:center; opacity:0.6; padding:40px;">
           Nenhum evento registrado
         </td></tr>
       `;
@@ -1084,16 +1043,14 @@ async function loadEvents(page = 1, { silent = false } = {}) {
           ? `${ev.device_type} • ${ev.device_name}`
           : (ev.device_name || ev.device_id || "—");
 
-      const desc = valueOrDash(ev.event_name);
+      const point = valueOrDash(ev.point_name ?? ev.event_code ?? ev.raw_key ?? "—");
       const type = valueOrDash(ev.event_type);
-      const plant = valueOrDash(ev.power_plant_name);
       const sev = valueOrDash(ev.severity);
 
       tr.innerHTML = `
         <td>${ts}</td>
-        <td>${plant}</td>
+        <td>${point}</td>
         <td>${deviceLabel}</td>
-        <td>${desc}</td>
         <td>${type}</td>
         <td style="font-weight:bold; color:${severityColor(sev)};">
           ${sev}
@@ -1109,7 +1066,7 @@ async function loadEvents(page = 1, { silent = false } = {}) {
 
     console.error("Erro ao buscar eventos:", err?.message, err?.url, err?.body);
     tbody.innerHTML = `
-      <tr><td colspan="6" style="text-align:center; color:#f44336; padding:40px;">
+      <tr><td colspan="5" style="text-align:center; color:#f44336; padding:40px;">
         Erro ao carregar eventos
       </td></tr>
     `;
@@ -1189,10 +1146,11 @@ function renderPortfolioTable(plants) {
       <td class="metric-neutral">${Number(plant.rated_power_kw ?? 0).toFixed(1)} kWp</td>
       <td class="metric-active">${Number(plant.active_power_kw ?? 0).toFixed(1)} kW</td>
       <td class="metric-active">${Number(plant.energy_today_kwh ?? 0).toFixed(1)} kWh</td>
-      <td>${valueOrDash(plant.irradiance_wm2)} W/m²</td>
-      <td>${plant.inverter_availability_pct != null ? (plant.inverter_availability_pct * 100).toFixed(1) + "%" : "—"}</td>
-      <td>${plant.relay_availability_pct != null ? (plant.relay_availability_pct * 100).toFixed(1) + "%" : "—"}</td>
-      <td>${plant.performance_ratio != null ? Number(plant.performance_ratio).toFixed(1) + "%" : "—"}</td>
+      <td>${plant.irradiance_wm2 != null ? Number(plant.irradiance_wm2).toFixed(0) + " W/m²" : "—"}</td>
+      <td>${plant.inverter_availability_pct != null ? Number(plant.inverter_availability_pct).toFixed(1) + "%" : "—"}</td>
+      <td>${plant.relay_availability_pct != null ? Number(plant.relay_availability_pct).toFixed(1) + "%" : "—"}</td>
+      <td>${plant.pr_daily_pct != null ? Number(plant.pr_daily_pct).toFixed(1) + "%" : "—"}</td>
+      <td>${plant.pr_accumulated_pct != null ? Number(plant.pr_accumulated_pct).toFixed(1) + "%" : "—"}</td>
       <td style="text-align:center;">
         <button class="plant-link-btn" title="Abrir usina" data-plant-id="${plantId}">
           <i class="fa-solid fa-arrow-up-right-from-square"></i>
@@ -1745,6 +1703,41 @@ function resetDataStudioChartZoom() {
   }
 }
 
+function isMobileViewport() {
+  return window.innerWidth <= 768;
+}
+
+function clearDataStudioChartActiveState() {
+  if (!DATASTUDIO_CHART) return;
+
+  try {
+    DATASTUDIO_CHART.setActiveElements([]);
+    if (DATASTUDIO_CHART.tooltip && typeof DATASTUDIO_CHART.tooltip.setActiveElements === "function") {
+      DATASTUDIO_CHART.tooltip.setActiveElements([], { x: 0, y: 0 });
+    }
+    DATASTUDIO_CHART.update("none");
+  } catch (err) {
+    console.warn("[DataStudio] erro ao limpar seleção do gráfico:", err);
+  }
+}
+
+function wireDataStudioChartOutsideTapOnce() {
+  if (window.__dsOutsideTapWired) return;
+  window.__dsOutsideTapWired = true;
+
+  const clearIfOutside = (event) => {
+    if (!DATASTUDIO_CHART) return;
+    const { chartCanvas } = getDataStudioUIElements();
+    if (!chartCanvas) return;
+    if (!chartCanvas.contains(event.target)) {
+      clearDataStudioChartActiveState();
+    }
+  };
+
+  document.addEventListener("touchstart", clearIfOutside, { passive: true });
+  document.addEventListener("click", clearIfOutside);
+}
+
 function openDataStudioCatalogInline({ resetFilters = false } = {}) {
   const { plantSelect, startDateInput, endDateInput } = getDataStudioUIElements();
 
@@ -2013,6 +2006,8 @@ function renderDataStudioChart(seriesPayload) {
     });
   }
 
+  const mobile = isMobileViewport();
+
   DATASTUDIO_CHART = new Chart(chartCanvas.getContext("2d"), {
     type: "line",
     data: { labels, datasets },
@@ -2020,29 +2015,36 @@ function renderDataStudioChart(seriesPayload) {
       responsive: true,
       maintainAspectRatio: false,
       interaction: {
-        mode: "index",
+        mode: mobile ? "nearest" : "index",
         intersect: false,
         axis: "x"
       },
       hover: {
-        mode: "index",
+        mode: mobile ? "nearest" : "index",
         intersect: false
       },
       elements: {
         point: {
           radius: 0,
-          hoverRadius: 6,
-          hitRadius: 16
+          hoverRadius: mobile ? 8 : 6,
+          hitRadius: mobile ? 24 : 16
         },
         line: {
           borderWidth: 2
         }
       },
       plugins: {
-        legend: { labels: { color: "#dbe7ef" } },
+        legend: {
+          labels: {
+            color: "#dbe7ef",
+            boxWidth: 12,
+            usePointStyle: true,
+            pointStyle: "line"
+          }
+        },
         tooltip: {
           enabled: true,
-          mode: "index",
+          mode: mobile ? "nearest" : "index",
           intersect: false,
           displayColors: true,
           backgroundColor: "rgba(6, 18, 14, 0.96)",
@@ -2352,6 +2354,8 @@ function wireDataStudioOnce() {
       catalogSection?.scrollIntoView({ behavior: "smooth", block: "start" });
     }, 120);
   });
+
+  wireDataStudioChartOutsideTapOnce();
 
   syncDataStudioAggregationUI();
   updateSelectedTagsCounter();
