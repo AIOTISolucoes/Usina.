@@ -21,7 +21,7 @@ function logout() {
 // =============================================================================
 // API FETCH COM CONTEXTO DO USUÁRIO LOGADO
 // =============================================================================
-const API_BASE = "https://jgeg9i0js1.execute-api.us-east-1.amazonaws.com";
+const API_BASE = "https://evwdyzzfri.execute-api.us-east-1.amazonaws.com";
 const INVERTER_NO_COMM_AFTER_MS = 15 * 60 * 1000; // legado (chips usam status do mart)
 const DASHBOARD_REFRESH_INTERVAL_MS = 10000;
 const EVENTS_REFRESH_INTERVAL_MS = 10000;
@@ -570,28 +570,29 @@ async function fetchAcknowledgedAlarms() {
 async function acknowledgeAlarm(alarm) {
   const user = JSON.parse(localStorage.getItem("user") || "{}");
 
-  const alarmId = alarm?.id || alarm?.event_row_id;
-  if (!alarmId) {
-    throw new Error("Alarme sem id/event_row_id");
-  }
+  const alarmId = alarm.id ?? alarm.event_row_id ?? "occurrence";
+  const payload = {
+    event_row_id: alarm.event_row_id || alarm.id,
+    power_plant_id: alarm.power_plant_id,
+    device_id: alarm.device_id,
+    event_code: alarm.event_code,
+    event_ts: alarm.timestamp || alarm.started_at || null,
+    acknowledged_by: user.username || user.email || user.name || "operacao",
+    acknowledgment_note: "Reconhecido via dashboard"
+  };
 
   const res = await apiFetch(`/alarms/${alarmId}/ack`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      event_row_id: alarm.event_row_id || alarm.id,
-      power_plant_id: alarm.power_plant_id,
-      acknowledged_by: user?.username || user?.name || user?.email || "operador",
-      acknowledgment_note: ""
-    })
+    body: JSON.stringify(payload)
   });
 
   if (!res.ok) {
     const txt = await res.text().catch(() => "");
-    throw new Error(`Falha ao reconhecer alarme (${res.status}) ${txt}`);
+    throw new Error(`Erro ao reconhecer alarme (${res.status}) ${txt}`);
   }
 
-  return res.json().catch(() => ({}));
+  return res.json();
 }
 
 /**
@@ -897,7 +898,7 @@ async function renderAlarmsTable(isRecognized = false) {
   try {
     alarms = isRecognized
       ? (await fetchAcknowledgedAlarms()).filter(a => {
-          const state = String(a.alarm_state || a.state || "").toUpperCase();
+          const state = a.alarm_state || a.state;
           return state === "ACK" || state === "CLEARED";
         })
       : await fetchActiveAlarms();
@@ -922,11 +923,10 @@ async function renderAlarmsTable(isRecognized = false) {
     ) || "low";
 
     const timestamp =
-      alarm.acknowledged_at ||
+      alarm.ack_at ||
       alarm.cleared_at ||
       alarm.last_event_ts ||
       alarm.started_at ||
-      alarm.timestamp ||
       "—";
 
     const tsFormatted = timestamp !== "—" ? new Date(timestamp).toLocaleString("pt-BR") : "—";
@@ -942,14 +942,9 @@ async function renderAlarmsTable(isRecognized = false) {
       "#ccc";
 
     const plantLabel = alarm.power_plant_name ? alarm.power_plant_name : "—";
-    const deviceTypeLabel =
-      alarm.device_type_name ||
-      alarm.device_type ||
-      "—";
-
-    const deviceLabel = alarm.device_name
-      ? `${deviceTypeLabel} • ${alarm.device_name}`
-      : (alarm.device_id || "—");
+    const deviceLabel = alarm.device_type_name && alarm.device_name
+      ? `${alarm.device_type_name} • ${alarm.device_name}`
+      : (alarm.device_name || alarm.device_id || "—");
 
     const desc =
       alarm.event_name && String(alarm.event_name).trim() !== ""
@@ -971,10 +966,9 @@ async function renderAlarmsTable(isRecognized = false) {
         try {
           if (!alarm?.event_row_id && !alarm?.id) return;
           await acknowledgeAlarm(alarm);
-          await renderAlarmsTable(isAlarmsRecognizedTabActive());
+          await renderAlarmsTable(false);
         } catch (err) {
           console.error("Erro ao reconhecer alarme:", err);
-          alert(err?.message || "Não foi possível reconhecer o alarme.");
         }
       });
     }
