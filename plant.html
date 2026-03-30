@@ -19,6 +19,7 @@
 
   <!-- Chart.js -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>
 </head>
 
 <body>
@@ -162,6 +163,17 @@
             </div>
           </div>
         </div>
+        <div class="chart-toolbar" aria-label="Controles de zoom do gráfico diário">
+          <button id="dailyZoomInBtn" class="chart-zoom-btn" type="button" title="Zoom in" aria-label="Zoom in">
+            <i class="fa-solid fa-magnifying-glass-plus" aria-hidden="true"></i>
+          </button>
+          <button id="dailyZoomOutBtn" class="chart-zoom-btn" type="button" title="Zoom out" aria-label="Zoom out">
+            <i class="fa-solid fa-magnifying-glass-minus" aria-hidden="true"></i>
+          </button>
+          <button id="dailyZoomResetBtn" class="chart-zoom-btn" type="button" title="Reset zoom" aria-label="Reset zoom">
+            <i class="fa-solid fa-rotate-left" aria-hidden="true"></i>
+          </button>
+        </div>
       </div>
 
       <div class="chart-wrapper">
@@ -169,7 +181,7 @@
       </div>
     </section>
 
-    <section class="card plant-chart-card">
+    <section class="card plant-chart-card plant-chart-card--monthly">
       <div class="card-header">
         <div>
           <h2>Geração mensal acumulada</h2>
