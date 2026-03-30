@@ -314,6 +314,45 @@ function normalizeApiBody(data) {
   return data;
 }
 
+function normalizeAlarmState(value) {
+  const s = String(value ?? "").trim().toUpperCase();
+  if (!s) return "UNKNOWN";
+  if (["ACTIVE", "ACTIVO", "ATIVO", "OPEN", "ABERTO"].includes(s)) return "ACTIVE";
+  if (["CLEARED", "CLEAR", "RESOLVED", "RESOLVIDO", "INACTIVE", "FECHADO", "CLOSED"].includes(s)) return "CLEARED";
+  return s;
+}
+
+function normalizeAlarmSeverity(value) {
+  const s = String(value ?? "").trim().toLowerCase();
+  if (!s) return "info";
+  if (["critical", "critico", "crítico", "high", "alta"].includes(s)) return "critical";
+  if (["warning", "warn", "media", "média", "medium"].includes(s)) return "warning";
+  if (["minor", "low", "baixa", "info", "informational"].includes(s)) return "info";
+  return s;
+}
+
+function dedupePlantAlarms(alarms) {
+  const map = new Map();
+  (Array.isArray(alarms) ? alarms : []).forEach((alarm) => {
+    const key = String(
+      alarm?.event_row_id ??
+      alarm?.alarm_id ??
+      alarm?.id ??
+      `${alarm?.event_code ?? "evt"}:${alarm?.timestamp ?? alarm?.started_at ?? ""}`
+    );
+    if (!map.has(key)) map.set(key, alarm);
+  });
+  return Array.from(map.values());
+}
+
+function sortPlantAlarmsDesc(alarms) {
+  return (Array.isArray(alarms) ? alarms : []).slice().sort((a, b) => {
+    const ta = Date.parse(a?.started_at ?? a?.timestamp ?? "") || 0;
+    const tb = Date.parse(b?.started_at ?? b?.timestamp ?? "") || 0;
+    return tb - ta;
+  });
+}
+
 function getUserContext() {
   try {
     const user = JSON.parse(localStorage.getItem("user"));
@@ -383,8 +422,49 @@ async function fetchActiveAlarms(plantId) {
   const res = await fetch(`${API_BASE}/plants/${plantId}/alarms/active`, {
     headers: buildAuthHeaders()
   });
-  const data = await res.json();
-  return normalizeApiBody(data);
+  const data = normalizeApiBody(await res.json());
+  const items = Array.isArray(data) ? data : (Array.isArray(data?.items) ? data.items : []);
+  const normalized = items.map((alarm) => ({
+    ...alarm,
+    state: normalizeAlarmState(alarm?.state ?? alarm?.alarm_state ?? alarm?.status),
+    severity: normalizeAlarmSeverity(alarm?.severity ?? alarm?.alarm_severity ?? alarm?.level)
+  }));
+  return sortPlantAlarmsDesc(
+    dedupePlantAlarms(
+      normalized.filter((alarm) => alarm.state === "ACTIVE" && alarm.acknowledged !== true)
+    )
+  );
+}
+
+async function acknowledgePlantAlarm(alarm) {
+  const alarmId = alarm?.alarm_id ?? alarm?.id ?? alarm?.event_row_id;
+  if (!alarmId) throw new Error("alarm_id ausente para ACK");
+
+  const user = (() => {
+    try {
+      return JSON.parse(localStorage.getItem("user")) || {};
+    } catch {
+      return {};
+    }
+  })();
+
+  const response = await fetch(`${API_BASE}/alarms/${alarmId}/ack`, {
+    method: "POST",
+    headers: buildAuthHeaders(),
+    body: JSON.stringify({
+      event_row_id: alarm?.event_row_id ?? null,
+      power_plant_id: alarm?.power_plant_id ?? alarm?.plant_id ?? PLANT_ID ?? null,
+      acknowledged_by: user?.name ?? user?.email ?? user?.username ?? "frontend",
+      acknowledgment_note: "Reconhecido via operação SCADA"
+    })
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => "");
+    throw new Error(`Falha ao reconhecer alarme (${response.status}): ${errorText}`);
+  }
+
+  return true;
 }
 
 async function fetchTrackersRealtime(plantId) {
@@ -897,8 +977,15 @@ function renderAlarms(alarms) {
 
   const sublineEl = document.getElementById("plantSubline");
   container.innerHTML = "";
+  const filtered = sortPlantAlarmsDesc(
+    dedupePlantAlarms(
+      (Array.isArray(alarms) ? alarms : []).filter(
+        (alarm) => normalizeAlarmState(alarm?.state ?? alarm?.alarm_state ?? alarm?.status) === "ACTIVE" && alarm?.acknowledged !== true
+      )
+    )
+  );
 
-  if (!alarms || !alarms.length) {
+  if (!filtered.length) {
     container.textContent = "Nenhum alarme ativo";
     if (sublineEl) {
       sublineEl.textContent = "Nenhum alarme ativo";
@@ -908,13 +995,13 @@ function renderAlarms(alarms) {
   }
 
   if (sublineEl) {
-    sublineEl.textContent = `${alarms.length} alarme(s) ativo(s)`;
+    sublineEl.textContent = `${filtered.length} alarme(s) ativo(s)`;
     sublineEl.classList.add("plant-subline--alarm");
   }
 
-  alarms.forEach(a => {
+  filtered.forEach(a => {
     const row = document.createElement("div");
-    row.className = `alarm-row ${a.severity || ""}`.trim();
+    row.className = `alarm-row ${normalizeAlarmSeverity(a.severity) || ""}`.trim();
     const deviceType =
       a.device_type ??
       a.device_type_name ??
@@ -926,10 +1013,23 @@ function renderAlarms(alarms) {
       null;
 
     row.innerHTML = `
-      <span>${deviceType} • ${a.device_name || "—"}</span>
-      <span>${a.event_name || (a.event_code != null ? `Evento ${a.event_code}` : "—")}</span>
-      <span>${when ? new Date(when).toLocaleString("pt-BR") : "—"}</span>
+      <span class="alarm-device">${deviceType} • ${a.device_name || "—"}</span>
+      <span class="alarm-desc">${a.event_name || (a.event_code != null ? `Evento ${a.event_code}` : "—")}</span>
+      <span class="alarm-time">${when ? new Date(when).toLocaleString("pt-BR") : "—"}</span>
     `;
+    row.title = "Duplo clique para reconhecer alarme";
+    row.addEventListener("dblclick", async () => {
+      row.style.opacity = "0.6";
+      try {
+        await acknowledgePlantAlarm(a);
+        ACTIVE_ALARMS = ACTIVE_ALARMS.filter((alarm) => String(alarm?.event_row_id ?? alarm?.alarm_id ?? alarm?.id) !== String(a?.event_row_id ?? a?.alarm_id ?? a?.id));
+        renderAlarms(ACTIVE_ALARMS);
+      } catch (err) {
+        row.style.opacity = "";
+        console.error("[alarms][ack] erro", err);
+        alert("Não foi possível reconhecer o alarme. Tente novamente.");
+      }
+    });
 
     container.appendChild(row);
   });
@@ -1976,9 +2076,11 @@ async function refreshRealtimeEverything() {
     ]);
 
     if (alarmsRes.status === "fulfilled") {
-      ACTIVE_ALARMS = alarmsRes.value;
+      ACTIVE_ALARMS = Array.isArray(alarmsRes.value) ? alarmsRes.value : [];
       renderAlarms(ACTIVE_ALARMS);
     } else {
+      ACTIVE_ALARMS = [];
+      renderAlarms(ACTIVE_ALARMS);
       console.error("[refreshRealtimeEverything][alarms] erro", alarmsRes.reason);
     }
 
