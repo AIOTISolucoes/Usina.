@@ -182,6 +182,7 @@ function dedupeAlarms(list) {
 
   items.forEach(a => {
     const key =
+      a.event_row_id ??
       a.alarm_id ??
       a.id ??
       [
@@ -566,8 +567,31 @@ async function fetchAcknowledgedAlarms() {
   return Array.isArray(data) ? data : [];
 }
 
-async function acknowledgeAlarm(alarmId) {
-  await apiFetch(`/alarms/${alarmId}/ack`, { method: "POST" });
+async function acknowledgeAlarm(alarm) {
+  const user = JSON.parse(localStorage.getItem("user") || "{}");
+
+  const alarmId = alarm?.id || alarm?.event_row_id;
+  if (!alarmId) {
+    throw new Error("Alarme sem id/event_row_id");
+  }
+
+  const res = await apiFetch(`/alarms/${alarmId}/ack`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      event_row_id: alarm.event_row_id || alarm.id,
+      power_plant_id: alarm.power_plant_id,
+      acknowledged_by: user?.username || user?.name || user?.email || "operador",
+      acknowledgment_note: ""
+    })
+  });
+
+  if (!res.ok) {
+    const txt = await res.text().catch(() => "");
+    throw new Error(`Falha ao reconhecer alarme (${res.status}) ${txt}`);
+  }
+
+  return res.json().catch(() => ({}));
 }
 
 /**
@@ -873,7 +897,7 @@ async function renderAlarmsTable(isRecognized = false) {
   try {
     alarms = isRecognized
       ? (await fetchAcknowledgedAlarms()).filter(a => {
-          const state = a.alarm_state || a.state;
+          const state = String(a.alarm_state || a.state || "").toUpperCase();
           return state === "ACK" || state === "CLEARED";
         })
       : await fetchActiveAlarms();
@@ -898,15 +922,19 @@ async function renderAlarmsTable(isRecognized = false) {
     ) || "low";
 
     const timestamp =
-      alarm.ack_at ||
+      alarm.acknowledged_at ||
       alarm.cleared_at ||
       alarm.last_event_ts ||
       alarm.started_at ||
+      alarm.timestamp ||
       "—";
 
     const tsFormatted = timestamp !== "—" ? new Date(timestamp).toLocaleString("pt-BR") : "—";
 
-    const state = alarm.alarm_state || alarm.state || "—";
+    const state =
+      !isRecognized && alarm.acknowledged === true
+        ? "ACK"
+        : (alarm.alarm_state || alarm.state || "—");
     const stateColor =
       state === "ACTIVE" ? "#f44336" :
       state === "ACK" ? "#ff9800" :
@@ -914,9 +942,14 @@ async function renderAlarmsTable(isRecognized = false) {
       "#ccc";
 
     const plantLabel = alarm.power_plant_name ? alarm.power_plant_name : "—";
-    const deviceLabel = alarm.device_type && alarm.device_name
-      ? `${alarm.device_type} • ${alarm.device_name}`
-      : (alarm.device_name || alarm.device_id || "—");
+    const deviceTypeLabel =
+      alarm.device_type_name ||
+      alarm.device_type ||
+      "—";
+
+    const deviceLabel = alarm.device_name
+      ? `${deviceTypeLabel} • ${alarm.device_name}`
+      : (alarm.device_id || "—");
 
     const desc =
       alarm.event_name && String(alarm.event_name).trim() !== ""
@@ -932,16 +965,16 @@ async function renderAlarmsTable(isRecognized = false) {
 
     if (!isRecognized) {
       tr.classList.add("alarm-row-attention", `alarm-row-attention--${sev}`);
-      const alarmId = alarm.alarm_id ?? alarm.id;
       tr.style.cursor = "pointer";
       tr.title = "Clique duplo para reconhecer";
       tr.addEventListener("dblclick", async () => {
         try {
-          if (!alarmId) return;
-          await acknowledgeAlarm(alarmId);
-          await renderAlarmsTable(false);
+          if (!alarm?.event_row_id && !alarm?.id) return;
+          await acknowledgeAlarm(alarm);
+          await renderAlarmsTable(isAlarmsRecognizedTabActive());
         } catch (err) {
           console.error("Erro ao reconhecer alarme:", err);
+          alert(err?.message || "Não foi possível reconhecer o alarme.");
         }
       });
     }
@@ -2048,7 +2081,7 @@ function renderDataStudioChart(seriesPayload) {
           intersect: false,
           displayColors: true,
           backgroundColor: "rgba(6, 18, 14, 0.96)",
-          borderColor: "rgba(42,255,123,.22)",
+          borderColor: "rgba(127,208,85,.22)",
           borderWidth: 1,
           titleColor: "#dbe7ef",
           bodyColor: "#dbe7ef",
