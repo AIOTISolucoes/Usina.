@@ -489,7 +489,10 @@ function setTrackersSectionVisible(visible) {
   const btn = document.getElementById("trackersMenuToggle");
   if (!section) return;
   section.classList.toggle("trackers-hidden", !visible);
-  if (btn) btn.classList.toggle("on", visible);
+  if (btn) {
+    btn.classList.toggle("on", visible);
+    btn.setAttribute("aria-expanded", visible ? "true" : "false");
+  }
 }
 
 function setTrackersCollapsed(collapsed) {
@@ -1051,10 +1054,15 @@ function renderRelayCard(relayItem) {
   const relayOn = relayItem.relay_on; // true/false/null
   const lastUpdate = relayItem.last_update ?? null;
 
-  const kw = relayItem?.analog?.active_power_kw;
-  const kwText = (kw === null || kw === undefined || Number.isNaN(Number(kw)))
-    ? "— kW"
-    : `${numFixedOrDash(kw, 1)} kW`;
+  const kw =
+    relayItem?.analog?.active_power_kw ??
+    relayItem?.analog?.power_kw ??
+    relayItem?.active_power_kw ??
+    relayItem?.power_kw ??
+    0;
+
+  const kwNum = Number(typeof kw === "string" ? kw.replace(",", ".") : kw);
+  const kwText = Number.isFinite(kwNum) ? `${kwNum.toFixed(1)} kW` : "— kW";
 
   // classes do row (para a bolinha)
   relayRow.classList.remove("online", "offline");
@@ -2024,14 +2032,23 @@ async function refreshRealtimeEverything() {
       const hasTrackers = Array.isArray(TRACKERS_DATA) && TRACKERS_DATA.some(
         (t) => Number.isFinite(Number(t.latitude)) && Number.isFinite(Number(t.longitude))
       );
-      setTrackersSectionVisible(hasTrackers);
       if (hasTrackers) {
+        TRACKERS_LAST_HAS_DATA = true;
+      }
+
+      if (!TRACKERS_USER_OPENED) {
+        setTrackersSectionVisible(hasTrackers);
+      } else {
+        setTrackersSectionVisible(TRACKERS_LAST_HAS_DATA);
+      }
+
+      if (TRACKERS_LAST_HAS_DATA) {
         const trackersSection = document.getElementById("trackersSection");
         const trackersVisible =
           trackersSection &&
           !trackersSection.classList.contains("trackers-hidden") &&
           !trackersSection.classList.contains("is-collapsed");
-        if (trackersVisible) renderTrackersPanel();
+        if (trackersVisible && hasTrackers) renderTrackersPanel();
       }
     } else {
       TRACKERS_DATA = [];
@@ -2069,6 +2086,8 @@ let TRACKERS_TRANSFORM = { scale: 1, x: 0, y: 0 };
 let TRACKERS_PLANT_CENTER = null;
 let TRACKERS_PLANT_BOUNDS = null;
 let TRACKERS_HAS_FITTED_ONCE = false;
+let TRACKERS_USER_OPENED = false;
+let TRACKERS_LAST_HAS_DATA = false;
 let TRACKERS_MAP = null;
 let TRACKERS_MARKERS_LAYER = null;
 
@@ -2306,6 +2325,7 @@ function initTrackersPanel() {
   const mapEl = document.getElementById("trackersMap");
   if (!sectionEl || !stageWrapEl || !mapEl || typeof L === "undefined") return;
   const tabToggleEl = document.getElementById("trackersTabToggle");
+  const menuToggleEl = document.getElementById("trackersMenuToggle");
 
   if (tabToggleEl) {
     tabToggleEl.addEventListener("click", () => {
@@ -2313,6 +2333,32 @@ function initTrackersPanel() {
       setTrackersCollapsed(collapsed);
       const expanded = !collapsed;
       if (expanded) applyTrackersTransform();
+    });
+  }
+
+  if (menuToggleEl) {
+    menuToggleEl.addEventListener("click", () => {
+      const section = document.getElementById("trackersSection");
+      if (!section) return;
+
+      const isHidden = section.classList.contains("trackers-hidden");
+      const willShow = isHidden;
+
+      TRACKERS_USER_OPENED = true;
+
+      if (willShow) {
+        setTrackersSectionVisible(true);
+        setTrackersCollapsed(false);
+        TRACKERS_LAST_HAS_DATA = true;
+        requestAnimationFrame(() => {
+          applyTrackersTransform();
+          if (Array.isArray(TRACKERS_DATA) && TRACKERS_DATA.length) {
+            renderTrackersPanel();
+          }
+        });
+      } else {
+        setTrackersSectionVisible(false);
+      }
     });
   }
 
@@ -2366,6 +2412,57 @@ function initTrackersPanel() {
   setTrackersCollapsed(true);
 }
 
+function setupDeviceNav() {
+  const btns = document.querySelectorAll(".device-nav-btn[data-target]");
+  if (!btns.length) return;
+
+  function scrollToTarget(target) {
+    if (!target) return;
+
+    if (target === "#sec-trackers") {
+      const section = document.getElementById("trackersSection");
+      const tab = document.getElementById("trackersTabToggle");
+      if (!section) return;
+
+      TRACKERS_USER_OPENED = true;
+      setTrackersSectionVisible(true);
+      setTrackersCollapsed(false);
+      TRACKERS_LAST_HAS_DATA = true;
+      tab?.setAttribute("aria-expanded", "true");
+
+      const anchor = document.querySelector(target);
+      if (anchor) {
+        anchor.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
+
+      requestAnimationFrame(() => {
+        applyTrackersTransform();
+        if (Array.isArray(TRACKERS_DATA) && TRACKERS_DATA.length) {
+          renderTrackersPanel();
+        }
+      });
+
+      return;
+    }
+
+    const el = document.querySelector(target);
+    if (!el) return;
+    el.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  btns.forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.preventDefault();
+      scrollToTarget(btn.getAttribute("data-target"));
+    });
+  });
+
+  if (location.hash) {
+    const hash = location.hash;
+    setTimeout(() => scrollToTarget(hash), 0);
+  }
+}
+
 // ======================================================
 // INIT
 // ======================================================
@@ -2374,6 +2471,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   setTimeout(() => document.body.classList.remove("plant-enter"), 500);
   setupInverterToggles();
   initTrackersPanel();
+  setupDeviceNav();
 
   if (!PLANT_ID) {
     console.warn("[plant] plant_id ausente na URL; mantendo tela sem dados de fallback.");
