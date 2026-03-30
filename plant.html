@@ -303,59 +303,6 @@
 
 </main>
 
-<!-- ✅ Navegação sem empilhar histórico -->
-<script>
-  (function deviceNavNoHistory() {
-    const btns = document.querySelectorAll('.device-nav-btn[data-target]');
-    if (!btns.length) return;
-
-    function toggleTrackersMenu() {
-      const trackersSection = document.getElementById('trackersSection');
-      const trackersBtn = document.getElementById('trackersMenuToggle');
-      const trackersTab = document.getElementById('trackersTabToggle');
-      if (!trackersSection) return;
-
-      const isHidden = trackersSection.classList.contains('trackers-hidden');
-      if (isHidden) {
-        trackersSection.classList.remove('trackers-hidden');
-        trackersSection.classList.remove('is-collapsed');
-        trackersTab?.setAttribute('aria-expanded', 'true');
-        trackersSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      } else {
-        trackersSection.classList.add('trackers-hidden');
-      }
-
-      trackersBtn?.classList.toggle('on', isHidden);
-    }
-
-    function scrollToTarget(selector) {
-      if (selector === '#sec-trackers') {
-        toggleTrackersMenu();
-        return;
-      }
-      const el = document.querySelector(selector);
-      if (!el) return;
-
-      el.scrollIntoView({ behavior: 'smooth', block: 'start' });
-
-      try { history.replaceState(null, '', selector); } catch (_) {}
-    }
-
-    btns.forEach(btn => {
-      btn.addEventListener('click', (e) => {
-        e.preventDefault();
-        const target = btn.getAttribute('data-target');
-        scrollToTarget(target);
-      });
-    });
-
-    if (location.hash) {
-      const hash = location.hash;
-      setTimeout(() => scrollToTarget(hash), 0);
-    }
-  })();
-</script>
-
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="js/plant.js"></script>
 </body>
