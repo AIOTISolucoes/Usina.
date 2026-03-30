@@ -1724,6 +1724,33 @@ function renderSummaryStrip() {
 let dailyChartInstance = null;
 let monthlyChartInstance = null;
 let LAST_INVERTER_ROWS_SIGNATURE = "";
+let DAILY_CHART_ZOOM_WIRED = false;
+
+function resetDailyChartZoom() {
+  if (!dailyChartInstance || typeof dailyChartInstance.resetZoom !== "function") return;
+  try {
+    dailyChartInstance.resetZoom();
+  } catch (err) {
+    console.warn("[dailyChart] erro ao resetar zoom:", err);
+  }
+}
+
+function wireDailyChartZoomControlsOnce() {
+  if (DAILY_CHART_ZOOM_WIRED) return;
+  DAILY_CHART_ZOOM_WIRED = true;
+
+  document.getElementById("dailyZoomInBtn")?.addEventListener("click", () => {
+    if (!dailyChartInstance || typeof dailyChartInstance.zoom !== "function") return;
+    dailyChartInstance.zoom({ x: 1.2 });
+  });
+
+  document.getElementById("dailyZoomOutBtn")?.addEventListener("click", () => {
+    if (!dailyChartInstance || typeof dailyChartInstance.zoom !== "function") return;
+    dailyChartInstance.zoom({ x: 0.8 });
+  });
+
+  document.getElementById("dailyZoomResetBtn")?.addEventListener("click", resetDailyChartZoom);
+}
 
 // ======================================================
 // GRÁFICO DIÁRIO
@@ -1783,7 +1810,30 @@ function renderDailyChart() {
       responsive: true,
       maintainAspectRatio: false,
       interaction: { mode: "index", intersect: false },
-      plugins: { legend: { display: false } },
+      plugins: {
+        legend: { display: false },
+        zoom: {
+          pan: {
+            enabled: true,
+            mode: "x"
+          },
+          zoom: {
+            wheel: {
+              enabled: true
+            },
+            pinch: {
+              enabled: true
+            },
+            drag: {
+              enabled: false
+            },
+            mode: "x"
+          },
+          limits: {
+            x: { minRange: 6 }
+          }
+        }
+      },
       scales: {
         x: {
           ticks: { color: "#9adbb8", maxTicksLimit: 12 },
@@ -1898,9 +1948,10 @@ function renderMonthlyChart() {
           data: daily,
           backgroundColor: "rgba(200,200,200,0.75)",
           borderRadius: 8,
-          barThickness: 18,
-          categoryPercentage: 0.9,
-          barPercentage: 0.9
+          barThickness: 12,
+          maxBarThickness: 14,
+          categoryPercentage: 0.72,
+          barPercentage: 0.82
         }
       ]
     },
@@ -1911,6 +1962,13 @@ function renderMonthlyChart() {
       plugins: {
         legend: { display: false },
         tooltip: {
+          backgroundColor: "rgba(6,18,14,0.96)",
+          borderColor: "rgba(57,229,140,0.18)",
+          borderWidth: 1,
+          titleColor: "#dbe7ef",
+          bodyColor: "#dbe7ef",
+          padding: 10,
+          displayColors: false,
           callbacks: {
             title: (items) => items?.[0]?.label ? `Dia ${items[0].label}` : "",
             label: (item) => `Geração do dia: ${formatKwhPtBR(item?.raw)}`
@@ -1919,14 +1977,31 @@ function renderMonthlyChart() {
       },
       scales: {
         x: {
-          ticks: { color: "#9adbb8", maxTicksLimit: 8 },
+          offset: true,
+          ticks: {
+            color: "#9adbb8",
+            maxTicksLimit: 6,
+            autoSkip: true,
+            maxRotation: 0,
+            minRotation: 0,
+            padding: 8
+          },
           grid: { display: false }
         },
         y: {
           beginAtZero: true,
           suggestedMax: suggestedMaxDaily,
-          ticks: { color: "#9adbb8", callback: (v) => formatNumberPtBR(v) },
-          grid: { color: "rgba(255,255,255,0.04)" }
+          grace: "12%",
+          ticks: {
+            color: "#9adbb8",
+            maxTicksLimit: 6,
+            padding: 8,
+            callback: (v) => formatNumberPtBR(v)
+          },
+          grid: {
+            color: "rgba(255,255,255,0.04)",
+            drawBorder: false
+          }
         }
       }
     }
@@ -2572,6 +2647,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   document.body.classList.add("plant-enter");
   setTimeout(() => document.body.classList.remove("plant-enter"), 500);
   setupInverterToggles();
+  wireDailyChartZoomControlsOnce();
   initTrackersPanel();
   setupDeviceNav();
 
