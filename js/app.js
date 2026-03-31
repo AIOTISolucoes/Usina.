@@ -1749,8 +1749,8 @@ function updateSummaryUI(plants) {
   let totalRatedPower = 0;
 
   validPlants.forEach(p => {
-    totalActivePower += Number(p.active_power_kw || 0);
-    totalRatedPower += Number(p.rated_power_kw || 0);
+    totalActivePower += Number(p?.active_power_kw ?? 0) || 0;
+    totalRatedPower += Number(p?.rated_power_kw ?? p?.rated_power_kwp ?? 0) || 0;
   });
 
   const loadPct = totalRatedPower > 0 ? (totalActivePower / totalRatedPower) * 100 : 0;
@@ -3167,15 +3167,6 @@ async function refreshDashboard() {
 
   lastAlarmSeverityByPlant = buildPlantAlarmSeverityMap(alarms);
 
-  if (CURRENT_PLANT_ID == null) {
-    CURRENT_PLANT_ID = loadSelectedPlantId();
-  }
-
-  if (CURRENT_PLANT_ID == null && lastValidPlants.length) {
-    CURRENT_PLANT_ID = lastValidPlants[0].power_plant_id ?? lastValidPlants[0].plant_id ?? lastValidPlants[0].id;
-    saveSelectedPlantId(CURRENT_PLANT_ID);
-  }
-
   try {
     const summary = await fetchPlantsSummary();
     refreshTopChipsGlobalFromSummary(summary);
@@ -3183,13 +3174,8 @@ async function refreshDashboard() {
     console.warn("[SUMMARY] falhou, fallback via /plants:", e?.message || e);
     refreshTopChipsGlobalFromPlants(lastValidPlants);
   }
-
-  const selected = lastValidPlants.find(
-    p => (p.power_plant_id ?? p.plant_id ?? p.id) === CURRENT_PLANT_ID
-  );
-
-  if (selected) updateSummaryUI([selected]);
-  else updateSummaryUI(lastValidPlants);
+  // topo sempre global: soma de todas as usinas visíveis para o usuário
+  updateSummaryUI(lastValidPlants);
 
   renderPortfolioTable(lastValidPlants);
   await refreshVisibleViewData();
