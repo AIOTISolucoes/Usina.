@@ -1514,8 +1514,9 @@ tbody tr:hover td {
   .events-table-full tbody td:nth-child(1)::before{ content: "Timestamp"; }
   .events-table-full tbody td:nth-child(2)::before{ content: "Point"; }
   .events-table-full tbody td:nth-child(3)::before{ content: "Equipment"; }
-  .events-table-full tbody td:nth-child(4)::before{ content: "Type"; }
-  .events-table-full tbody td:nth-child(5)::before{ content: "Severity"; }
+  .events-table-full tbody td:nth-child(4)::before{ content: "Description"; }
+  .events-table-full tbody td:nth-child(5)::before{ content: "State"; }
+  .events-table-full tbody td:nth-child(6)::before{ content: "Severity"; }
 
   .alarms-table-wrapper,
   .events-table-wrapper-full{
