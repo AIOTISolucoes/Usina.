@@ -108,6 +108,11 @@ let DATASTUDIO_CHART = null;
 // Abort controller pra evitar race condition
 let eventsAbortController = null;
 let ALARMS_RENDER_SEQ = 0;
+let LAST_ACTIVE_ALARMS_RENDER_KEY = "";
+let LAST_RECOGNIZED_ALARMS_RENDER_KEY = "";
+let LAST_EVENTS_RENDER_KEY = "";
+let LOCAL_ACKED_ALARMS = [];
+let CURRENT_ALARMS_TAB_MODE = null; // "active" | "recognized"
 
 // ✅ MODO PADRÃO DO EVENTS
 let EVENTS_VIEW_MODE = "normal";
@@ -135,6 +140,33 @@ function normalizeAlarmSeverity(sev) {
   const normalized = String(sev).toLowerCase();
   if (normalized === "high" || normalized === "medium") return normalized;
   return null;
+}
+
+function buildAlarmRenderKey(list, isRecognized) {
+  const base = Array.isArray(list) ? list : [];
+  const compact = base.map((a) => ({
+    id: a?.event_row_id ?? a?.id ?? null,
+    state: String(a?.alarm_state ?? a?.state ?? "").toUpperCase(),
+    acknowledged: a?.acknowledged === true,
+    acknowledged_at: a?.acknowledged_at ?? null,
+    acknowledged_by: a?.acknowledged_by ?? null,
+    acknowledgment_note: a?.acknowledgment_note ?? null,
+    started_at: a?.started_at ?? a?.timestamp ?? a?.last_event_ts ?? null,
+    event_name: a?.event_name ?? null
+  }));
+  return JSON.stringify({ mode: isRecognized ? "recognized" : "active", compact });
+}
+
+function buildEventsRenderKey(list, page, filters) {
+  const compact = (Array.isArray(list) ? list : []).map((ev) => ({
+    id: ev?.event_row_id ?? ev?.id ?? null,
+    ts: ev?.event_ts ?? ev?.timestamp ?? null,
+    state: ev?.state ?? ev?.event_status ?? null,
+    severity: ev?.severity ?? null,
+    acknowledged_by: ev?.acknowledged_by ?? null,
+    acknowledgment_note: ev?.acknowledgment_note ?? null
+  }));
+  return JSON.stringify({ page, f: filters, compact });
 }
 
 function getHigherSeverity(a, b) {
@@ -559,15 +591,13 @@ async function fetchAcknowledgedAlarms() {
   const res = await apiFetch("/alarms/history");
   if (!res.ok) throw new Error("Erro ao buscar alarmes reconhecidos");
   const data = await res.json();
-
-  if (data && data.body) {
-    const parsed = typeof data.body === "string" ? JSON.parse(data.body) : data.body;
-    return Array.isArray(parsed) ? parsed : [];
-  }
-  return Array.isArray(data) ? data : [];
+  const parsed = (data && data.body)
+    ? (typeof data.body === "string" ? JSON.parse(data.body) : data.body)
+    : data;
+  return Array.isArray(parsed) ? parsed : [];
 }
 
-async function acknowledgeAlarm(alarm) {
+async function acknowledgeAlarm(alarm, acknowledgmentNote = "") {
   const user = JSON.parse(localStorage.getItem("user") || "{}");
 
   const alarmId = alarm?.id || alarm?.event_row_id;
@@ -582,7 +612,9 @@ async function acknowledgeAlarm(alarm) {
       event_row_id: alarm.event_row_id || alarm.id,
       power_plant_id: alarm.power_plant_id,
       acknowledged_by: user?.username || user?.name || user?.email || "operador",
-      acknowledgment_note: ""
+      acknowledgment_note: acknowledgmentNote && String(acknowledgmentNote).trim()
+        ? String(acknowledgmentNote).trim()
+        : null
     })
   });
 
@@ -591,7 +623,10 @@ async function acknowledgeAlarm(alarm) {
     throw new Error(`Falha ao reconhecer alarme (${res.status}) ${txt}`);
   }
 
-  return res.json().catch(() => ({}));
+  const data = await res.json().catch(() => ({}));
+  return data && data.body
+    ? (typeof data.body === "string" ? JSON.parse(data.body) : data.body)
+    : data;
 }
 
 /**
@@ -1065,21 +1100,332 @@ function stopEventsAutoRefresh() {
 // =============================================================================
 // RENDERIZAÇÃO DA INTERFACE (ALARMS) — NÃO MEXI
 // =============================================================================
-async function renderAlarmsTable(isRecognized = false) {
+let ACK_MODAL_READY = false;
+
+function ensureAckModal() {
+  if (ACK_MODAL_READY) return;
+
+  const style = document.createElement("style");
+  style.id = "ack-modal-styles";
+  style.textContent = `
+    .ack-modal-overlay{
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,.72);
+      backdrop-filter: blur(6px);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 99999;
+      padding: 20px;
+    }
+    .ack-modal{
+      width: min(520px, 100%);
+      border-radius: 18px;
+      background:
+        radial-gradient(600px 160px at 12% 0%, rgba(57,229,140,.10), transparent 60%),
+        linear-gradient(180deg, rgba(10,18,15,.98), rgba(4,9,7,.98));
+      border: 1px solid rgba(57,229,140,.18);
+      box-shadow:
+        0 24px 60px rgba(0,0,0,.55),
+        0 0 30px rgba(57,229,140,.08),
+        inset 0 1px 0 rgba(255,255,255,.04);
+      overflow: hidden;
+      animation: ackModalEnter .18s ease;
+    }
+    @keyframes ackModalEnter{
+      from{ opacity:0; transform: translateY(8px) scale(.985); }
+      to{ opacity:1; transform: translateY(0) scale(1); }
+    }
+    .ack-modal__header{
+      padding: 18px 20px 12px;
+      border-bottom: 1px solid rgba(255,255,255,.06);
+    }
+    .ack-modal__title{
+      margin: 0;
+      color: #eafff3;
+      font-size: 18px;
+      font-weight: 700;
+      letter-spacing: .02em;
+    }
+    .ack-modal__subtitle{
+      margin-top: 6px;
+      color: rgba(185,235,208,.72);
+      font-size: 13px;
+      line-height: 1.45;
+    }
+    .ack-modal__body{
+      padding: 18px 20px 10px;
+    }
+    .ack-modal__alarm{
+      margin-bottom: 14px;
+      padding: 12px 14px;
+      border-radius: 12px;
+      background: rgba(255,255,255,.03);
+      border: 1px solid rgba(57,229,140,.10);
+      color: rgba(233,255,243,.92);
+      line-height: 1.45;
+      font-size: 13px;
+    }
+    .ack-modal__label{
+      display: block;
+      margin-bottom: 8px;
+      color: #9adbb8;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: .05em;
+      text-transform: uppercase;
+    }
+    .ack-modal__textarea{
+      width: 100%;
+      min-height: 120px;
+      resize: vertical;
+      border-radius: 14px;
+      border: 1px solid rgba(57,229,140,.18);
+      background: rgba(6,12,10,.92);
+      color: #e9fff3;
+      padding: 14px 14px;
+      outline: none;
+      font-size: 14px;
+      line-height: 1.5;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.03);
+    }
+    .ack-modal__textarea:focus{
+      border-color: rgba(57,229,140,.42);
+      box-shadow:
+        0 0 0 3px rgba(57,229,140,.08),
+        0 0 16px rgba(57,229,140,.12);
+    }
+    .ack-modal__hint{
+      margin-top: 8px;
+      font-size: 12px;
+      color: rgba(185,235,208,.62);
+    }
+    .ack-modal__footer{
+      display: flex;
+      justify-content: flex-end;
+      gap: 10px;
+      padding: 16px 20px 20px;
+    }
+    .ack-btn{
+      height: 42px;
+      border-radius: 12px;
+      border: 1px solid rgba(255,255,255,.08);
+      padding: 0 16px;
+      font-size: 13px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: all .16s ease;
+    }
+    .ack-btn--ghost{
+      background: rgba(255,255,255,.04);
+      color: rgba(233,255,243,.86);
+    }
+    .ack-btn--ghost:hover{
+      background: rgba(255,255,255,.07);
+    }
+    .ack-btn--confirm{
+      background: rgba(57,229,140,.10);
+      border-color: rgba(57,229,140,.28);
+      color: #cffff0;
+      box-shadow: 0 0 18px rgba(57,229,140,.08);
+    }
+    .ack-btn--confirm:hover{
+      background: rgba(57,229,140,.16);
+      border-color: rgba(57,229,140,.42);
+      box-shadow: 0 0 24px rgba(57,229,140,.14);
+    }
+    .ack-modal__confirm-box{
+      margin-top: 14px;
+      padding: 12px 14px;
+      border-radius: 12px;
+      border: 1px solid rgba(255,186,65,.18);
+      background: rgba(255,186,65,.06);
+      color: rgba(255,241,214,.92);
+      font-size: 13px;
+      line-height: 1.45;
+    }
+    .ack-modal__confirm-actions{
+      display: flex;
+      justify-content: flex-end;
+      gap: 10px;
+      margin-top: 12px;
+    }
+    .ack-modal .hidden{ display: none; }
+  `;
+  document.head.appendChild(style);
+  ACK_MODAL_READY = true;
+}
+
+function openAckModal(alarm) {
+  ensureAckModal();
+  return new Promise((resolve) => {
+    const plantLabel = alarm?.power_plant_name || "—";
+    const deviceTypeLabel = alarm?.device_type_name || alarm?.device_type || "—";
+    const deviceLabel = alarm?.device_name ? `${deviceTypeLabel} • ${alarm.device_name}` : (alarm?.device_id || "—");
+    const eventName =
+      alarm?.event_name && String(alarm.event_name).trim()
+        ? String(alarm.event_name).trim()
+        : getAlarmDescription(alarm?.event_code);
+
+    const overlay = document.createElement("div");
+    overlay.className = "ack-modal-overlay";
+    overlay.innerHTML = `
+      <div class="ack-modal" role="dialog" aria-modal="true" aria-labelledby="ackModalTitle">
+        <div class="ack-modal__header">
+          <h3 class="ack-modal__title" id="ackModalTitle">Reconhecer alerta</h3>
+          <div class="ack-modal__subtitle">
+            Confirme o reconhecimento do alerta e registre uma observação para histórico.
+          </div>
+        </div>
+        <div class="ack-modal__body">
+          <div class="ack-modal__alarm">
+            <strong>${plantLabel}</strong><br>
+            ${deviceLabel}<br>
+            ${eventName}
+          </div>
+          <label class="ack-modal__label" for="ackModalTextarea">Observação do reconhecimento</label>
+          <textarea id="ackModalTextarea" class="ack-modal__textarea" placeholder="Ex.: equipe acionada, verificação em campo, evento validado..."></textarea>
+          <div class="ack-modal__hint">
+            Essa descrição será salva no banco em <strong>acknowledgment_note</strong>.
+          </div>
+          <div class="ack-modal__confirm-box hidden" id="ackModalConfirmBox">
+            Tem certeza que deseja reconhecer este alerta com essa observação?
+            <div class="ack-modal__confirm-actions">
+              <button type="button" class="ack-btn ack-btn--ghost" id="ackModalBackBtn">Voltar</button>
+              <button type="button" class="ack-btn ack-btn--confirm" id="ackModalFinalConfirmBtn">Confirmar envio</button>
+            </div>
+          </div>
+        </div>
+        <div class="ack-modal__footer">
+          <button type="button" class="ack-btn ack-btn--ghost" id="ackModalCancelBtn">Cancelar</button>
+          <button type="button" class="ack-btn ack-btn--confirm" id="ackModalContinueBtn">Continuar</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+
+    const textarea = overlay.querySelector("#ackModalTextarea");
+    const cancelBtn = overlay.querySelector("#ackModalCancelBtn");
+    const continueBtn = overlay.querySelector("#ackModalContinueBtn");
+    const confirmBox = overlay.querySelector("#ackModalConfirmBox");
+    const backBtn = overlay.querySelector("#ackModalBackBtn");
+    const finalConfirmBtn = overlay.querySelector("#ackModalFinalConfirmBtn");
+
+    const close = (result) => {
+      overlay.remove();
+      resolve(result);
+    };
+
+    requestAnimationFrame(() => textarea?.focus());
+    cancelBtn?.addEventListener("click", () => close(null));
+    overlay.addEventListener("click", (e) => {
+      if (e.target === overlay) close(null);
+    });
+    document.addEventListener("keydown", function escHandler(e) {
+      if (e.key === "Escape") {
+        document.removeEventListener("keydown", escHandler);
+        close(null);
+      }
+    }, { once: true });
+    continueBtn?.addEventListener("click", () => confirmBox?.classList.remove("hidden"));
+    backBtn?.addEventListener("click", () => confirmBox?.classList.add("hidden"));
+    finalConfirmBtn?.addEventListener("click", () => close(textarea?.value ?? ""));
+  });
+}
+
+function openAckDetailsModal(alarm) {
+  ensureAckModal();
+  const overlay = document.createElement("div");
+  overlay.className = "ack-modal-overlay";
+
+  const plantLabel = alarm?.power_plant_name || "—";
+  const deviceTypeLabel = alarm?.device_type_name || alarm?.device_type || "—";
+  const deviceLabel = alarm?.device_name ? `${deviceTypeLabel} • ${alarm.device_name}` : (alarm?.device_id || "—");
+  const baseDesc =
+    alarm?.event_name && String(alarm.event_name).trim()
+      ? String(alarm.event_name).trim()
+      : getAlarmDescription(alarm?.event_code);
+  const ackBy = alarm?.acknowledged_by ? String(alarm.acknowledged_by).trim() : "—";
+  const ackAt = alarm?.acknowledged_at ? new Date(alarm.acknowledged_at).toLocaleString("pt-BR") : "—";
+  const ackNote = alarm?.acknowledgment_note ? String(alarm.acknowledgment_note).trim() : "—";
+
+  overlay.innerHTML = `
+    <div class="ack-modal" role="dialog" aria-modal="true" aria-labelledby="ackDetailsTitle">
+      <div class="ack-modal__header">
+        <h3 class="ack-modal__title" id="ackDetailsTitle">Detalhes do reconhecimento</h3>
+        <div class="ack-modal__subtitle">Acknowledge note</div>
+      </div>
+      <div class="ack-modal__body">
+        <div class="ack-modal__alarm">
+          <strong>${plantLabel}</strong><br>
+          ${deviceLabel}<br>
+          ${baseDesc}
+        </div>
+        <div class="ack-modal__hint"><strong>Ack by:</strong> ${ackBy}</div>
+        <div class="ack-modal__hint"><strong>Acknowledged at:</strong> ${ackAt}</div>
+        <label class="ack-modal__label">Acknowledge note</label>
+        <div class="ack-modal__alarm" style="white-space:pre-wrap;">${ackNote}</div>
+      </div>
+      <div class="ack-modal__footer">
+        <button type="button" class="ack-btn ack-btn--confirm" id="ackDetailsCloseBtn">Fechar</button>
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(overlay);
+  const close = () => overlay.remove();
+  overlay.querySelector("#ackDetailsCloseBtn")?.addEventListener("click", close);
+  overlay.addEventListener("click", (e) => {
+    if (e.target === overlay) close();
+  });
+}
+
+function sortRecognizedAlarms(list) {
+  const arr = Array.isArray(list) ? list.slice() : [];
+  const ts = (a) => Date.parse(a?.acknowledged_at || "") || 0;
+  return arr.sort((a, b) => ts(b) - ts(a));
+}
+
+function sortActiveAlarms(list) {
+  const arr = Array.isArray(list) ? list.slice() : [];
+  const ts = (a) => Date.parse(a?.started_at || a?.timestamp || "") || 0;
+  return arr.sort((a, b) => ts(b) - ts(a));
+}
+
+function ensureAlarmsHeader(isRecognized) {
+  const tr = document.querySelector(".alarms-table thead tr");
+  if (!tr) return;
+  tr.innerHTML = isRecognized
+    ? "<th>Pathname</th><th>Description</th><th>Ack By</th><th>Ack Note</th><th>State</th><th>Timestamp</th>"
+    : "<th>Pathname</th><th>Description</th><th>State</th><th>Timestamp</th>";
+}
+
+async function renderAlarmsTable(isRecognized = false, { force = false } = {}) {
   const tbody = document.getElementById("alarmsTbody");
   if (!tbody) return;
 
   const renderSeq = ++ALARMS_RENDER_SEQ;
-  tbody.innerHTML = "";
+  ensureAlarmsHeader(isRecognized);
 
   let alarms = [];
   try {
-    alarms = isRecognized
-      ? (await fetchAcknowledgedAlarms()).filter(a => {
-          const state = String(a.alarm_state || a.state || "").toUpperCase();
-          return state === "ACK" || state === "CLEARED";
-        })
-      : await fetchActiveAlarms();
+    if (isRecognized) {
+      const fetched = await fetchAcknowledgedAlarms();
+      alarms = [...LOCAL_ACKED_ALARMS, ...fetched].filter(a => {
+        return a?.acknowledged === true || a?.acknowledged === "true";
+      });
+      LOCAL_ACKED_ALARMS = sortRecognizedAlarms(dedupeAlarms(alarms)).slice(0, 500);
+      alarms = LOCAL_ACKED_ALARMS.slice();
+    } else {
+      alarms = (await fetchActiveAlarms()).filter(a => {
+        const state = String(a.alarm_state || a.state || "").toUpperCase();
+        const id = String(a?.event_row_id ?? a?.id ?? "");
+        const locallyAcked = LOCAL_ACKED_ALARMS.some((x) => String(x?.event_row_id ?? x?.id ?? "") === id);
+        return state === "ACTIVE" && !locallyAcked;
+      });
+      alarms = sortActiveAlarms(alarms);
+    }
   } catch (err) {
     console.error("Erro ao buscar alarmes:", err);
   }
@@ -1087,9 +1433,31 @@ async function renderAlarmsTable(isRecognized = false) {
   if (renderSeq !== ALARMS_RENDER_SEQ) return;
 
   alarms = dedupeAlarms(alarms);
+  alarms = isRecognized ? sortRecognizedAlarms(alarms) : sortActiveAlarms(alarms);
+
+  const renderKey = buildAlarmRenderKey(alarms, isRecognized);
+  const nextMode = isRecognized ? "recognized" : "active";
+  const modeChanged = CURRENT_ALARMS_TAB_MODE !== nextMode;
+
+  if (!force && !modeChanged) {
+    if (isRecognized) {
+      if (renderKey === LAST_RECOGNIZED_ALARMS_RENDER_KEY) return;
+    } else {
+      if (renderKey === LAST_ACTIVE_ALARMS_RENDER_KEY) return;
+    }
+  }
+
+  if (isRecognized) {
+    LAST_RECOGNIZED_ALARMS_RENDER_KEY = renderKey;
+  } else {
+    LAST_ACTIVE_ALARMS_RENDER_KEY = renderKey;
+  }
+  CURRENT_ALARMS_TAB_MODE = nextMode;
+
+  tbody.innerHTML = "";
 
   if (!alarms || alarms.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="4" style="text-align:center; opacity:0.6; padding:40px;">${isRecognized ? "Nenhum alerta reconhecido" : "Nenhum alerta ativo"}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="${isRecognized ? 6 : 4}" style="text-align:center; opacity:0.6; padding:40px;">${isRecognized ? "Nenhum alerta reconhecido" : "Nenhum alerta ativo"}</td></tr>`;
     return;
   }
 
@@ -1100,20 +1468,25 @@ async function renderAlarmsTable(isRecognized = false) {
       alarm.severity || alarm.alarm_severity || alarm.level || alarm.alarm_level
     ) || "low";
 
-    const timestamp =
-      alarm.acknowledged_at ||
-      alarm.cleared_at ||
-      alarm.last_event_ts ||
-      alarm.started_at ||
-      alarm.timestamp ||
-      "—";
+    const timestamp = isRecognized
+      ? (
+          alarm.acknowledged_at ||
+          alarm.cleared_at ||
+          alarm.timestamp ||
+          alarm.started_at ||
+          "—"
+        )
+      : (
+          alarm.started_at ||
+          alarm.timestamp ||
+          alarm.last_event_ts ||
+          "—"
+        );
 
     const tsFormatted = timestamp !== "—" ? new Date(timestamp).toLocaleString("pt-BR") : "—";
 
-    const state =
-      !isRecognized && alarm.acknowledged === true
-        ? "ACK"
-        : (alarm.alarm_state || alarm.state || "—");
+    const rawState = String(alarm.alarm_state || alarm.state || "—").toUpperCase();
+    const state = isRecognized ? "ACK" : rawState;
     const stateColor =
       state === "ACTIVE" ? "#f44336" :
       state === "ACK" ? "#ff9800" :
@@ -1130,17 +1503,29 @@ async function renderAlarmsTable(isRecognized = false) {
       ? `${deviceTypeLabel} • ${alarm.device_name}`
       : (alarm.device_id || "—");
 
-    const desc =
+    const baseDesc =
       alarm.event_name && String(alarm.event_name).trim() !== ""
         ? alarm.event_name
         : getAlarmDescription(alarm.event_code);
-
-    tr.innerHTML = `
-      <td>${plantLabel} • ${deviceLabel}</td>
-      <td>${desc}</td>
-      <td class="alarm-state-pill" style="font-weight:bold; color:${stateColor};">${state}</td>
-      <td>${tsFormatted}</td>
-    `;
+    const ackBy = alarm.acknowledged_by ? String(alarm.acknowledged_by).trim() : "";
+    const ackNote = alarm.acknowledgment_note ? String(alarm.acknowledgment_note).trim() : "";
+    if (isRecognized) {
+      tr.innerHTML = `
+        <td>${plantLabel} • ${deviceLabel}</td>
+        <td>${baseDesc}</td>
+        <td>${valueOrDash(ackBy)}</td>
+        <td>${ackNote ? `<button type="button" class="ack-note-link">Ver note</button>` : "—"}</td>
+        <td class="alarm-state-pill" style="font-weight:bold; color:${stateColor};">${state}</td>
+        <td>${tsFormatted}</td>
+      `;
+    } else {
+      tr.innerHTML = `
+        <td>${plantLabel} • ${deviceLabel}</td>
+        <td>${baseDesc}</td>
+        <td class="alarm-state-pill" style="font-weight:bold; color:${stateColor};">${state}</td>
+        <td>${tsFormatted}</td>
+      `;
+    }
 
     if (!isRecognized) {
       tr.classList.add("alarm-row-attention", `alarm-row-attention--${sev}`);
@@ -1149,12 +1534,48 @@ async function renderAlarmsTable(isRecognized = false) {
       tr.addEventListener("dblclick", async () => {
         try {
           if (!alarm?.event_row_id && !alarm?.id) return;
-          await acknowledgeAlarm(alarm);
-          await renderAlarmsTable(isAlarmsRecognizedTabActive());
+          const note = await openAckModal(alarm);
+          if (note === null) return;
+          const ackPayload = await acknowledgeAlarm(alarm, note);
+
+          const user = JSON.parse(localStorage.getItem("user") || "{}");
+          const ackByLocal = user?.username || user?.name || user?.email || "operador";
+          const ackNowIso = new Date().toISOString();
+          const recognizedAlarm = {
+            ...alarm,
+            ...(ackPayload && typeof ackPayload === "object" ? ackPayload : {}),
+            acknowledged: true,
+            acknowledged_by: (ackPayload?.acknowledged_by ?? ackByLocal),
+            acknowledgment_note: (ackPayload?.acknowledgment_note ?? (note || null)),
+            acknowledged_at: (ackPayload?.acknowledged_at ?? ackNowIso),
+            alarm_state: (ackPayload?.alarm_state ?? "ACK"),
+            state: (ackPayload?.state ?? "ACK")
+          };
+
+          const recognizedTab = document.querySelectorAll(".tab-btn")[1];
+          if (recognizedTab) {
+            document.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
+            recognizedTab.classList.add("active");
+          }
+
+          LAST_ACTIVE_ALARMS_RENDER_KEY = "";
+          LAST_RECOGNIZED_ALARMS_RENDER_KEY = "";
+          LOCAL_ACKED_ALARMS = sortRecognizedAlarms(dedupeAlarms([recognizedAlarm, ...LOCAL_ACKED_ALARMS])).slice(0, 500);
+
+          await renderAlarmsTable(true);
         } catch (err) {
           console.error("Erro ao reconhecer alarme:", err);
           alert(err?.message || "Não foi possível reconhecer o alarme.");
         }
+      });
+    }
+
+    if (isRecognized && ackNote) {
+      requestAnimationFrame(() => {
+        tr.querySelector(".ack-note-link")?.addEventListener("click", (e) => {
+          e.stopPropagation();
+          openAckDetailsModal(alarm);
+        });
       });
     }
 
@@ -1223,6 +1644,16 @@ async function loadEvents(page = 1, { silent = false } = {}) {
     });
 
     const events = response?.items || [];
+    const eventsRenderKey = buildEventsRenderKey(events, page, {
+      start_time: filters.start_time,
+      end_time: filters.end_time,
+      severity: filters.severity,
+      event_type: filters.event_type,
+      status: filters.status,
+      q: filters.q,
+      plant_id: filters.plant_id,
+      device_id: filters.device_id
+    });
 
     updateEventsPaginationUI({
       page,
@@ -1232,6 +1663,7 @@ async function loadEvents(page = 1, { silent = false } = {}) {
     });
 
     if (!events.length) {
+      LAST_EVENTS_RENDER_KEY = eventsRenderKey;
       tbody.innerHTML = `
         <tr><td colspan="7" style="text-align:center; opacity:0.6; padding:40px;">
           Nenhum evento registrado
@@ -1239,6 +1671,12 @@ async function loadEvents(page = 1, { silent = false } = {}) {
       `;
       return;
     }
+
+    if (eventsRenderKey === LAST_EVENTS_RENDER_KEY) {
+      EVENTS_STATE.page = page;
+      return;
+    }
+    LAST_EVENTS_RENDER_KEY = eventsRenderKey;
 
     tbody.innerHTML = "";
 
@@ -1253,7 +1691,14 @@ async function loadEvents(page = 1, { silent = false } = {}) {
           ? `${ev.device_type} • ${ev.device_name}`
           : (ev.device_name || ev.device_id || "—");
 
-      const desc = valueOrDash(ev.event_name ?? ev.description ?? ev.point_name ?? ev.event_code ?? ev.raw_key ?? "—");
+      const baseDesc = valueOrDash(ev.event_name ?? ev.description ?? ev.point_name ?? ev.event_code ?? ev.raw_key ?? "—");
+      const ackBy = ev.acknowledged_by ? String(ev.acknowledged_by).trim() : "";
+      const ackNote = ev.acknowledgment_note ? String(ev.acknowledgment_note).trim() : "";
+      const desc = `
+        <div>${baseDesc}</div>
+        ${ackBy ? `<div class="ack-inline-meta">Ack by: ${ackBy}</div>` : ""}
+        ${ackNote ? `<button type="button" class="ack-note-link">Ver note</button>` : ""}
+      `;
       const type = valueOrDash(ev.event_type);
       const status = valueOrDash(ev.status ?? ev.event_status ?? ev.state);
       const sev = valueOrDash(ev.severity);
@@ -1271,6 +1716,12 @@ async function loadEvents(page = 1, { silent = false } = {}) {
       `;
 
       tbody.appendChild(tr);
+      if (ackNote) {
+        tr.querySelector(".ack-note-link")?.addEventListener("click", (e) => {
+          e.stopPropagation();
+          openAckDetailsModal(ev);
+        });
+      }
     });
 
     EVENTS_STATE.page = page;
@@ -2642,7 +3093,8 @@ document.getElementById("btnAlarms")?.addEventListener("click", async () => {
   document.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
   const firstTab = document.querySelector(".tab-btn");
   if (firstTab) firstTab.classList.add("active");
-  await renderAlarmsTable(false);
+  CURRENT_ALARMS_TAB_MODE = null;
+  await renderAlarmsTable(false, { force: true });
 });
 
 document.getElementById("btnEvents")?.addEventListener("click", () => showView("events"));
@@ -2652,8 +3104,8 @@ document.querySelectorAll(".tab-btn").forEach(btn => {
   btn.addEventListener("click", async () => {
     document.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
     btn.classList.add("active");
-    const isRecognized = btn.textContent.includes("RECONHECIDOS");
-    await renderAlarmsTable(isRecognized);
+    const isRecognized = btn.textContent.toUpperCase().includes("RECONHECIDOS");
+    await renderAlarmsTable(isRecognized, { force: true });
 
     const alarmsView = document.getElementById("alarmsView");
     animateViewEntrance(alarmsView);
