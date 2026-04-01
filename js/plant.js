@@ -287,6 +287,7 @@ function normalizeDailyPayload(payload) {
 let DAILY = null;
 let MONTHLY = null;
 let ACTIVE_ALARMS = [];
+let PLANT_ALARMS_MENU_OPEN = false;
 let INVERTERS_REALTIME = [];
 let RELAY_REALTIME = null; // ✅ NEW
 let MULTIMETER_REALTIME = null;
@@ -343,6 +344,84 @@ function dedupePlantAlarms(alarms) {
     if (!map.has(key)) map.set(key, alarm);
   });
   return Array.from(map.values());
+}
+
+function hasActivePlantAlarms() {
+  return Array.isArray(ACTIVE_ALARMS) && ACTIVE_ALARMS.length > 0;
+}
+
+function renderAlarmMenuButton() {
+  const btn = document.getElementById("plantAlarmMenuButton");
+  const count = document.getElementById("plantAlarmMenuCount");
+  const panel = document.getElementById("plantAlarmMenuPanel");
+  const empty = document.getElementById("plantAlarmMenuEmptyState");
+  const icon = btn?.querySelector(".plant-alarm-menu-icon");
+
+  if (!btn) return;
+
+  const hasAlarms = hasActivePlantAlarms();
+
+  btn.classList.toggle("is-clean", !hasAlarms);
+  btn.classList.toggle("is-alert", hasAlarms);
+  btn.setAttribute("aria-expanded", PLANT_ALARMS_MENU_OPEN ? "true" : "false");
+
+  if (count) {
+    count.textContent = String(ACTIVE_ALARMS.length || 0);
+    count.style.display = hasAlarms ? "inline-flex" : "none";
+  }
+
+  if (icon) {
+    icon.innerHTML = hasAlarms
+      ? `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 7v6" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><circle cx="12" cy="17" r="1.4" fill="currentColor"/><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>`
+      : `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 12.5l4 4 8-9" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>`;
+  }
+
+  if (panel) {
+    panel.classList.toggle("open", PLANT_ALARMS_MENU_OPEN);
+  }
+
+  if (empty) {
+    empty.style.display = hasAlarms ? "none" : "";
+  }
+}
+
+function setPlantAlarmMenuOpen(open) {
+  PLANT_ALARMS_MENU_OPEN = !!open;
+  renderAlarmMenuButton();
+}
+
+function setupPlantAlarmMenu() {
+  const btn = document.getElementById("plantAlarmMenuButton");
+  const panel = document.getElementById("plantAlarmMenuPanel");
+  const closeBtn = document.getElementById("plantAlarmMenuClose");
+
+  if (!btn || !panel) return;
+  if (btn.dataset.wiredAlarmMenu === "true") return;
+  btn.dataset.wiredAlarmMenu = "true";
+
+  btn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    setPlantAlarmMenuOpen(!PLANT_ALARMS_MENU_OPEN);
+  });
+
+  panel.addEventListener("click", (e) => {
+    e.stopPropagation();
+  });
+
+  closeBtn?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    setPlantAlarmMenuOpen(false);
+  });
+
+  document.addEventListener("click", () => {
+    if (PLANT_ALARMS_MENU_OPEN) setPlantAlarmMenuOpen(false);
+  });
+
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && PLANT_ALARMS_MENU_OPEN) {
+      setPlantAlarmMenuOpen(false);
+    }
+  });
 }
 
 function sortPlantAlarmsDesc(alarms) {
@@ -986,11 +1065,12 @@ function renderAlarms(alarms) {
   );
 
   if (!filtered.length) {
-    container.textContent = "Nenhum alarme ativo";
+    container.innerHTML = "";
     if (sublineEl) {
       sublineEl.textContent = "Nenhum alarme ativo";
       sublineEl.classList.remove("plant-subline--alarm");
     }
+    renderAlarmMenuButton();
     return;
   }
 
@@ -1024,6 +1104,10 @@ function renderAlarms(alarms) {
         await acknowledgePlantAlarm(a);
         ACTIVE_ALARMS = ACTIVE_ALARMS.filter((alarm) => String(alarm?.event_row_id ?? alarm?.alarm_id ?? alarm?.id) !== String(a?.event_row_id ?? a?.alarm_id ?? a?.id));
         renderAlarms(ACTIVE_ALARMS);
+        renderAlarmMenuButton();
+        if (!ACTIVE_ALARMS.length) {
+          setPlantAlarmMenuOpen(false);
+        }
       } catch (err) {
         row.style.opacity = "";
         console.error("[alarms][ack] erro", err);
@@ -1033,6 +1117,7 @@ function renderAlarms(alarms) {
 
     container.appendChild(row);
   });
+  renderAlarmMenuButton();
 }
 
 // ======================================================
@@ -2153,9 +2238,11 @@ async function refreshRealtimeEverything() {
     if (alarmsRes.status === "fulfilled") {
       ACTIVE_ALARMS = Array.isArray(alarmsRes.value) ? alarmsRes.value : [];
       renderAlarms(ACTIVE_ALARMS);
+      renderAlarmMenuButton();
     } else {
       ACTIVE_ALARMS = [];
       renderAlarms(ACTIVE_ALARMS);
+      renderAlarmMenuButton();
       console.error("[refreshRealtimeEverything][alarms] erro", alarmsRes.reason);
     }
 
@@ -2650,6 +2737,8 @@ document.addEventListener("DOMContentLoaded", async () => {
   wireDailyChartZoomControlsOnce();
   initTrackersPanel();
   setupDeviceNav();
+  setupPlantAlarmMenu();
+  renderAlarmMenuButton();
 
   if (!PLANT_ID) {
     console.warn("[plant] plant_id ausente na URL; mantendo tela sem dados de fallback.");
