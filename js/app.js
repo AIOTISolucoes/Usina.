@@ -1783,6 +1783,7 @@ function renderPortfolioTable(plants) {
 
   validPlants.forEach(plant => {
     const plantId = plant.power_plant_id ?? plant.plant_id ?? plant.id;
+    const plantName = plant.power_plant_name ?? plant.plant_name ?? plant.name;
     const openPlantPage = () => {
       if (plantId == null) return;
       window.location.href = `plant.html?plant_id=${encodeURIComponent(plantId)}`;
@@ -1793,17 +1794,22 @@ function renderPortfolioTable(plants) {
     tr.setAttribute("role", "link");
     tr.setAttribute("tabindex", "0");
 
-    const alarmSeverity = normalizeAlarmSeverity(plant.alarm_severity);
-    const plantIconClass = alarmSeverity ? `plant-icon plant-icon--${alarmSeverity}` : "plant-icon plant-icon--ok";
+    const alarmSeverity =
+      normalizeAlarmSeverity(lastAlarmSeverityByPlant.get(plantId)) ||
+      normalizeAlarmSeverity(lastAlarmSeverityByPlant.get(plantName)) ||
+      null;
+    const plantIconClass = alarmSeverity
+      ? `plant-icon plant-icon--${alarmSeverity}`
+      : "plant-icon plant-icon--ok";
 
     tr.innerHTML = `
       <td>
-        <button class="plant-cell-btn" title="Abrir usina ${valueOrDash(plant.power_plant_name)}">
+        <button class="plant-cell-btn" title="Abrir usina ${valueOrDash(plantName)}">
           <span class="plant-cell">
             <span class="${plantIconClass}" title="${alarmSeverity || "ok"}">
               <i class="fa-solid fa-seedling"></i>
             </span>
-            <span class="plant-name-text">${valueOrDash(plant.power_plant_name)}</span>
+            <span class="plant-name-text">${valueOrDash(plantName)}</span>
           </span>
         </button>
       </td>
