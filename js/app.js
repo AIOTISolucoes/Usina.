@@ -2109,15 +2109,16 @@ function renderDataStudioTagsTable(tags) {
     const tr = document.createElement("tr");
     tr.classList.add("ds-table-row-clickable");
     const checked = isTagSelected(tag) ? "checked" : "";
+
     tr.innerHTML = `
       <td><input type="checkbox" data-ds-pathname="${pathname.replaceAll('"', '&quot;')}" ${checked}></td>
-      <td>${valueOrDash(pathname)}</td>
+      <td>${valueOrDash(tag?.context)}</td>
       <td>${valueOrDash(tag?.description)}</td>
       <td>${valueOrDash(tag?.source)}</td>
       <td>${valueOrDash(tag?.data_kind)}</td>
       <td>${valueOrDash(tag?.unit)}</td>
-      <td>${valueOrDash(tag?.context)}</td>
       <td>${valueOrDash(tag?.power_plant_id)}</td>
+      <td class="ds-pathname-cell" title="${pathname.replaceAll('"', '&quot;')}">${valueOrDash(pathname)}</td>
     `;
 
     const checkbox = tr.querySelector("input[type='checkbox']");
@@ -2161,7 +2162,6 @@ function renderDataStudioTagsTable(tags) {
     });
 
     syncRowSelectionState();
-
     tagsTableBody.appendChild(tr);
   });
 
