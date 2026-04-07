@@ -3075,7 +3075,10 @@ function showView(viewName) {
   if (activeBtn) activeBtn.classList.add("active");
 
   const topSummary = document.getElementById("topSummary");
-  if (topSummary) topSummary.classList.remove("hidden");
+  if (topSummary) {
+    if (viewName === "overview") topSummary.classList.remove("hidden");
+    else topSummary.classList.add("hidden");
+  }
 
   if (viewName === "events") {
     EVENTS_STATE.page = 1;
