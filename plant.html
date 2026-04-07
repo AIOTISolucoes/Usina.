@@ -46,6 +46,24 @@
           <div class="plant-title-text">
             <h2 class="plant-name" id="plantName">—</h2>
             <span class="plant-subline" id="plantSubline">Nenhum alarme ativo</span>
+            <div class="plant-header-actions plant-header-actions--inline-left">
+              <button id="plantAlarmMenuButton" class="plant-alarm-menu-btn is-clean" aria-expanded="false" aria-label="Abrir alarmes da usina">
+                <span class="plant-alarm-menu-icon" aria-hidden="true"></span>
+                <span class="plant-alarm-menu-label">Alarmes</span>
+                <span id="plantAlarmMenuCount" class="plant-alarm-menu-count">0</span>
+              </button>
+
+              <div id="plantAlarmMenuPanel" class="plant-alarm-menu-panel">
+                <div class="plant-alarm-menu-panel-header">
+                  <strong>Alarmes ativos</strong>
+                  <button id="plantAlarmMenuClose" class="plant-alarm-menu-close" type="button" aria-label="Fechar alarmes">×</button>
+                </div>
+                <div id="plantAlarmMenuEmptyState" class="plant-alarm-menu-empty">
+                  Nenhum alarme ativo
+                </div>
+                <div id="plantActiveAlarms" class="plant-alarm-menu-list"></div>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -87,24 +105,6 @@
               <strong id="weatherModuleTemp">—</strong>
             </div>
           </div>
-        </div>
-
-        <div class="plant-header-actions">
-        <button id="plantAlarmMenuButton" class="plant-alarm-menu-btn is-clean" aria-expanded="false" aria-label="Abrir alarmes da usina">
-          <span class="plant-alarm-menu-icon" aria-hidden="true"></span>
-          <span class="plant-alarm-menu-label">Alarmes</span>
-          <span id="plantAlarmMenuCount" class="plant-alarm-menu-count">0</span>
-        </button>
-
-        <div id="plantAlarmMenuPanel" class="plant-alarm-menu-panel">
-          <div class="plant-alarm-menu-panel-header">
-            <strong>Alarmes ativos</strong>
-            <button id="plantAlarmMenuClose" class="plant-alarm-menu-close" type="button" aria-label="Fechar alarmes">×</button>
-          </div>
-          <div id="plantAlarmMenuEmptyState" class="plant-alarm-menu-empty">
-            Nenhum alarme ativo
-          </div>
-          <div id="plantActiveAlarms" class="plant-alarm-menu-list"></div>
         </div>
       </div>
     </div>
@@ -154,11 +154,13 @@
 
           <div class="chart-legend">
             <span class="legend-bars" aria-hidden="true">
+              <span class="bar bar--gray"></span>
               <span class="bar bar--green"></span>
               <span class="bar bar--yellow"></span>
             </span>
 
             <div class="legend-text">
+              <span class="legend-line legend-line--gray">Expected Power</span>
               <span class="legend-line legend-line--green">Active Power</span>
               <span class="legend-line legend-line--yellow">Irradiance POA</span>
             </div>
@@ -184,14 +186,40 @@
 
     <section class="card plant-chart-card plant-chart-card--monthly">
       <div class="card-header">
-        <div>
-          <h2>Geração mensal acumulada</h2>
-          <span class="subtitle">Últimos 30 dias</span>
+        <div class="monthly-head-wrap">
+          <div>
+            <h2>Geração mensal</h2>
+            <span class="subtitle">Últimos 30 dias · kWh / dia</span>
+          </div>
+          <div class="monthly-kpis">
+            <div class="monthly-kpi-pill">
+              <span>Total real</span>
+              <strong id="monthlyKpiReal">—</strong>
+            </div>
+            <div class="monthly-kpi-pill">
+              <span>Esperado</span>
+              <strong id="monthlyKpiExp">—</strong>
+            </div>
+          </div>
         </div>
+      </div>
+
+      <div class="monthly-legend-row">
+        <div class="monthly-leg"><span class="monthly-leg-sq monthly-leg-sq--real"></span> Geração real (acima do esperado)</div>
+        <div class="monthly-leg"><span class="monthly-leg-sq monthly-leg-sq--below"></span> Geração real (abaixo do esperado)</div>
+        <div class="monthly-leg"><span class="monthly-leg-sq monthly-leg-sq--exp"></span> Esperado</div>
       </div>
 
       <div class="chart-wrapper">
         <canvas id="plantMonthlyChart"></canvas>
+      </div>
+
+      <div class="monthly-progress-wrap">
+        <div class="monthly-progress-fill" id="monthlyProgressFill"></div>
+      </div>
+      <div class="monthly-bottom-meta">
+        <span id="monthlyBottomLeft">—</span>
+        <span id="monthlyBottomRight">—</span>
       </div>
     </section>
 
@@ -218,6 +246,7 @@
         <span>Freq</span>
         <span>PR</span>
         <span>Última leitura</span>
+        <span>Comandos</span>
       </div>
 
       <div id="invertersContainer"></div>
@@ -240,6 +269,7 @@
 
         <div class="relay-right">
           <span class="relay-last" id="relayLastUpdateText">—</span>
+          <span id="relayCommandBarWrap"></span>
           <span class="relay-state relay-state--unknown" id="relayStateBadge">—</span>
           <span class="relay-power" id="relayPowerText">— kW</span>
           <span id="relayOnlineText" style="display:none;">—</span>
@@ -261,6 +291,7 @@
 
         <div class="relay-right" id="multimeterRight">
           <span class="relay-last" id="multimeterLastUpdateText">—</span>
+          <span id="multimeterCommandBarWrap"></span>
           <span class="relay-state relay-state--unknown" id="multimeterOnlineBadge">—</span>
           <span class="relay-power" id="multimeterPowerText">—</span>
         </div>
