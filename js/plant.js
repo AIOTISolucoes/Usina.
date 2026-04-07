@@ -40,6 +40,18 @@ function formatKwhPtBR(v) {
   return `${formatNumberPtBR(n)} kWh`;
 }
 
+function formatKwPtBR(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return "—";
+  return `${formatNumberPtBR(n)} kW`;
+}
+
+function formatWm2PtBR(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return "—";
+  return `${formatNumberPtBR(n)} W/m²`;
+}
+
 function buildLastNDaysLabels(n) {
   const labels = [];
   const today = new Date();
@@ -178,6 +190,12 @@ function normalizeDailyPayload(payload) {
     Array.isArray(payload.irradiance_wm2) ? payload.irradiance_wm2.slice() :
     [];
 
+  const expectedRaw =
+    Array.isArray(payload.expectedPower) ? payload.expectedPower.slice() :
+    Array.isArray(payload.expected_power_kw) ? payload.expected_power_kw.slice() :
+    Array.isArray(payload.expected_power) ? payload.expected_power.slice() :
+    [];
+
   if (!labelsRaw.length) return payload;
 
   // timestamp por ponto (se existir), para filtrar estritamente o DIA ATUAL
@@ -222,7 +240,8 @@ function normalizeDailyPayload(payload) {
     points.push({
       minute,
       power: powerRaw[i] != null ? asNumber(powerRaw[i], 0) : 0,
-      irr: irrRaw[i] != null ? asNumber(irrRaw[i], 0) : 0
+      irr: irrRaw[i] != null ? asNumber(irrRaw[i], 0) : 0,
+      expected: expectedRaw[i] != null ? asNumber(expectedRaw[i], 0) : 0
     });
   }
 
@@ -231,7 +250,8 @@ function normalizeDailyPayload(payload) {
       ...payload,
       labels: [],
       activePower: [],
-      irradiance: []
+      irradiance: [],
+      expectedPower: []
     };
   }
 
@@ -250,9 +270,11 @@ function normalizeDailyPayload(payload) {
 
   const mapP = new Map();
   const mapI = new Map();
+  const mapE = new Map();
   points.forEach(p => {
     mapP.set(p.minute, p.power);
     mapI.set(p.minute, p.irr);
+    mapE.set(p.minute, p.expected);
   });
 
   // começa SEMPRE em 00:00 e termina no último minuto que chegou dado hoje
@@ -261,6 +283,7 @@ function normalizeDailyPayload(payload) {
   const labels = [];
   const activePower = [];
   const irradiance = [];
+  const expectedPower = [];
 
   for (let m = 0; m <= lastMin; m += step) {
     const hh = String(Math.floor(m / 60)).padStart(2, "0");
@@ -270,13 +293,15 @@ function normalizeDailyPayload(payload) {
     // sem buraco visual: minutos faltantes viram 0
     activePower.push(mapP.has(m) ? mapP.get(m) : 0);
     irradiance.push(mapI.has(m) ? mapI.get(m) : 0);
+    expectedPower.push(mapE.has(m) ? mapE.get(m) : 0);
   }
 
   return {
     ...payload,
     labels,
     activePower,
-    irradiance
+    irradiance,
+    expectedPower
   };
 }
 
@@ -348,6 +373,281 @@ function dedupePlantAlarms(alarms) {
 
 function hasActivePlantAlarms() {
   return Array.isArray(ACTIVE_ALARMS) && ACTIVE_ALARMS.length > 0;
+}
+
+const DEVICE_COMMAND_STATE = new Map();
+let DEVICE_COMMAND_MENU_OPEN_KEY = null;
+
+function getDeviceKey(deviceType, deviceId) {
+  return `${String(deviceType || "")}:${String(deviceId ?? "")}`;
+}
+
+function getDevicePersistentState(deviceType, deviceId, fallback = "off") {
+  return DEVICE_COMMAND_STATE.get(getDeviceKey(deviceType, deviceId)) || fallback;
+}
+
+function setDevicePersistentState(deviceType, deviceId, state) {
+  if (state !== "on" && state !== "off") return;
+  DEVICE_COMMAND_STATE.set(getDeviceKey(deviceType, deviceId), state);
+}
+
+function isTruthyFlag(value) {
+  if (value === true) return true;
+  if (value === false || value == null) return false;
+  const s = String(value).trim().toLowerCase();
+  return ["1", "true", "on", "online", "yes", "y", "sim"].includes(s);
+}
+
+function isFalsyFlag(value) {
+  if (value === false) return true;
+  if (value === true || value == null) return false;
+  const s = String(value).trim().toLowerCase();
+  return ["0", "false", "off", "offline", "no", "n", "nao", "não"].includes(s);
+}
+
+function normalizeCommunicationFault(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const n = Number(String(value).replace(",", ".").trim());
+  return Number.isFinite(n) ? n : null;
+}
+
+function commFaultMeansOnline(value) {
+  const n = normalizeCommunicationFault(value);
+  if (n === null) return null;
+  if (n === 192) return true;
+  if (n === 28) return false;
+  return null;
+}
+
+function relayOnlineFromPayload(relayItem) {
+  const eventRaw = relayItem?.event?.raw ?? {};
+
+  const commCandidates = [
+    relayItem?.communication_fault,
+    relayItem?.event?.communication_fault,
+    eventRaw?.communication_fault
+  ];
+
+  for (const c of commCandidates) {
+    const commDecision = commFaultMeansOnline(c);
+    if (commDecision !== null) return commDecision;
+  }
+
+  const statusCandidates = [
+    relayItem?.is_online,
+    relayItem?.online,
+    relayItem?.isOnline,
+    relayItem?.event?.is_online,
+    eventRaw?.is_online,
+    eventRaw?.online,
+    eventRaw?.status_online
+  ];
+
+  for (const candidate of statusCandidates) {
+    if (isTruthyFlag(candidate)) return true;
+    if (isFalsyFlag(candidate)) return false;
+  }
+
+  return false;
+}
+
+function multimeterOnlineFromPayload(item) {
+  const analog = item?.analog ?? {};
+  const data = item?.data ?? {};
+
+  const commCandidates = [
+    item?.communication_fault,
+    analog?.communication_fault,
+    data?.communication_fault
+  ];
+
+  for (const c of commCandidates) {
+    const commDecision = commFaultMeansOnline(c);
+    if (commDecision !== null) return commDecision;
+  }
+
+  const statusCandidates = [
+    item?.is_online,
+    item?.online,
+    item?.isOnline,
+    item?.status_online,
+    analog?.is_online,
+    data?.is_online
+  ];
+
+  for (const candidate of statusCandidates) {
+    if (isTruthyFlag(candidate)) return true;
+    if (isFalsyFlag(candidate)) return false;
+  }
+
+  return false;
+}
+
+function renderDeviceCommandControl(deviceType, deviceId, currentState = "off") {
+  const safeType = String(deviceType || "");
+  const safeId = String(deviceId ?? "");
+  const state = getDevicePersistentState(safeType, safeId, currentState);
+  const stateClass = state === "on" ? "is-on" : "is-off";
+  const key = getDeviceKey(safeType, safeId);
+  return `
+    <div class="device-command-control ${stateClass}" data-device-key="${key}" data-device-type="${safeType}" data-device-id="${safeId}">
+      <button type="button" class="device-command-trigger" data-device-key="${key}" data-device-type="${safeType}" data-device-id="${safeId}" aria-label="Comandos do dispositivo"></button>
+      <div class="device-command-popover" data-device-key="${key}">
+        <button type="button" class="device-command-option device-command-option--on" data-device-type="${safeType}" data-device-id="${safeId}" data-device-key="${key}" data-action="on"><span class="dot"></span><span>ON</span></button>
+        <button type="button" class="device-command-option device-command-option--off" data-device-type="${safeType}" data-device-id="${safeId}" data-device-key="${key}" data-action="off"><span class="dot"></span><span>OFF</span></button>
+        <button type="button" class="device-command-option device-command-option--reset" data-device-type="${safeType}" data-device-id="${safeId}" data-device-key="${key}" data-action="reset"><span class="dot"></span><span>RESET</span></button>
+      </div>
+    </div>
+  `;
+}
+
+function applyDeviceVisualState(deviceType, deviceId, state) {
+  const key = getDeviceKey(deviceType, deviceId);
+  document.querySelectorAll(`.device-command-control[data-device-key="${key}"]`).forEach((el) => {
+    el.classList.remove("is-on", "is-off", "is-reset-flash");
+    el.classList.add(state === "on" ? "is-on" : "is-off");
+  });
+}
+
+function closeAllDeviceCommandMenus() {
+  DEVICE_COMMAND_MENU_OPEN_KEY = null;
+  document.querySelectorAll(".device-command-control.is-open").forEach((el) => {
+    el.classList.remove("is-open");
+  });
+}
+
+function ensureDeviceCommandModals() {
+  if (document.getElementById("deviceCommandAuthModal")) return;
+  const wrap = document.createElement("div");
+  wrap.innerHTML = `
+    <div id="deviceCommandAuthModal" class="device-command-modal hidden">
+      <div class="device-command-modal-card">
+        <h3>Autenticação</h3>
+        <p id="deviceCommandAuthLabel">Confirme usuário e senha</p>
+        <input id="deviceCommandUser" type="text" placeholder="Usuário" />
+        <input id="deviceCommandPass" type="password" placeholder="Senha" />
+        <div class="device-command-modal-actions">
+          <button id="deviceCommandCancelBtn" type="button">Cancelar</button>
+          <button id="deviceCommandConfirmBtn" type="button">Confirmar</button>
+        </div>
+      </div>
+    </div>
+    <div id="deviceCommandRunModal" class="device-command-modal hidden">
+      <div class="device-command-modal-card">
+        <h3 id="deviceCommandRunTitle">Executando comando</h3>
+        <p id="deviceCommandRunSub">Processando...</p>
+        <div class="device-command-progress-wrap"><div id="deviceCommandProgressBar"></div></div>
+        <div id="deviceCommandProgressPct">0%</div>
+        <p id="deviceCommandRunResult"></p>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(wrap);
+}
+
+function openCommandAuthFlow({ deviceType, deviceId, action }) {
+  ensureDeviceCommandModals();
+  const auth = document.getElementById("deviceCommandAuthModal");
+  const run = document.getElementById("deviceCommandRunModal");
+  const authLabel = document.getElementById("deviceCommandAuthLabel");
+  const cancelBtn = document.getElementById("deviceCommandCancelBtn");
+  const confirmBtn = document.getElementById("deviceCommandConfirmBtn");
+  const runTitle = document.getElementById("deviceCommandRunTitle");
+  const runSub = document.getElementById("deviceCommandRunSub");
+  const runResult = document.getElementById("deviceCommandRunResult");
+  const bar = document.getElementById("deviceCommandProgressBar");
+  const pct = document.getElementById("deviceCommandProgressPct");
+  if (!auth || !run || !confirmBtn || !cancelBtn || !bar || !pct || !runSub || !runTitle || !runResult) return;
+
+  authLabel.textContent = `${deviceType} ${deviceId} • ação ${action.toUpperCase()}`;
+  auth.classList.remove("hidden");
+
+  const closeAuth = () => auth.classList.add("hidden");
+  cancelBtn.onclick = closeAuth;
+
+  confirmBtn.onclick = () => {
+    closeAuth();
+    run.classList.remove("hidden");
+    runTitle.textContent = `${deviceType} ${deviceId}`;
+    runSub.textContent = action === "reset" ? "Resetando equipamento..." : `Executando ${action.toUpperCase()}...`;
+    runResult.textContent = "";
+    bar.style.width = "0%";
+    pct.textContent = "0%";
+
+    const previousState = getDevicePersistentState(deviceType, deviceId, "off");
+    const totalMs = 120000;
+    const startedAt = Date.now();
+    const tick = setInterval(() => {
+      const elapsed = Date.now() - startedAt;
+      const progress = Math.min(100, Math.round((elapsed / totalMs) * 100));
+      bar.style.width = `${progress}%`;
+      pct.textContent = `${progress}%`;
+      if (progress >= 100) {
+        clearInterval(tick);
+        const success = true;
+        if (!success) {
+          runResult.textContent = "Falha ao executar comando.";
+          setTimeout(() => run.classList.add("hidden"), 1800);
+          return;
+        }
+
+        if (action === "on" || action === "off") {
+          setDevicePersistentState(deviceType, deviceId, action);
+          applyDeviceVisualState(deviceType, deviceId, action);
+          runResult.textContent = `Comando ${action.toUpperCase()} executado com sucesso.`;
+        } else {
+          runResult.textContent = "Reset realizado com sucesso.";
+          document.querySelectorAll(`.device-command-control[data-device-key="${getDeviceKey(deviceType, deviceId)}"]`).forEach((el) => {
+            el.classList.add("is-reset-flash");
+          });
+          setTimeout(() => {
+            document.querySelectorAll(`.device-command-control[data-device-key="${getDeviceKey(deviceType, deviceId)}"]`).forEach((el) => {
+              el.classList.remove("is-reset-flash");
+            });
+            applyDeviceVisualState(deviceType, deviceId, previousState);
+          }, 1500);
+        }
+        setTimeout(() => run.classList.add("hidden"), 2200);
+      }
+    }, 1000);
+  };
+}
+
+function wireDeviceCommandButtons(rootEl) {
+  if (!rootEl) return;
+  rootEl.querySelectorAll(".device-command-trigger").forEach((btn) => {
+    if (btn.dataset.wiredCmdTrigger === "true") return;
+    btn.dataset.wiredCmdTrigger = "true";
+    btn.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const key = btn.dataset.deviceKey || "";
+      if (!key) return;
+      const control = document.querySelector(`.device-command-control[data-device-key="${key}"]`);
+      if (!control) return;
+      const shouldOpen = DEVICE_COMMAND_MENU_OPEN_KEY !== key;
+      closeAllDeviceCommandMenus();
+      if (shouldOpen) {
+        control.classList.add("is-open");
+        DEVICE_COMMAND_MENU_OPEN_KEY = key;
+      }
+    });
+  });
+
+  rootEl.querySelectorAll(".device-command-option").forEach((btn) => {
+    if (btn.dataset.wiredCmdOption === "true") return;
+    btn.dataset.wiredCmdOption = "true";
+    btn.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const deviceType = btn.dataset.deviceType || "";
+      const deviceId = btn.dataset.deviceId || "";
+      const action = btn.dataset.action || "";
+      closeAllDeviceCommandMenus();
+      console.log("[device-command]", { deviceType, deviceId, action });
+      openCommandAuthFlow({ deviceType, deviceId, action });
+    });
+  });
 }
 
 function renderAlarmMenuButton() {
@@ -919,7 +1219,15 @@ function ensureInverterRowsFromRealtime(inverters) {
     row.innerHTML = `
       <span class="status-dot"></span>
       <span class="inverter-name">${title}<i class="arrow fa-solid fa-chevron-down"></i></span>
-      <span>—</span><span>—</span><span>—</span><span>—</span><span>—</span><span>—</span>
+      <span>—</span>
+      <span>—</span>
+      <span>—</span>
+      <span>—</span>
+      <span>—</span>
+      <span>—</span>
+      <span class="device-command-cell">
+        ${renderDeviceCommandControl("inverter", realId, isOnlineByFreshness(inv) && !isZeroSnapshot(inv) ? "on" : "off")}
+      </span>
     `;
 
     const panel = document.createElement("div");
@@ -982,6 +1290,9 @@ function ensureInverterRowsFromRealtime(inverters) {
 
     container.appendChild(row);
     container.appendChild(panel);
+    wireDeviceCommandButtons(row);
+    const inferredState = isOnlineByFreshness(inv) && !isZeroSnapshot(inv) ? "on" : "off";
+    applyDeviceVisualState("inverter", String(realId), getDevicePersistentState("inverter", String(realId), inferredState));
   });
 
   if (preservedOpenId != null) {
@@ -1219,6 +1530,24 @@ function ensureRelayUiScaffold() {
   return { relayRow, nameEl, dotEl, badgeOnline, badgeState, powerEl, tsEl };
 }
 
+function renderRelayCommandBar(deviceId) {
+  const wrap = document.getElementById("relayCommandBarWrap");
+  if (!wrap) return;
+  const safeId = String(deviceId ?? "relay");
+  wrap.innerHTML = renderDeviceCommandControl("relay", safeId, getDevicePersistentState("relay", safeId, "off"));
+  wireDeviceCommandButtons(wrap);
+  applyDeviceVisualState("relay", safeId, getDevicePersistentState("relay", safeId, "off"));
+}
+
+function renderMultimeterCommandBar(deviceId) {
+  const wrap = document.getElementById("multimeterCommandBarWrap");
+  if (!wrap) return;
+  const safeId = String(deviceId ?? "multimeter");
+  wrap.innerHTML = renderDeviceCommandControl("multimeter", safeId, getDevicePersistentState("multimeter", safeId, "off"));
+  wireDeviceCommandButtons(wrap);
+  applyDeviceVisualState("multimeter", safeId, getDevicePersistentState("multimeter", safeId, "off"));
+}
+
 function renderRelayCard(relayItem) {
   const ui = ensureRelayUiScaffold();
   if (!ui) return;
@@ -1228,14 +1557,14 @@ function renderRelayCard(relayItem) {
   // sem dados ainda
   if (!relayItem) {
     relayRow.classList.remove("online", "offline");
-    badgeOnline.textContent = "—";
+    badgeOnline.textContent = "OFFLINE";
     badgeState.textContent = "—";
     powerEl.textContent = "— kW";
     tsEl.textContent = "Última atualização: —";
     return;
   }
 
-  const isOnline = relayItem.is_online === true;
+  const isOnline = relayOnlineFromPayload(relayItem);
   const relayOn = relayItem.relay_on; // true/false/null
   const lastUpdate = relayItem.last_update ?? null;
 
@@ -1245,6 +1574,8 @@ function renderRelayCard(relayItem) {
     relayItem?.active_power_kw ??
     relayItem?.power_kw ??
     0;
+
+  renderRelayCommandBar(relayItem?.device_id ?? relayItem?.relay_id ?? "relay");
 
   const kwNum = Number(typeof kw === "string" ? kw.replace(",", ".") : kw);
   const kwText = Number.isFinite(kwNum) ? `${kwNum.toFixed(1)} kW` : "— kW";
@@ -1302,7 +1633,7 @@ function renderMultimeterCard(item) {
   if (!item) {
     row.classList.remove("online", "offline");
     row.classList.add("offline");
-    if (onlineBadge) onlineBadge.textContent = "—";
+    if (onlineBadge) onlineBadge.textContent = "OFFLINE";
     if (powerText) powerText.textContent = "—";
     if (ts) ts.textContent = "—";
     if (dot) dot.style.opacity = "0.65";
@@ -1310,11 +1641,13 @@ function renderMultimeterCard(item) {
   }
 
   const analog = item?.analog ?? item?.data ?? {};
-  const isOnline = item.is_online === true || item.online === true;
+  const isOnline = multimeterOnlineFromPayload(item);
   const pKw = analog.active_power_kw ?? analog.p_kw ?? analog.power_kw ?? analog.active_power;
   const pf = analog.power_factor ?? analog.pf;
   const hz = analog.frequency_hz ?? analog.hz ?? analog.frequency;
   const lastUpdate = item.last_update ?? item.timestamp ?? null;
+
+  renderMultimeterCommandBar(item?.device_id ?? item?.multimeter_id ?? "multimeter");
 
   row.classList.remove("online", "offline");
   row.classList.add(isOnline ? "online" : "offline");
@@ -1854,13 +2187,13 @@ function renderDailyChart() {
   }
 
   const greenGradient = ctx.createLinearGradient(0, 0, 0, 320);
-  greenGradient.addColorStop(0, "rgba(57,229,140,0.55)");
-  greenGradient.addColorStop(0.6, "rgba(57,229,140,0.35)");
-  greenGradient.addColorStop(1, "rgba(57,229,140,0.05)");
+  greenGradient.addColorStop(0, "rgba(57,229,140,0.36)");
+  greenGradient.addColorStop(0.6, "rgba(57,229,140,0.20)");
+  greenGradient.addColorStop(1, "rgba(57,229,140,0.03)");
 
   const yellowGradient = ctx.createLinearGradient(0, 0, 0, 320);
-  yellowGradient.addColorStop(0, "rgba(255,216,77,0.45)");
-  yellowGradient.addColorStop(1, "rgba(255,216,77,0.05)");
+  yellowGradient.addColorStop(0, "rgba(255,216,77,0.24)");
+  yellowGradient.addColorStop(1, "rgba(255,216,77,0.02)");
 
   dailyChartInstance = new Chart(ctx, {
     type: "line",
@@ -1868,6 +2201,20 @@ function renderDailyChart() {
       labels: DAILY.labels,
       datasets: [
         {
+          label: "Esperado",
+          data: Array.isArray(DAILY.expectedPower) ? DAILY.expectedPower : [],
+          borderColor: "rgba(205, 213, 225, 0.70)",
+          fill: false,
+          tension: 0.28,
+          pointRadius: 0,
+          borderWidth: 1.5,
+          borderDash: [6, 6],
+          yAxisID: "yPower",
+          spanGaps: true,
+          order: 0
+        },
+        {
+          label: "Potência Ativa",
           data: DAILY.activePower,
           borderColor: "#39e58c",
           backgroundColor: greenGradient,
@@ -1876,9 +2223,11 @@ function renderDailyChart() {
           pointRadius: 0,
           borderWidth: 2,
           yAxisID: "yPower",
-          spanGaps: true
+          spanGaps: true,
+          order: 1
         },
         {
+          label: "Irradiância POA",
           data: DAILY.irradiance,
           borderColor: "#ffd84d",
           backgroundColor: yellowGradient,
@@ -1887,7 +2236,8 @@ function renderDailyChart() {
           pointRadius: 0,
           borderWidth: 2,
           yAxisID: "yIrr",
-          spanGaps: true
+          spanGaps: true,
+          order: 2
         }
       ]
     },
@@ -1897,6 +2247,34 @@ function renderDailyChart() {
       interaction: { mode: "index", intersect: false },
       plugins: {
         legend: { display: false },
+        tooltip: {
+          backgroundColor: "rgba(6,18,14,0.96)",
+          borderColor: "rgba(57,229,140,0.18)",
+          borderWidth: 1,
+          titleColor: "#dbe7ef",
+          bodyColor: "#dbe7ef",
+          padding: 10,
+          displayColors: true,
+          usePointStyle: true,
+          callbacks: {
+            label: (item) => {
+              const label = item?.dataset?.label || "";
+              const value = Number(item?.raw ?? 0);
+
+              if (label === "Esperado") {
+                return `Esperado: ${formatKwPtBR(value)}`;
+              }
+              if (label === "Potência Ativa") {
+                return `Potência Ativa: ${formatKwPtBR(value)}`;
+              }
+              if (label === "Irradiância POA") {
+                return `Irradiância POA: ${formatWm2PtBR(value)}`;
+              }
+
+              return `${label}: ${formatNumberPtBR(value)}`;
+            }
+          }
+        },
         zoom: {
           pan: {
             enabled: true,
@@ -1956,6 +2334,9 @@ function normalizeMonthlyPayload(payload) {
   const irrDailyNew = Array.isArray(payload.irradiation_daily_kwh_m2)
     ? payload.irradiation_daily_kwh_m2.slice()
     : null;
+  const expectedDailyNew = Array.isArray(payload.expected_daily_kwh)
+    ? payload.expected_daily_kwh.slice()
+    : (Array.isArray(payload.expectedDailyKwh) ? payload.expectedDailyKwh.slice() : null);
   const energyLegacy = Array.isArray(payload.energy_kwh) ? payload.energy_kwh.slice() : null;
 
   let daily = (dailyNew ?? energyLegacy ?? []).map(v => Number(v) || 0);
@@ -1990,11 +2371,29 @@ function normalizeMonthlyPayload(payload) {
   const irradiationDaily = (irrDailyNew ?? []).slice(0, daily.length).map(v => Number(v) || 0);
   while (irradiationDaily.length < daily.length) irradiationDaily.push(0);
 
+  let expectedDaily = (expectedDailyNew ?? []).slice(0, daily.length).map(v => Number(v) || 0);
+  while (expectedDaily.length < daily.length) expectedDaily.push(0);
+
+  const expectedMtdFromPayload =
+    Array.isArray(payload.expected_mtd_kwh) ? payload.expected_mtd_kwh.slice() :
+    Array.isArray(payload.expectedMtdKwh) ? payload.expectedMtdKwh.slice() :
+    null;
+
+  let expectedMtd = [];
+  if (expectedMtdFromPayload && expectedMtdFromPayload.length >= expectedDaily.length) {
+    expectedMtd = expectedMtdFromPayload.slice(0, expectedDaily.length).map(v => Number(v) || 0);
+  } else {
+    let accExpected = 0;
+    expectedMtd = expectedDaily.map(v => (accExpected += (Number(v) || 0)));
+  }
+
   return {
     ...payload,
     labels: finalLabels,
     daily_kwh: daily,
     mtd_kwh: mtd,
+    expected_daily_kwh: expectedDaily,
+    expected_mtd_kwh: expectedMtd,
     irradiation_daily_kwh_m2: irradiationDaily,
     energy_kwh: daily
   };
@@ -2011,8 +2410,36 @@ function renderMonthlyChart() {
   const daily = Array.isArray(MONTHLY?.daily_kwh)
     ? MONTHLY.daily_kwh.map(v => Number(v) || 0)
     : (Array.isArray(MONTHLY?.energy_kwh) ? MONTHLY.energy_kwh.map(v => Number(v) || 0) : []);
+  const expectedDaily = Array.isArray(MONTHLY?.expected_daily_kwh)
+    ? MONTHLY.expected_daily_kwh.map(v => Number(v) || 0)
+    : [];
 
   if (!labels.length || !daily.length) return;
+
+  const expectedPadded = expectedDaily.slice(0, daily.length);
+  while (expectedPadded.length < daily.length) expectedPadded.push(0);
+
+  const totalReal = daily.reduce((a, b) => a + (Number(b) || 0), 0);
+  const totalExpected = expectedPadded.reduce((a, b) => a + (Number(b) || 0), 0);
+  const deviation = totalExpected > 0 ? ((totalReal - totalExpected) / totalExpected) * 100 : 0;
+  const daysWithGeneration = daily.filter(v => Number(v) > 0).length;
+
+  const kpiRealEl = document.getElementById("monthlyKpiReal");
+  const kpiExpEl = document.getElementById("monthlyKpiExp");
+  const kpiDevEl = document.getElementById("monthlyKpiDev");
+  const progressEl = document.getElementById("monthlyProgressFill");
+  const bottomLeftEl = document.getElementById("monthlyBottomLeft");
+  const bottomRightEl = document.getElementById("monthlyBottomRight");
+
+  if (kpiRealEl) kpiRealEl.textContent = formatKwhPtBR(totalReal);
+  if (kpiExpEl) kpiExpEl.textContent = formatKwhPtBR(totalExpected);
+  if (kpiDevEl) {
+    kpiDevEl.textContent = `${deviation >= 0 ? "+" : ""}${deviation.toFixed(1)}%`;
+    kpiDevEl.style.color = deviation >= 0 ? "#7FD055" : "#ff6b6b";
+  }
+  if (progressEl) progressEl.style.width = `${((daysWithGeneration / daily.length) * 100).toFixed(1)}%`;
+  if (bottomLeftEl) bottomLeftEl.textContent = `${daysWithGeneration} dias com geração de ${daily.length}`;
+  if (bottomRightEl) bottomRightEl.textContent = "Mês atual";
 
   const ctx = canvas.getContext("2d");
 
@@ -2023,6 +2450,16 @@ function renderMonthlyChart() {
 
   const maxDaily = Math.max(...daily, 0);
   const suggestedMaxDaily = maxDaily > 0 ? Math.ceil(maxDaily * 1.25) : undefined;
+  const realColors = daily.map((v, idx) => {
+    const exp = Number(expectedPadded[idx] ?? 0);
+    if (v === 0) return "rgba(255,255,255,.06)";
+    return v >= exp ? "rgba(127,208,85,.92)" : "rgba(127,208,85,.50)";
+  });
+  const realBorders = daily.map((v, idx) => {
+    const exp = Number(expectedPadded[idx] ?? 0);
+    if (v === 0) return "rgba(255,255,255,.06)";
+    return v >= exp ? "#7FD055" : "rgba(127,208,85,.70)";
+  });
 
   monthlyChartInstance = new Chart(ctx, {
     type: "bar",
@@ -2030,13 +2467,33 @@ function renderMonthlyChart() {
       labels,
       datasets: [
         {
+          label: "Esperado",
+          data: expectedPadded,
+          backgroundColor: "rgba(190,200,210,.28)",
+          borderColor: "rgba(190,200,210,.38)",
+          borderWidth: 1,
+          borderRadius: { topLeft: 5, topRight: 5 },
+          borderSkipped: "bottom",
+          barThickness: 14,
+          maxBarThickness: 20,
+          categoryPercentage: 0.78,
+          barPercentage: 0.92,
+          order: 0,
+          hoverBackgroundColor: "rgba(190,200,210,.46)"
+        },
+        {
+          label: "Real",
           data: daily,
-          backgroundColor: "rgba(200,200,200,0.75)",
-          borderRadius: 8,
-          barThickness: 12,
-          maxBarThickness: 14,
-          categoryPercentage: 0.72,
-          barPercentage: 0.82
+          backgroundColor: realColors,
+          borderColor: realBorders,
+          borderWidth: 1,
+          borderRadius: { topLeft: 4, topRight: 4 },
+          borderSkipped: "bottom",
+          barThickness: 9,
+          maxBarThickness: 16,
+          categoryPercentage: 0.78,
+          barPercentage: 0.70,
+          order: 1
         }
       ]
     },
@@ -2056,7 +2513,22 @@ function renderMonthlyChart() {
           displayColors: false,
           callbacks: {
             title: (items) => items?.[0]?.label ? `Dia ${items[0].label}` : "",
-            label: (item) => `Geração do dia: ${formatKwhPtBR(item?.raw)}`
+            label: (item) => {
+              const idx = item?.dataIndex ?? 0;
+              const real = Number(daily[idx] ?? 0);
+              const expected = Number(expectedPadded[idx] ?? 0);
+              if (item?.dataset?.label === "Esperado") return `Esperado: ${formatKwhPtBR(expected)}`;
+              if (item?.dataset?.label === "Real") return `Real: ${formatKwhPtBR(real)}`;
+              return "";
+            },
+            afterBody: (items) => {
+              const idx = items?.[0]?.dataIndex ?? 0;
+              const real = Number(daily[idx] ?? 0);
+              const expected = Number(expectedPadded[idx] ?? 0);
+              const deviation = expected > 0 ? ((real - expected) / expected) * 100 : 0;
+              const sign = deviation > 0 ? "+" : "";
+              return `Desvio: ${sign}${deviation.toFixed(1)}%`;
+            }
           }
         }
       },
@@ -2739,6 +3211,13 @@ document.addEventListener("DOMContentLoaded", async () => {
   setupDeviceNav();
   setupPlantAlarmMenu();
   renderAlarmMenuButton();
+  renderRelayCommandBar("relay");
+  renderMultimeterCommandBar("multimeter");
+  wireDeviceCommandButtons(document);
+  document.addEventListener("click", () => closeAllDeviceCommandMenus());
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") closeAllDeviceCommandMenus();
+  });
 
   if (!PLANT_ID) {
     console.warn("[plant] plant_id ausente na URL; mantendo tela sem dados de fallback.");
