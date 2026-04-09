@@ -451,6 +451,32 @@ function relayOnlineFromPayload(relayItem) {
   return false;
 }
 
+function relayStateFromPayload(relayItem) {
+  if (!relayItem) return "off";
+
+  if (relayItem?.relay_on === true) return "on";
+  if (relayItem?.relay_on === false) return "off";
+
+  const eventRaw = relayItem?.event?.raw ?? {};
+  const commCandidates = [
+    relayItem?.communication_fault,
+    relayItem?.event?.communication_fault,
+    eventRaw?.communication_fault,
+    relayItem?.analog?.communication_fault
+  ];
+
+  for (const c of commCandidates) {
+    const decision = commFaultMeansOnline(c);
+    if (decision === true) return "on";
+    if (decision === false) return "off";
+  }
+
+  if (relayItem?.is_online === true || relayItem?.online === true) return "on";
+  if (relayItem?.is_online === false || relayItem?.online === false) return "off";
+
+  return "off";
+}
+
 function multimeterOnlineFromPayload(item) {
   const analog = item?.analog ?? {};
   const data = item?.data ?? {};
@@ -1441,6 +1467,7 @@ function ensureRelayUiScaffold() {
 
   const nameEl = relayRow.querySelector(".relay-left");
   const dotEl = document.getElementById("relayDot") || relayRow.querySelector(".status-dot");
+  const commandBarWrap = document.getElementById("relayCommandBarWrap");
 
   // Remove “extras antigos” visualmente (não remove do DOM, só não usa)
   const oldOnline = document.getElementById("relayOnlineText");
@@ -1473,70 +1500,111 @@ function ensureRelayUiScaffold() {
     if (nameEl) nameEl.appendChild(badgeOnline);
   }
 
-  // cria badge ON/OFF do relé
-  let badgeState = relayRow.querySelector("#relayStateBadge");
-  if (!badgeState) {
-    badgeState = document.createElement("span");
-    badgeState.id = "relayStateBadge";
-    badgeState.style.display = "inline-flex";
-    badgeState.style.alignItems = "center";
-    badgeState.style.justifyContent = "center";
-    badgeState.style.padding = "6px 10px";
-    badgeState.style.borderRadius = "999px";
-    badgeState.style.fontSize = "11px";
-    badgeState.style.letterSpacing = "0.06em";
-    badgeState.style.textTransform = "uppercase";
-    badgeState.style.border = "1px solid rgba(255,255,255,0.10)";
-    badgeState.style.background = "rgba(255,255,255,0.04)";
-    badgeState.style.color = "rgba(233,255,243,0.88)";
-    badgeState.style.marginLeft = "10px";
-    badgeState.style.whiteSpace = "nowrap";
+  const legacyStateEl = relayRow.querySelector("#relayStateBadge");
+  if (legacyStateEl) legacyStateEl.remove();
 
-    if (nameEl) nameEl.appendChild(badgeState);
+  let metricsWrap = relayRow.querySelector("#relayMetricsWrap");
+  if (!metricsWrap) {
+    metricsWrap = document.createElement("div");
+    metricsWrap.id = "relayMetricsWrap";
+    metricsWrap.className = "relay-metrics-wrap";
+    relayRow.appendChild(metricsWrap);
   }
 
-  // cria o kW na direita (no lugar “—” que você quer)
-  let powerEl = relayRow.querySelector("#relayPowerText");
-  if (!powerEl) {
-    powerEl = document.createElement("span");
-    powerEl.id = "relayPowerText";
-    powerEl.style.justifySelf = "end";
-    powerEl.style.textAlign = "right";
-    powerEl.style.whiteSpace = "nowrap";
-    powerEl.style.fontWeight = "700";
-    powerEl.style.color = "rgba(233,255,243,0.92)";
-    powerEl.style.opacity = "0.95";
-    powerEl.style.textShadow = "0 0 12px rgba(57,229,140,0.10)";
-
-    // garante grid com 3 colunas (dot | nome | direita)
-    relayRow.style.gridTemplateColumns = "14px 1fr auto";
-    relayRow.appendChild(powerEl);
+  if (commandBarWrap && commandBarWrap.parentElement !== relayRow) {
+    relayRow.appendChild(commandBarWrap);
   }
 
-  // cria o timestamp discretinho abaixo do nome (opcional)
+  // força trilha separada para nome, métricas e comandos
+  relayRow.style.gridTemplateColumns = "14px max-content 1fr max-content";
+
+  // cria o timestamp dentro do bloco de métricas
   let tsEl = relayRow.querySelector("#relayTsText");
   if (!tsEl) {
     tsEl = document.createElement("div");
     tsEl.id = "relayTsText";
-    tsEl.style.marginTop = "4px";
-    tsEl.style.fontSize = "12px";
-    tsEl.style.opacity = "0.75";
-    tsEl.style.color = "rgba(154,219,184,0.85)";
+  }
+  metricsWrap.appendChild(tsEl);
 
-    // coloca dentro do device-name (abaixo do texto)
-    if (nameEl) nameEl.appendChild(tsEl);
+  let powerMain = metricsWrap.querySelector("#relayPowerMain");
+  if (!powerMain) {
+    powerMain = document.createElement("div");
+    powerMain.id = "relayPowerMain";
+    powerMain.className = "relay-power-main";
+    metricsWrap.appendChild(powerMain);
   }
 
-  return { relayRow, nameEl, dotEl, badgeOnline, badgeState, powerEl, tsEl };
+  let powerEl = relayRow.querySelector("#relayPowerText");
+  if (!powerEl) {
+    powerEl = document.createElement("span");
+    powerEl.id = "relayPowerText";
+  }
+  powerEl.className = "relay-power-value";
+  powerMain.appendChild(powerEl);
+
+  let voltagesWrap = metricsWrap.querySelector("#relayVoltagesWrap");
+  if (!voltagesWrap) {
+    voltagesWrap = document.createElement("div");
+    voltagesWrap.id = "relayVoltagesWrap";
+    voltagesWrap.className = "relay-voltage-list";
+
+    const voltageItems = [
+      { key: "AB", id: "relayVoltageAB", label: "V AB" },
+      { key: "BC", id: "relayVoltageBC", label: "V BC" },
+      { key: "CA", id: "relayVoltageCA", label: "V CA" }
+    ];
+
+    voltageItems.forEach(({ key, id, label }) => {
+      const item = document.createElement("div");
+      item.className = "relay-voltage-item";
+      item.dataset.voltageKey = key;
+
+      const lbl = document.createElement("span");
+      lbl.className = "relay-voltage-label";
+      lbl.textContent = label;
+
+      const val = document.createElement("span");
+      val.className = "relay-voltage-value";
+      val.id = id;
+      val.textContent = "—";
+
+      item.appendChild(lbl);
+      item.appendChild(val);
+      voltagesWrap.appendChild(item);
+    });
+
+    metricsWrap.appendChild(voltagesWrap);
+  }
+
+  metricsWrap.appendChild(powerMain);
+  metricsWrap.appendChild(voltagesWrap);
+
+  const voltageAbEl = relayRow.querySelector("#relayVoltageAB");
+  const voltageBcEl = relayRow.querySelector("#relayVoltageBC");
+  const voltageCaEl = relayRow.querySelector("#relayVoltageCA");
+
+  return {
+    relayRow,
+    nameEl,
+    dotEl,
+    badgeOnline,
+    powerEl,
+    tsEl,
+    voltageAbEl,
+    voltageBcEl,
+    voltageCaEl
+  };
 }
 
-function renderRelayCommandBar(deviceId) {
+function renderRelayCommandBar(deviceId, currentState = "off") {
   const wrap = document.getElementById("relayCommandBarWrap");
   if (!wrap) return;
   const safeId = String(deviceId ?? "relay");
-  wrap.innerHTML = renderDeviceCommandControl("relay", safeId, getDevicePersistentState("relay", safeId, "off"));
+  const normalizedState = currentState === "on" ? "on" : "off";
+  setDevicePersistentState("relay", safeId, normalizedState);
+  wrap.innerHTML = renderDeviceCommandControl("relay", safeId, normalizedState);
   wireDeviceCommandButtons(wrap);
-  applyDeviceVisualState("relay", safeId, getDevicePersistentState("relay", safeId, "off"));
+  applyDeviceVisualState("relay", safeId, normalizedState);
 }
 
 function renderMultimeterCommandBar(deviceId) {
@@ -1552,33 +1620,67 @@ function renderRelayCard(relayItem) {
   const ui = ensureRelayUiScaffold();
   if (!ui) return;
 
-  const { relayRow, badgeOnline, badgeState, powerEl, tsEl } = ui;
+  const { relayRow, badgeOnline, powerEl, tsEl, voltageAbEl, voltageBcEl, voltageCaEl } = ui;
+
+  const num = (v) => {
+    const n = Number(typeof v === "string" ? v.replace(",", ".") : v);
+    return Number.isFinite(n) ? n : null;
+  };
+  const formatVoltage = (v) => {
+    const n = num(v);
+    return n !== null ? `${n.toFixed(1)} V` : "—";
+  };
+  const pickVoltage = (relay, analog, keys) => {
+    for (const key of keys) {
+      const av = analog?.[key];
+      if (av !== null && av !== undefined && av !== "") return av;
+      const rv = relay?.[key];
+      if (rv !== null && rv !== undefined && rv !== "") return rv;
+    }
+    return null;
+  };
+  const setRelayVoltages = (relay, analog) => {
+    const vab = pickVoltage(relay, analog, ["voltage_ab_v", "voltage_ab", "line_voltage_ab_v", "line_voltage_ab", "vab"]);
+    const vbc = pickVoltage(relay, analog, ["voltage_bc_v", "voltage_bc", "line_voltage_bc_v", "line_voltage_bc", "vbc"]);
+    const vca = pickVoltage(relay, analog, ["voltage_ca_v", "voltage_ca", "line_voltage_ca_v", "line_voltage_ca", "vca"]);
+    if (voltageAbEl) voltageAbEl.textContent = formatVoltage(vab);
+    if (voltageBcEl) voltageBcEl.textContent = formatVoltage(vbc);
+    if (voltageCaEl) voltageCaEl.textContent = formatVoltage(vca);
+  };
 
   // sem dados ainda
   if (!relayItem) {
     relayRow.classList.remove("online", "offline");
+    relayRow.classList.add("offline");
     badgeOnline.textContent = "OFFLINE";
-    badgeState.textContent = "—";
-    powerEl.textContent = "— kW";
+    powerEl.textContent = "—";
     tsEl.textContent = "Última atualização: —";
+    setRelayVoltages(null, null);
+    renderRelayCommandBar("relay", "off");
     return;
   }
 
+  const analog = relayItem?.analog ?? {};
   const isOnline = relayOnlineFromPayload(relayItem);
-  const relayOn = relayItem.relay_on; // true/false/null
-  const lastUpdate = relayItem.last_update ?? null;
+  const relayState = relayStateFromPayload(relayItem);
+  const lastUpdate =
+    relayItem?.last_update ??
+    relayItem?.timestamp ??
+    relayItem?.analog?.timestamp ??
+    relayItem?.event?.timestamp ??
+    null;
 
   const kw =
     relayItem?.analog?.active_power_kw ??
     relayItem?.analog?.power_kw ??
+    relayItem?.analog?.active_power ??
     relayItem?.active_power_kw ??
     relayItem?.power_kw ??
+    relayItem?.active_power ??
     0;
-
-  renderRelayCommandBar(relayItem?.device_id ?? relayItem?.relay_id ?? "relay");
-
-  const kwNum = Number(typeof kw === "string" ? kw.replace(",", ".") : kw);
-  const kwText = Number.isFinite(kwNum) ? `${kwNum.toFixed(1)} kW` : "— kW";
+  const kwNum = num(kw);
+  const kwText = kwNum !== null ? `${kwNum.toFixed(1)} kW` : "— kW";
+  const deviceId = relayItem?.device_id ?? relayItem?.relay_id ?? "relay";
 
   // classes do row (para a bolinha)
   relayRow.classList.remove("online", "offline");
@@ -1590,35 +1692,13 @@ function renderRelayCard(relayItem) {
   badgeOnline.style.background = isOnline ? "rgba(57,229,140,0.08)" : "rgba(255,92,92,0.08)";
   badgeOnline.style.color = isOnline ? "rgba(233,255,243,0.92)" : "rgba(255,255,255,0.92)";
 
-  // badge ON/OFF
-  let stateText = "—";
-  if (relayOn === true) stateText = "ON";
-  else if (relayOn === false) stateText = "OFF";
-
-  badgeState.textContent = stateText;
-
-  if (stateText === "ON") {
-    badgeState.style.borderColor = "rgba(57,229,140,0.30)";
-    badgeState.style.background = "rgba(57,229,140,0.10)";
-    badgeState.style.color = "rgba(233,255,243,0.95)";
-    badgeState.style.boxShadow = "0 0 18px rgba(57,229,140,0.12)";
-  } else if (stateText === "OFF") {
-    badgeState.style.borderColor = "rgba(255,92,92,0.28)";
-    badgeState.style.background = "rgba(255,92,92,0.08)";
-    badgeState.style.color = "rgba(255,255,255,0.95)";
-    badgeState.style.boxShadow = "0 0 16px rgba(255,92,92,0.10)";
-  } else {
-    badgeState.style.borderColor = "rgba(255,255,255,0.10)";
-    badgeState.style.background = "rgba(255,255,255,0.04)";
-    badgeState.style.color = "rgba(233,255,243,0.88)";
-    badgeState.style.boxShadow = "none";
-  }
-
   // kW à direita
   powerEl.textContent = kwText;
+  setRelayVoltages(relayItem, analog);
 
   // timestamp
   tsEl.textContent = `Última atualização: ${fmtDatePtBR(lastUpdate)}`;
+  renderRelayCommandBar(deviceId, relayState);
 }
 
 function renderMultimeterCard(item) {
@@ -1629,6 +1709,19 @@ function renderMultimeterCard(item) {
   const ts = document.getElementById("multimeterLastUpdateText");
   const onlineBadge = document.getElementById("multimeterOnlineBadge");
   const powerText = document.getElementById("multimeterPowerText");
+  const commandBarWrap = document.getElementById("multimeterCommandBarWrap");
+  const leftBlock =
+    row?.querySelector(".relay-left") ||
+    row?.querySelector(".multimeter-left") ||
+    row?.children?.[1] ||
+    null;
+  if (leftBlock && onlineBadge && onlineBadge.parentElement !== leftBlock) {
+    leftBlock.appendChild(onlineBadge);
+  }
+  if (commandBarWrap && commandBarWrap.parentElement !== row) {
+    row.appendChild(commandBarWrap);
+  }
+  row.style.gridTemplateColumns = "14px max-content 1fr max-content";
 
   if (!item) {
     row.classList.remove("online", "offline");
