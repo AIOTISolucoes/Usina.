@@ -260,6 +260,18 @@
     <section id="relaySection" style="margin-top:24px">
       <h3 class="card-title">Relé</h3>
 
+      <div class="device-mini-table">
+        <div class="device-mini-header">
+          <span></span>
+          <span>RelÃ©</span>
+          <span>Active Power</span>
+          <span>Apparent Power</span>
+          <span>Reactive Power</span>
+          <span>Ãšltima leitura</span>
+          <span>Comandos</span>
+        </div>
+
+        <div class="device-mini-stack">
       <div class="relay-row" id="relayRow">
         <span class="status-dot" id="relayDot"></span>
 
@@ -276,11 +288,26 @@
           <span id="relayAvailabilityText" style="display:none;">—</span>
         </div>
       </div>
+
+          <div class="relay-details-panel" id="relayDetailsPanel"></div>
+        </div>
+      </div>
     </section>
 
     <div id="sec-multimeter" class="scroll-anchor"></div>
     <section id="multimeterSection" style="margin-top:24px">
       <h3 class="card-title">Multimedidor</h3>
+
+      <div class="device-mini-table">
+        <div class="device-mini-header">
+          <span></span>
+          <span>Multimedidor</span>
+          <span>Active Power</span>
+          <span>Apparent Power</span>
+          <span>Reactive Power</span>
+          <span>Ãšltima leitura</span>
+          <span>Comandos</span>
+        </div>
 
       <div class="relay-row" id="multimeterRow">
         <span class="status-dot" id="multimeterDot"></span>
@@ -295,6 +322,7 @@
           <span class="relay-state relay-state--unknown" id="multimeterOnlineBadge">—</span>
           <span class="relay-power" id="multimeterPowerText">—</span>
         </div>
+      </div>
       </div>
     </section>
 
