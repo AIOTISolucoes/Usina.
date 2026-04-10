@@ -1468,6 +1468,8 @@ function ensureRelayUiScaffold() {
   const nameEl = relayRow.querySelector(".relay-left");
   const dotEl = document.getElementById("relayDot") || relayRow.querySelector(".status-dot");
   const commandBarWrap = document.getElementById("relayCommandBarWrap");
+  const legacyRight = relayRow.querySelector(".relay-right");
+  const detailsPanel = document.getElementById("relayDetailsPanel");
 
   // Remove “extras antigos” visualmente (não remove do DOM, só não usa)
   const oldOnline = document.getElementById("relayOnlineText");
@@ -1477,6 +1479,7 @@ function ensureRelayUiScaffold() {
   if (oldOnline) oldOnline.textContent = "—";
   if (oldAvail) oldAvail.textContent = "";
   if (oldLast) oldLast.textContent = "";
+  if (legacyRight) legacyRight.style.display = "none";
 
   // cria badge ONLINE/OFFLINE ao lado do nome
   let badgeOnline = relayRow.querySelector("#relayOnlineBadge");
@@ -1503,96 +1506,253 @@ function ensureRelayUiScaffold() {
   const legacyStateEl = relayRow.querySelector("#relayStateBadge");
   if (legacyStateEl) legacyStateEl.remove();
 
-  let metricsWrap = relayRow.querySelector("#relayMetricsWrap");
-  if (!metricsWrap) {
-    metricsWrap = document.createElement("div");
-    metricsWrap.id = "relayMetricsWrap";
-    metricsWrap.className = "relay-metrics-wrap";
-    relayRow.appendChild(metricsWrap);
-  }
-
   if (commandBarWrap && commandBarWrap.parentElement !== relayRow) {
     relayRow.appendChild(commandBarWrap);
   }
 
-  // força trilha separada para nome, métricas e comandos
-  relayRow.style.gridTemplateColumns = "14px max-content 1fr max-content";
+  relayRow.classList.add("relay-row--table");
+  relayRow.style.gridTemplateColumns = "14px minmax(250px,1.45fr) minmax(150px,0.95fr) minmax(150px,0.95fr) minmax(150px,0.95fr) minmax(190px,1fr) 64px";
 
-  // cria o timestamp dentro do bloco de métricas
-  let tsEl = relayRow.querySelector("#relayTsText");
-  if (!tsEl) {
-    tsEl = document.createElement("div");
-    tsEl.id = "relayTsText";
-  }
-  metricsWrap.appendChild(tsEl);
-
-  let powerMain = metricsWrap.querySelector("#relayPowerMain");
-  if (!powerMain) {
-    powerMain = document.createElement("div");
-    powerMain.id = "relayPowerMain";
-    powerMain.className = "relay-power-main";
-    metricsWrap.appendChild(powerMain);
+  let expandIcon = relayRow.querySelector("#relayExpandIcon");
+  if (!expandIcon) {
+    expandIcon = document.createElement("i");
+    expandIcon.id = "relayExpandIcon";
+    expandIcon.className = "fa-solid fa-chevron-down relay-expand-icon";
+    if (nameEl) nameEl.appendChild(expandIcon);
   }
 
-  let powerEl = relayRow.querySelector("#relayPowerText");
-  if (!powerEl) {
-    powerEl = document.createElement("span");
-    powerEl.id = "relayPowerText";
+  const ensureMetricCell = (id, gridColumn) => {
+    let el = relayRow.querySelector(`#${id}`);
+    if (!el) {
+      el = document.createElement("div");
+      el.id = id;
+      el.className = "device-metric-cell";
+      relayRow.appendChild(el);
+    }
+    el.style.gridColumn = String(gridColumn);
+    return el;
+  };
+
+  const activePowerEl = ensureMetricCell("relayActivePowerValue", 3);
+  const apparentPowerEl = ensureMetricCell("relayApparentPowerValue", 4);
+  const reactivePowerEl = ensureMetricCell("relayReactivePowerValue", 5);
+  const tsEl = ensureMetricCell("relayTsText", 6);
+  tsEl.classList.add("relay-timestamp-cell");
+  activePowerEl.dataset.label = "ACTIVE POWER";
+  apparentPowerEl.dataset.label = "APPARENT POWER";
+  reactivePowerEl.dataset.label = "REACTIVE POWER";
+  tsEl.dataset.label = "ÚLTIMA LEITURA";
+
+  if (commandBarWrap) {
+    commandBarWrap.style.gridColumn = "7";
+    commandBarWrap.style.justifySelf = "center";
+    commandBarWrap.dataset.label = "COMANDOS";
   }
-  powerEl.className = "relay-power-value";
-  powerMain.appendChild(powerEl);
 
-  let voltagesWrap = metricsWrap.querySelector("#relayVoltagesWrap");
-  if (!voltagesWrap) {
-    voltagesWrap = document.createElement("div");
-    voltagesWrap.id = "relayVoltagesWrap";
-    voltagesWrap.className = "relay-voltage-list";
+  if (detailsPanel) {
+    detailsPanel.style.maxHeight = detailsPanel.classList.contains("open") ? "1200px" : "0px";
+  }
 
-    const voltageItems = [
-      { key: "AB", id: "relayVoltageAB", label: "V AB" },
-      { key: "BC", id: "relayVoltageBC", label: "V BC" },
-      { key: "CA", id: "relayVoltageCA", label: "V CA" }
-    ];
+  if (!relayRow.dataset.toggleBound) {
+    relayRow.dataset.toggleBound = "true";
+    relayRow.addEventListener("click", (event) => {
+      if (
+        event.target.closest("#relayCommandBarWrap") ||
+        event.target.closest(".device-command-control") ||
+        event.target.closest(".device-command-popover")
+      ) return;
 
-    voltageItems.forEach(({ key, id, label }) => {
-      const item = document.createElement("div");
-      item.className = "relay-voltage-item";
-      item.dataset.voltageKey = key;
-
-      const lbl = document.createElement("span");
-      lbl.className = "relay-voltage-label";
-      lbl.textContent = label;
-
-      const val = document.createElement("span");
-      val.className = "relay-voltage-value";
-      val.id = id;
-      val.textContent = "—";
-
-      item.appendChild(lbl);
-      item.appendChild(val);
-      voltagesWrap.appendChild(item);
+      const nextOpen = !detailsPanel?.classList.contains("open");
+      relayRow.classList.toggle("open", nextOpen);
+      detailsPanel?.classList.toggle("open", nextOpen);
+      if (detailsPanel) {
+        detailsPanel.style.maxHeight = nextOpen ? "1200px" : "0px";
+      }
     });
-
-    metricsWrap.appendChild(voltagesWrap);
   }
-
-  metricsWrap.appendChild(powerMain);
-  metricsWrap.appendChild(voltagesWrap);
-
-  const voltageAbEl = relayRow.querySelector("#relayVoltageAB");
-  const voltageBcEl = relayRow.querySelector("#relayVoltageBC");
-  const voltageCaEl = relayRow.querySelector("#relayVoltageCA");
 
   return {
     relayRow,
     nameEl,
     dotEl,
     badgeOnline,
-    powerEl,
+    activePowerEl,
+    apparentPowerEl,
+    reactivePowerEl,
     tsEl,
-    voltageAbEl,
-    voltageBcEl,
-    voltageCaEl
+    detailsPanel
+  };
+}
+
+function ensureDeviceMiniHeaders() {
+  const relayHeader = document.querySelector("#relaySection .device-mini-header");
+  const multimeterHeader = document.querySelector("#multimeterSection .device-mini-header");
+
+  const applyHeader = (headerEl) => {
+    if (!headerEl) return;
+    let spans = headerEl.querySelectorAll("span");
+
+    if (spans.length < 7) {
+      headerEl.innerHTML = `
+        <span></span>
+        <span></span>
+        <span>ACTIVE POWER</span>
+        <span>APPARENT POWER</span>
+        <span>REACTIVE POWER</span>
+        <span>ÚLTIMA LEITURA</span>
+        <span>COMANDOS</span>
+      `;
+      spans = headerEl.querySelectorAll("span");
+    } else {
+      spans[0].textContent = "";
+      spans[1].textContent = "";
+      spans[2].textContent = "ACTIVE POWER";
+      spans[3].textContent = "APPARENT POWER";
+      spans[4].textContent = "REACTIVE POWER";
+      spans[5].textContent = "ÚLTIMA LEITURA";
+      spans[6].textContent = "COMANDOS";
+    }
+  };
+
+  applyHeader(relayHeader);
+  applyHeader(multimeterHeader);
+}
+
+function pickDeviceMetricValue(primary, secondary, keys) {
+  for (const key of keys) {
+    const secondaryValue = secondary?.[key];
+    if (secondaryValue !== null && secondaryValue !== undefined && secondaryValue !== "") return secondaryValue;
+    const primaryValue = primary?.[key];
+    if (primaryValue !== null && primaryValue !== undefined && primaryValue !== "") return primaryValue;
+  }
+  return null;
+}
+
+function formatMetricValue(value, unit, digits = 1) {
+  const n = Number(typeof value === "string" ? value.replace(",", ".") : value);
+  if (!Number.isFinite(n)) return "—";
+  return `${n.toFixed(digits)} ${unit}`;
+}
+
+function renderRelayDetailsPanel(relayItem) {
+  const panel = document.getElementById("relayDetailsPanel");
+  if (!panel) return;
+
+  if (!relayItem) {
+    panel.innerHTML = `<div class="relay-details-empty">Sem dados detalhados do relé.</div>`;
+    return;
+  }
+
+  const analog = relayItem?.analog ?? {};
+  const metric = (keys, unit, digits = 1) => formatMetricValue(pickDeviceMetricValue(relayItem, analog, keys), unit, digits);
+  const raw = (keys) => {
+    const value = pickDeviceMetricValue(relayItem, analog, keys);
+    return value === null || value === undefined || value === "" ? "—" : String(value);
+  };
+
+  const electricalItems = [
+    ["V AB", metric(["voltage_ab_v", "voltage_ab", "line_voltage_ab_v", "line_voltage_ab", "vab"], "V", 1)],
+    ["V BC", metric(["voltage_bc_v", "voltage_bc", "line_voltage_bc_v", "line_voltage_bc", "vbc"], "V", 1)],
+    ["V CA", metric(["voltage_ca_v", "voltage_ca", "line_voltage_ca_v", "line_voltage_ca", "vca"], "V", 1)],
+    ["Ia", metric(["current_a_a", "current_a", "ia"], "A", 1)],
+    ["Ib", metric(["current_b_a", "current_b", "ib"], "A", 1)],
+    ["Ic", metric(["current_c_a", "current_c", "ic"], "A", 1)],
+    ["Status Relay", raw(["status_relay"])]
+  ];
+
+  const flagItems = [
+    ["46", raw(["flag_46"])], ["50", raw(["flag_50"])], ["51-1", raw(["flag_51_1"])],
+    ["50N", raw(["flag_50N"])], ["51GS", raw(["flag_51GS"])], ["51N", raw(["flag_51N"])],
+    ["27", raw(["flag_27"])], ["59", raw(["flag_59"])], ["47", raw(["flag_47"])],
+    ["81 O", raw(["flag_81_O"])], ["81 U", raw(["flag_81_U"])], ["51-2", raw(["flag_51_2"])]
+  ];
+
+  panel.innerHTML = `
+    <div class="relay-details-card">
+      <div class="relay-details-title">Leituras elétricas</div>
+      <div class="relay-details-grid">
+        ${electricalItems.map(([label, value]) => `
+          <div class="relay-detail-chip">
+            <span>${label}</span>
+            <strong>${value}</strong>
+          </div>
+        `).join("")}
+      </div>
+    </div>
+    <div class="relay-details-card">
+      <div class="relay-details-title">Proteções</div>
+      <div class="relay-flag-grid">
+        ${flagItems.map(([label, value]) => `
+          <div class="relay-flag-pill ${String(value) === "1" ? "is-on" : "is-off"}">
+            <span>${label}</span>
+            <strong>${value}</strong>
+          </div>
+        `).join("")}
+      </div>
+    </div>
+  `;
+}
+
+function ensureMultimeterUiScaffold() {
+  const row = document.getElementById("multimeterRow");
+  if (!row) return null;
+
+  const onlineBadge = document.getElementById("multimeterOnlineBadge");
+  const commandBarWrap = document.getElementById("multimeterCommandBarWrap");
+  const legacyRight = document.getElementById("multimeterRight");
+  const leftBlock =
+    row?.querySelector(".relay-left") ||
+    row?.querySelector(".multimeter-left") ||
+    row?.children?.[1] ||
+    null;
+
+  if (legacyRight) legacyRight.style.display = "none";
+
+  if (leftBlock && onlineBadge && onlineBadge.parentElement !== leftBlock) {
+    leftBlock.appendChild(onlineBadge);
+  }
+  if (commandBarWrap && commandBarWrap.parentElement !== row) {
+    row.appendChild(commandBarWrap);
+  }
+
+  row.classList.add("relay-row--table");
+  row.style.gridTemplateColumns = "14px minmax(250px,1.45fr) minmax(150px,0.95fr) minmax(150px,0.95fr) minmax(150px,0.95fr) minmax(190px,1fr) 64px";
+
+  const ensureMetricCell = (id, gridColumn) => {
+    let el = row.querySelector(`#${id}`);
+    if (!el) {
+      el = document.createElement("div");
+      el.id = id;
+      el.className = "device-metric-cell";
+      row.appendChild(el);
+    }
+    el.style.gridColumn = String(gridColumn);
+    return el;
+  };
+
+  const activePowerEl = ensureMetricCell("multimeterActivePowerValue", 3);
+  const apparentPowerEl = ensureMetricCell("multimeterApparentPowerValue", 4);
+  const reactivePowerEl = ensureMetricCell("multimeterReactivePowerValue", 5);
+  const tsEl = ensureMetricCell("multimeterLastReadingValue", 6);
+  tsEl.classList.add("relay-timestamp-cell");
+  activePowerEl.dataset.label = "ACTIVE POWER";
+  apparentPowerEl.dataset.label = "APPARENT POWER";
+  reactivePowerEl.dataset.label = "REACTIVE POWER";
+  tsEl.dataset.label = "ÚLTIMA LEITURA";
+
+  if (commandBarWrap) {
+    commandBarWrap.style.gridColumn = "7";
+    commandBarWrap.style.justifySelf = "center";
+    commandBarWrap.dataset.label = "COMANDOS";
+  }
+
+  return {
+    row,
+    onlineBadge,
+    activePowerEl,
+    apparentPowerEl,
+    reactivePowerEl,
+    tsEl
   };
 }
 
@@ -1603,6 +1763,9 @@ function renderRelayCommandBar(deviceId, currentState = "off") {
   const normalizedState = currentState === "on" ? "on" : "off";
   setDevicePersistentState("relay", safeId, normalizedState);
   wrap.innerHTML = renderDeviceCommandControl("relay", safeId, normalizedState);
+  wrap.style.display = "flex";
+  wrap.style.alignItems = "center";
+  wrap.style.justifyContent = "center";
   wireDeviceCommandButtons(wrap);
   applyDeviceVisualState("relay", safeId, normalizedState);
 }
@@ -1612,6 +1775,9 @@ function renderMultimeterCommandBar(deviceId) {
   if (!wrap) return;
   const safeId = String(deviceId ?? "multimeter");
   wrap.innerHTML = renderDeviceCommandControl("multimeter", safeId, getDevicePersistentState("multimeter", safeId, "off"));
+  wrap.style.display = "flex";
+  wrap.style.alignItems = "center";
+  wrap.style.justifyContent = "center";
   wireDeviceCommandButtons(wrap);
   applyDeviceVisualState("multimeter", safeId, getDevicePersistentState("multimeter", safeId, "off"));
 }
@@ -1620,42 +1786,23 @@ function renderRelayCard(relayItem) {
   const ui = ensureRelayUiScaffold();
   if (!ui) return;
 
-  const { relayRow, badgeOnline, powerEl, tsEl, voltageAbEl, voltageBcEl, voltageCaEl } = ui;
-
-  const num = (v) => {
-    const n = Number(typeof v === "string" ? v.replace(",", ".") : v);
-    return Number.isFinite(n) ? n : null;
-  };
-  const formatVoltage = (v) => {
-    const n = num(v);
-    return n !== null ? `${n.toFixed(1)} V` : "—";
-  };
-  const pickVoltage = (relay, analog, keys) => {
-    for (const key of keys) {
-      const av = analog?.[key];
-      if (av !== null && av !== undefined && av !== "") return av;
-      const rv = relay?.[key];
-      if (rv !== null && rv !== undefined && rv !== "") return rv;
-    }
-    return null;
-  };
-  const setRelayVoltages = (relay, analog) => {
-    const vab = pickVoltage(relay, analog, ["voltage_ab_v", "voltage_ab", "line_voltage_ab_v", "line_voltage_ab", "vab"]);
-    const vbc = pickVoltage(relay, analog, ["voltage_bc_v", "voltage_bc", "line_voltage_bc_v", "line_voltage_bc", "vbc"]);
-    const vca = pickVoltage(relay, analog, ["voltage_ca_v", "voltage_ca", "line_voltage_ca_v", "line_voltage_ca", "vca"]);
-    if (voltageAbEl) voltageAbEl.textContent = formatVoltage(vab);
-    if (voltageBcEl) voltageBcEl.textContent = formatVoltage(vbc);
-    if (voltageCaEl) voltageCaEl.textContent = formatVoltage(vca);
-  };
+  const { relayRow, badgeOnline, activePowerEl, apparentPowerEl, reactivePowerEl, tsEl, detailsPanel } = ui;
+  ensureDeviceMiniHeaders();
 
   // sem dados ainda
   if (!relayItem) {
-    relayRow.classList.remove("online", "offline");
+    relayRow.classList.remove("online", "offline", "open");
     relayRow.classList.add("offline");
     badgeOnline.textContent = "OFFLINE";
-    powerEl.textContent = "—";
-    tsEl.textContent = "Última atualização: —";
-    setRelayVoltages(null, null);
+    activePowerEl.textContent = "—";
+    apparentPowerEl.textContent = "—";
+    reactivePowerEl.textContent = "—";
+    tsEl.textContent = "—";
+    if (detailsPanel) {
+      detailsPanel.classList.remove("open");
+      detailsPanel.style.maxHeight = "0px";
+    }
+    renderRelayDetailsPanel(null);
     renderRelayCommandBar("relay", "off");
     return;
   }
@@ -1663,23 +1810,15 @@ function renderRelayCard(relayItem) {
   const analog = relayItem?.analog ?? {};
   const isOnline = relayOnlineFromPayload(relayItem);
   const relayState = relayStateFromPayload(relayItem);
+  const activePower = pickDeviceMetricValue(relayItem, analog, ["active_power_kw", "power_kw", "active_power"]);
+  const apparentPower = pickDeviceMetricValue(relayItem, analog, ["apparent_power_kva", "power_apparent_kva", "apparent_power", "apparent_power_va"]);
+  const reactivePower = pickDeviceMetricValue(relayItem, analog, ["reactive_power_kvar", "power_reactive_kvar", "reactive_power", "reactive_power_var"]);
   const lastUpdate =
     relayItem?.last_update ??
     relayItem?.timestamp ??
     relayItem?.analog?.timestamp ??
     relayItem?.event?.timestamp ??
     null;
-
-  const kw =
-    relayItem?.analog?.active_power_kw ??
-    relayItem?.analog?.power_kw ??
-    relayItem?.analog?.active_power ??
-    relayItem?.active_power_kw ??
-    relayItem?.power_kw ??
-    relayItem?.active_power ??
-    0;
-  const kwNum = num(kw);
-  const kwText = kwNum !== null ? `${kwNum.toFixed(1)} kW` : "— kW";
   const deviceId = relayItem?.device_id ?? relayItem?.relay_id ?? "relay";
 
   // classes do row (para a bolinha)
@@ -1691,53 +1830,47 @@ function renderRelayCard(relayItem) {
   badgeOnline.style.borderColor = isOnline ? "rgba(57,229,140,0.26)" : "rgba(255,92,92,0.25)";
   badgeOnline.style.background = isOnline ? "rgba(57,229,140,0.08)" : "rgba(255,92,92,0.08)";
   badgeOnline.style.color = isOnline ? "rgba(233,255,243,0.92)" : "rgba(255,255,255,0.92)";
+  badgeOnline.style.marginLeft = "8px";
+  badgeOnline.style.whiteSpace = "nowrap";
 
-  // kW à direita
-  powerEl.textContent = kwText;
-  setRelayVoltages(relayItem, analog);
+  activePowerEl.textContent = formatMetricValue(activePower, "kW", 1);
+  apparentPowerEl.textContent = formatMetricValue(apparentPower, "kVA", 1);
+  reactivePowerEl.textContent = formatMetricValue(reactivePower, "kvar", 1);
+  tsEl.textContent = fmtDatePtBR(lastUpdate);
 
-  // timestamp
-  tsEl.textContent = `Última atualização: ${fmtDatePtBR(lastUpdate)}`;
+  renderRelayDetailsPanel(relayItem);
+  if (detailsPanel?.classList.contains("open")) {
+    detailsPanel.style.maxHeight = "1200px";
+  }
   renderRelayCommandBar(deviceId, relayState);
 }
 
 function renderMultimeterCard(item) {
-  const row = document.getElementById("multimeterRow");
-  if (!row) return;
+  const ui = ensureMultimeterUiScaffold();
+  if (!ui) return;
 
+  const { row, onlineBadge, activePowerEl, apparentPowerEl, reactivePowerEl, tsEl } = ui;
   const dot = document.getElementById("multimeterDot");
-  const ts = document.getElementById("multimeterLastUpdateText");
-  const onlineBadge = document.getElementById("multimeterOnlineBadge");
-  const powerText = document.getElementById("multimeterPowerText");
-  const commandBarWrap = document.getElementById("multimeterCommandBarWrap");
-  const leftBlock =
-    row?.querySelector(".relay-left") ||
-    row?.querySelector(".multimeter-left") ||
-    row?.children?.[1] ||
-    null;
-  if (leftBlock && onlineBadge && onlineBadge.parentElement !== leftBlock) {
-    leftBlock.appendChild(onlineBadge);
-  }
-  if (commandBarWrap && commandBarWrap.parentElement !== row) {
-    row.appendChild(commandBarWrap);
-  }
-  row.style.gridTemplateColumns = "14px max-content 1fr max-content";
+  ensureDeviceMiniHeaders();
 
   if (!item) {
     row.classList.remove("online", "offline");
     row.classList.add("offline");
     if (onlineBadge) onlineBadge.textContent = "OFFLINE";
-    if (powerText) powerText.textContent = "—";
-    if (ts) ts.textContent = "—";
+    activePowerEl.textContent = "—";
+    apparentPowerEl.textContent = "—";
+    reactivePowerEl.textContent = "—";
+    tsEl.textContent = "—";
     if (dot) dot.style.opacity = "0.65";
+    renderMultimeterCommandBar("multimeter");
     return;
   }
 
   const analog = item?.analog ?? item?.data ?? {};
   const isOnline = multimeterOnlineFromPayload(item);
-  const pKw = analog.active_power_kw ?? analog.p_kw ?? analog.power_kw ?? analog.active_power;
-  const pf = analog.power_factor ?? analog.pf;
-  const hz = analog.frequency_hz ?? analog.hz ?? analog.frequency;
+  const activePower = pickDeviceMetricValue(item, analog, ["active_power_kw", "p_kw", "power_kw", "active_power"]);
+  const apparentPower = pickDeviceMetricValue(item, analog, ["apparent_power_kva", "power_apparent_kva", "apparent_power", "apparent_power_va"]);
+  const reactivePower = pickDeviceMetricValue(item, analog, ["reactive_power_kvar", "power_reactive_kvar", "reactive_power", "reactive_power_var"]);
   const lastUpdate = item.last_update ?? item.timestamp ?? null;
 
   renderMultimeterCommandBar(item?.device_id ?? item?.multimeter_id ?? "multimeter");
@@ -1749,13 +1882,13 @@ function renderMultimeterCard(item) {
     onlineBadge.textContent = isOnline ? "ONLINE" : "OFFLINE";
     onlineBadge.classList.remove("relay-state--on", "relay-state--off", "relay-state--unknown");
     onlineBadge.classList.add(isOnline ? "relay-state--on" : "relay-state--off");
+    onlineBadge.style.marginLeft = "8px";
   }
 
-  const pText = Number.isFinite(Number(pKw)) ? `${numFixedOrDash(pKw, 1)} kW` : "— kW";
-  const pfText = Number.isFinite(Number(pf)) ? `PF ${numFixedOrDash(pf, 2)}` : "PF —";
-  const hzText = Number.isFinite(Number(hz)) ? `${numFixedOrDash(hz, 2)} Hz` : "— Hz";
-  if (powerText) powerText.textContent = `${pText} • ${pfText} • ${hzText}`;
-  if (ts) ts.textContent = fmtDatePtBR(lastUpdate);
+  activePowerEl.textContent = formatMetricValue(activePower, "kW", 1);
+  apparentPowerEl.textContent = formatMetricValue(apparentPower, "kVA", 1);
+  reactivePowerEl.textContent = formatMetricValue(reactivePower, "kvar", 1);
+  tsEl.textContent = fmtDatePtBR(lastUpdate);
 }
 
 // ======================================================
