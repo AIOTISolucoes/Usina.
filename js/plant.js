@@ -1252,12 +1252,14 @@ function ensureInverterRowsFromRealtime(inverters) {
     row.innerHTML = `
       <span class="status-dot"></span>
       <span class="inverter-name">${title}<i class="arrow fa-solid fa-chevron-down"></i></span>
-      <span>—</span>
-      <span>—</span>
-      <span>—</span>
-      <span>—</span>
-      <span>—</span>
-      <span>—</span>
+      <div class="inv-metrics-grid">
+        <span class="inv-metric" data-label="Power">—</span>
+        <span class="inv-metric" data-label="Efficiency">—</span>
+        <span class="inv-metric" data-label="Temp">—</span>
+        <span class="inv-metric" data-label="Freq">—</span>
+        <span class="inv-metric" data-label="PR">—</span>
+        <span class="inv-metric inv-metric--wide" data-label="Leitura">—</span>
+      </div>
       <span class="device-command-cell">
         ${renderDeviceCommandControl("inverter", realId, isOnlineByFreshness(inv) && !isZeroSnapshot(inv) ? "on" : "off")}
       </span>
@@ -2030,9 +2032,19 @@ function renderMultimeterCard(item) {
 // ✅ RENDER — INVERTERS (KPIs por inversor) ✅
 // ======================================================
 function fillInverterRowSpans(rowEl, values) {
+  const metrics = rowEl.querySelectorAll(".inv-metric");
+  if (metrics.length >= 6) {
+    setInverterMetricCell(metrics[0], values.power);
+    setInverterMetricCell(metrics[1], values.eff);
+    setInverterMetricCell(metrics[2], values.temp);
+    setInverterMetricCell(metrics[3], values.freq);
+    setInverterMetricCell(metrics[4], values.pr);
+    metrics[5].textContent = values.last;
+    return true;
+  }
+  // fallback: layout antigo
   const spans = rowEl.querySelectorAll(":scope > span");
   if (!spans || spans.length < 8) return false;
-
   setInverterMetricCell(spans[2], values.power);
   setInverterMetricCell(spans[3], values.eff);
   setInverterMetricCell(spans[4], values.temp);
@@ -2974,6 +2986,16 @@ function setupInverterToggles() {
     panel.classList.add("open");
     panel.style.opacity = "1";
     panel.style.maxHeight = panel.scrollHeight + "px";
+
+    // Mostra spinner enquanto carrega
+    const stringsGrid = panel.querySelector(".strings-grid");
+    if (stringsGrid) {
+      const loader = document.createElement("div");
+      loader.className = "inv-panel-loader";
+      loader.innerHTML = `<div class="inv-panel-spinner"></div><span>Carregando dados…</span>`;
+      stringsGrid.innerHTML = "";
+      stringsGrid.appendChild(loader);
+    }
 
     refreshStringsForRealInverter(inverterRealId).finally(() => {
       // ✅ renderiza extras (chips amarelos) abaixo das strings
