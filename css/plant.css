@@ -1952,7 +1952,6 @@ body::after{
 
   .inverter-header,
   .inverter-row{
-    min-width: 820px;
     grid-template-columns: 14px 1.2fr 0.95fr 0.9fr 0.8fr 0.8fr 0.6fr 1.2fr;
     font-size: 12px;
     gap: 10px;
@@ -2132,7 +2131,7 @@ body.plant-enter #relaySection{
 
   .inverter-header,
   .inverter-row{
-    min-width: 700px;
+    min-width: 0;
   }
 
   .inverter-strings.open{
@@ -3617,7 +3616,6 @@ body.plant-enter #relaySection{
 @media (max-width: 900px){
   .inverter-header,
   .inverter-row{
-    min-width: 930px;
     grid-template-columns: 14px 1.15fr 0.9fr 0.9fr 0.85fr 0.85fr 0.6fr 1.2fr 64px;
   }
 }
@@ -3886,6 +3884,72 @@ body.plant-enter #relaySection{
     display: none !important;
   }
 
+  /* ── Inversores: card vertical com labels em mobile ── */
+  .inverter-header{
+    display: none !important;
+  }
+
+  .inverter-row{
+    display: grid !important;
+    grid-template-columns: auto 1fr auto;
+    grid-template-rows: auto auto;
+    gap: 6px 10px;
+    padding: 12px 14px;
+    min-width: 0 !important;
+    font-size: 13px;
+  }
+
+  .inverter-row > .status-dot{
+    grid-row: 1;
+    grid-column: 1;
+    align-self: center;
+  }
+
+  .inverter-row > .inverter-name{
+    grid-row: 1;
+    grid-column: 2;
+    font-size: 15px;
+  }
+
+  .inverter-row > .device-command-cell{
+    grid-row: 1;
+    grid-column: 3;
+    align-self: center;
+  }
+
+  /* Métricas viram grid de pills */
+  .inv-metrics-grid{
+    display: grid !important;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 6px;
+    grid-column: 1 / -1;
+  }
+
+  .inv-metric{
+    background: rgba(57,229,140,0.04);
+    border: 1px solid rgba(57,229,140,0.10);
+    border-radius: 8px;
+    padding: 6px 8px;
+    font-size: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .inv-metric::before{
+    content: attr(data-label);
+    display: block !important;
+    font-size: 9px;
+    text-transform: uppercase;
+    color: rgba(154,219,184,0.6);
+    letter-spacing: 0.04em;
+  }
+
+  /* Última leitura ocupa linha inteira */
+  .inv-metric--wide{
+    grid-column: 1 / -1;
+  }
+
   /* ── Relay / Multimeter rows: trocar grid 7col por flex-wrap ── */
   .relay-row--table,
   #multimeterRow{
@@ -3976,4 +4040,37 @@ body.plant-enter #relaySection{
     flex-direction: column;
     gap: 4px;
   }
+}
+
+/* ── Inverter metrics grid (desktop: spans participam do grid pai) ── */
+.inv-metrics-grid{
+  display: contents;
+}
+
+.inv-metric::before{
+  display: none;
+}
+
+/* ── Inverter panel loading spinner ── */
+.inv-panel-loader{
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px 0;
+  gap: 10px;
+  color: rgba(154,219,184,0.6);
+  font-size: 12px;
+}
+
+.inv-panel-spinner{
+  width: 22px;
+  height: 22px;
+  border: 2px solid rgba(57,229,140,0.15);
+  border-top-color: var(--neon);
+  border-radius: 50%;
+  animation: invSpin 0.7s linear infinite;
+}
+
+@keyframes invSpin{
+  to{ transform: rotate(360deg); }
 }
