@@ -2667,7 +2667,7 @@ body.plant-enter #relaySection{
   }
 
   .plant-chart-card--monthly{
-    height: 320px;
+    min-height: 440px;
   }
 }
 
@@ -2784,6 +2784,83 @@ body.plant-enter #relaySection{
 .weather-title{
   font-size: 11px;
   margin: 0;
+}
+
+.weather-title-row{
+  display:flex;
+  align-items:center;
+  gap:6px;
+  margin-bottom:6px;
+}
+
+.weather-expand-btn{
+  background:none;
+  border:none;
+  cursor:pointer;
+  color:var(--warm-yellow);
+  font-size:13px;
+  padding:2px 6px;
+  border-radius:6px;
+  transition:background 0.2s, transform 0.25s;
+  line-height:1;
+}
+.weather-expand-btn.is-open{
+  transform:rotate(180deg);
+}
+.weather-expand-btn:hover{
+  background:rgba(255,190,30,0.10);
+}
+
+.weather-expand-panel{
+  max-height:0;
+  overflow:hidden;
+  opacity:0;
+  transition:max-height 0.3s ease, opacity 0.2s ease;
+  margin-top:0;
+}
+.weather-expand-panel.is-open{
+  max-height:300px;
+  opacity:1;
+  margin-top:12px;
+}
+
+.weather-expand-grid{
+  display:grid;
+  grid-template-columns:repeat(3, 1fr);
+  gap:8px;
+}
+
+.weather-expand-item{
+  display:flex;
+  flex-direction:column;
+  gap:4px;
+  padding:10px 12px;
+  background:rgba(255,190,30,0.05);
+  border:1px solid rgba(255,190,30,0.12);
+  border-radius:10px;
+}
+
+.wei-icon{
+  font-size:14px;
+  color:var(--warm-yellow);
+  display:flex;
+  align-items:center;
+}
+.wei-label{
+  font-size:10px;
+  text-transform:uppercase;
+  letter-spacing:0.05em;
+  color:rgba(154,219,184,0.6);
+}
+.wei-value{
+  font-size:15px;
+  font-weight:700;
+  color:var(--warm-yellow);
+  text-shadow:0 0 10px rgba(255,152,0,0.15);
+}
+
+@media (max-width: 640px){
+  .weather-expand-grid{ grid-template-columns:repeat(2, 1fr); }
 }
 
 .plant-weather-compact .weather-items-row{
@@ -3205,23 +3282,25 @@ body.plant-enter #relaySection{
 .relay-row--table,
 #multimeterRow{
   display:grid !important;
-  grid-template-columns: 14px minmax(250px,1.45fr) minmax(150px,0.95fr) minmax(150px,0.95fr) minmax(150px,0.95fr) minmax(190px,1fr) 64px !important;
+  grid-template-columns: 14px minmax(220px,1.45fr) minmax(130px,0.95fr) minmax(130px,0.95fr) minmax(130px,0.95fr) minmax(160px,1fr) 64px !important;
+  grid-template-rows: 1fr !important;
   align-items:center !important;
   column-gap:14px !important;
-  padding:6px 16px !important;
+  padding:10px 16px !important;
   cursor:pointer;
 }
 
 .relay-row--table .relay-left,
 #multimeterRow .relay-left,
 #multimeterRow .multimeter-left{
-  grid-column:2;
-  grid-row:1;
+  grid-column:2 !important;
+  grid-row:1 !important;
   min-width:0;
   display:flex;
   align-items:center;
   gap:10px;
   flex-wrap:nowrap;
+  align-self:center;
 }
 
 .relay-row--table .relay-right,
@@ -3232,9 +3311,9 @@ body.plant-enter #relaySection{
 
 .relay-row--table .status-dot,
 #multimeterRow .status-dot{
-  grid-column:1;
-  grid-row:1;
-  margin-top:0;
+  grid-column:1 !important;
+  grid-row:1 !important;
+  margin-top:0 !important;
   align-self:center;
 }
 
@@ -3243,18 +3322,18 @@ body.plant-enter #relaySection{
   flex-direction:column;
   align-items:center;
   justify-content:center;
-  gap:4px;
+  gap:2px;
   min-width:0;
   white-space:nowrap;
   overflow:hidden;
   text-overflow:ellipsis;
-  font-size:14px;
-  font-weight:800;
+  font-size:13px;
+  font-weight:700;
   color:rgba(233,255,243,0.94);
   text-align:center;
   text-shadow:0 0 12px rgba(57,229,140,0.10);
   align-self:center;
-  grid-row:1;
+  grid-row:1 !important;
   padding-top:0;
 }
 
@@ -3290,12 +3369,12 @@ body.plant-enter #relaySection{
   justify-self:center !important;
   align-self:center !important;
   display:flex !important;
-  flex-direction:column;
+  flex-direction:column !important;
   gap:4px;
   align-items:center !important;
   justify-content:center !important;
   min-width:64px !important;
-  margin-top:0;
+  margin-top:0 !important;
 }
 
 #relayTsText,
@@ -3568,6 +3647,19 @@ body.plant-enter #relaySection{
   min-height:312px;
 }
 
+.plant-chart-card--monthly{
+  display:flex;
+  flex-direction:column;
+  height:auto;
+  min-height:480px;
+}
+
+.plant-chart-card--monthly .chart-wrapper{
+  flex:1;
+  min-height:180px;
+  height:auto;
+}
+
 .plant-chart-card .chart-wrapper{
   height:214px;
   min-height:214px;
@@ -3602,6 +3694,14 @@ body.plant-enter #relaySection{
     min-height:292px;
   }
 
+  .plant-chart-card--monthly{
+    min-height:500px;
+  }
+
+  .plant-chart-card--monthly .chart-wrapper{
+    min-height:200px;
+  }
+
   .plant-chart-card .chart-wrapper{
     min-height:198px;
     height:198px;
@@ -3610,26 +3710,270 @@ body.plant-enter #relaySection{
 
 @media (max-width: 560px){
   .plant-chart-card--monthly{
-    min-height: 276px;
+    min-height: 520px;
+  }
+
+  .plant-chart-card--monthly .chart-wrapper{
+    min-height: 200px;
   }
 }
 
-/* Ajuste fino: alinha métricas do Relé/Multimedidor com a coluna de comandos */
-.relay-row--table,
-#multimeterRow{
-  align-items:start !important;
-}
-
-.relay-row--table .relay-left,
-#multimeterRow .relay-left,
-#multimeterRow .multimeter-left{
-  align-self:center;
-}
-
-.device-metric-cell,
-.relay-timestamp-cell,
-#relayCommandBarWrap,
-#multimeterCommandBarWrap{
+/* relay-timestamp-cell alinhamento */
+.relay-timestamp-cell{
   align-self:center !important;
+}
+
+/* ── Multimedidor title ── */
+.multimeter-title{
+  display:flex;
+  align-items:center;
+  gap:10px;
+}
+.multimeter-svg-icon{
+  width:32px;
+  height:32px;
+  flex-shrink:0;
+  filter:drop-shadow(0 0 6px rgba(57,229,140,0.35)) drop-shadow(0 0 14px rgba(57,229,140,0.15));
+}
+
+.relay-title-heading{
+  display:flex;
+  align-items:center;
+  gap:10px;
+}
+.relay-svg-icon{
+  width:32px;
+  height:32px;
+  flex-shrink:0;
+  filter:drop-shadow(0 0 6px rgba(57,229,140,0.35)) drop-shadow(0 0 14px rgba(57,229,140,0.15));
+}
+
+/* ── Cabin groups ── */
+.cabin-group{
+  margin-top:18px;
+}
+.cabin-group:first-child{
   margin-top:0;
+}
+.cabin-group-header{
+  cursor:pointer;
+  display:flex;
+  align-items:center;
+  gap:8px;
+  padding:10px 14px;
+  margin-bottom:8px;
+  border-radius:10px;
+  background:linear-gradient(90deg, rgba(57,229,140,0.06), transparent);
+  border-left:3px solid rgba(57,229,140,0.45);
+  user-select:none;
+}
+.cabin-group-header__icon{
+  color:var(--color-accent, #00e5a0);
+  flex-shrink:0;
+}
+.cabin-group-header__name{
+  font-size:13px;
+  font-weight:600;
+  letter-spacing:0.04em;
+  text-transform:uppercase;
+  color:rgba(154,219,184,0.9);
+}
+.cabin-group-header__count{
+  font-size:11px;
+  color:rgba(154,219,184,0.5);
+  margin-left:auto;
+  font-family:var(--font-mono);
+}
+.cabin-group-header__chevron{
+  margin-left:8px;
+  transition:transform 0.25s ease;
+  color:var(--color-accent, #00e5a0);
+  flex-shrink:0;
+}
+.cabin-group[data-cabin-collapsed="true"] .cabin-group-header__chevron{
+  transform:rotate(-90deg);
+}
+.cabin-group-body{
+  overflow:hidden;
+  transition:max-height 0.3s ease, opacity 0.2s ease;
+}
+.cabin-group-body.is-collapsed{
+  max-height:0 !important;
+  opacity:0;
+  pointer-events:none;
+}
+
+/* =========================================================
+   MOBILE — max-width: 768px
+========================================================= */
+@media (max-width: 768px){
+
+  /* ── Gráficos: coluna única ── */
+  .plant-charts-grid{
+    grid-template-columns: 1fr !important;
+    gap: 14px;
+  }
+
+  .plant-chart-card{
+    height: 280px;
+    min-height: 240px;
+  }
+
+  /* ── Card mensal mobile ── */
+  .plant-chart-card--monthly{
+    min-height: 420px;
+    padding: 14px 10px;
+  }
+
+  .plant-chart-card--monthly .chart-wrapper{
+    min-height: 220px;
+    height: 240px;
+    padding-left: 0;
+    padding-right: 0;
+  }
+
+  .monthly-head-wrap{
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .monthly-kpis{
+    width: 100%;
+    gap: 6px;
+  }
+
+  .monthly-kpi-pill{
+    flex: 1;
+    min-width: 0;
+    padding: 5px 8px;
+  }
+
+  .monthly-kpi-pill span{
+    font-size: 9px;
+  }
+
+  .monthly-kpi-pill strong{
+    font-size: 12px;
+    word-break: break-all;
+  }
+
+  .monthly-legend-row{
+    gap: 8px;
+    margin-top: 2px;
+  }
+
+  .monthly-leg{
+    font-size: 10px;
+    gap: 4px;
+  }
+
+  .monthly-leg-sq{
+    width: 8px;
+    height: 8px;
+  }
+
+  .monthly-bottom-meta{
+    font-size: 10px;
+  }
+
+  .plant-chart-card .chart-wrapper{
+    height: 200px;
+    min-height: 180px;
+  }
+
+  /* ── Headers das tabelas de dispositivos: ocultar em mobile ── */
+  .device-mini-header{
+    display: none !important;
+  }
+
+  /* ── Relay / Multimeter rows: trocar grid 7col por flex-wrap ── */
+  .relay-row--table,
+  #multimeterRow{
+    display: flex !important;
+    flex-wrap: wrap !important;
+    align-items: center !important;
+    padding: 12px 14px !important;
+    gap: 8px !important;
+    column-gap: 8px !important;
+    row-gap: 10px !important;
+  }
+
+  /* dot: tamanho fixo, não cresce */
+  .relay-row--table .status-dot,
+  #multimeterRow .status-dot{
+    flex: 0 0 auto;
+    align-self: center;
+  }
+
+  /* nome + badge: cresce para preencher a linha do topo */
+  .relay-row--table .relay-left,
+  #multimeterRow .relay-left,
+  #multimeterRow .multimeter-left{
+    flex: 1 1 auto !important;
+    min-width: 0;
+    align-self: center;
+    overflow: hidden;
+  }
+
+  /* commandBar: cola na direita da linha do topo via margin-left auto */
+  #relayCommandBarWrap,
+  #multimeterCommandBarWrap{
+    flex: 0 0 auto !important;
+    margin-left: auto !important;
+    align-self: center !important;
+    grid-column: unset !important;
+    grid-row: unset !important;
+  }
+
+  /* metric cells: dois por linha (≈50% cada) */
+  .device-metric-cell{
+    flex: 1 1 calc(50% - 12px) !important;
+    max-width: calc(50% - 12px);
+    grid-column: unset !important;
+    grid-row: unset !important;
+    background: rgba(57,229,140,0.03);
+    border: 1px solid rgba(57,229,140,0.08);
+    border-radius: 8px;
+    padding: 8px 6px;
+    min-width: 0;
+    font-size: 12px;
+  }
+
+  /* badge ONLINE/OFFLINE menor em mobile */
+  #relayOnlineBadge,
+  #multimeterOnlineBadge{
+    font-size: 10px !important;
+    padding: 0 8px !important;
+    height: 22px !important;
+    min-width: 54px !important;
+  }
+
+  /* relay-title legível */
+  .relay-title{
+    font-size: 13px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /* painel de detalhes do relé: coluna única em mobile */
+  .relay-details-panel.open{
+    grid-template-columns: 1fr !important;
+  }
+
+  .relay-details-grid,
+  .relay-flag-grid{
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 400px){
+  .monthly-kpi-pill strong{
+    font-size: 11px;
+  }
+
+  .monthly-legend-row{
+    flex-direction: column;
+    gap: 4px;
+  }
 }
