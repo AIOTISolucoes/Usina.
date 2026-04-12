@@ -1210,18 +1210,24 @@ function ensureInverterRowsFromRealtime(inverters) {
   const preservedOpenId = OPEN_INVERTER_REAL_ID;
   const uniq = dedupInvertersById(Array.isArray(inverters) ? inverters : []);
 
-  uniq.sort((a, b) => {
+  const sortByName = (a, b) => {
     const an = String(getInverterDisplayName(a, 0) || "");
     const bn = String(getInverterDisplayName(b, 0) || "");
     if (an && bn) return an.localeCompare(bn, "pt-BR", { numeric: true, sensitivity: "base" });
     return Number(getInverterRealId(a) || 0) - Number(getInverterRealId(b) || 0);
-  });
+  };
+
+  uniq.sort(sortByName);
 
   const nextIds = uniq
     .map(inv => getInverterRealId(inv))
     .filter(id => id != null)
     .map(id => String(id));
-  const nextSignature = nextIds.join("|");
+
+  // Signature includes cabin assignment so regrouping triggers re-render
+  const nextSignature = uniq
+    .map(inv => `${getInverterRealId(inv)}:${inv.cabin_id ?? ""}`)
+    .join("|");
 
   if (LAST_INVERTER_ROWS_SIGNATURE === nextSignature && container.children.length > 0) {
     if (preservedOpenId != null && !nextIds.includes(String(preservedOpenId))) {
@@ -1233,7 +1239,8 @@ function ensureInverterRowsFromRealtime(inverters) {
   LAST_INVERTER_ROWS_SIGNATURE = nextSignature;
   container.innerHTML = "";
 
-  uniq.forEach((inv, idx) => {
+  // Helper: create and append a single inverter row+panel into a parent element
+  const appendInverterRowAndPanel = (parent, inv, idx) => {
     const realId = getInverterRealId(inv);
     if (realId == null) return;
 
@@ -1314,12 +1321,87 @@ function ensureInverterRowsFromRealtime(inverters) {
       <div class="strings-grid" data-inverter-real-id="${realId}"></div>
     `;
 
-    container.appendChild(row);
-    container.appendChild(panel);
+    parent.appendChild(row);
+    parent.appendChild(panel);
     wireDeviceCommandButtons(row);
     const inferredState = isOnlineByFreshness(inv) && !isZeroSnapshot(inv) ? "on" : "off";
     applyDeviceVisualState("inverter", String(realId), getDevicePersistentState("inverter", String(realId), inferredState));
-  });
+  };
+
+  const hasCabins = uniq.some(inv => inv.cabin_id != null);
+
+  if (!hasCabins) {
+    // Flat rendering — comportamento original
+    uniq.forEach((inv, idx) => appendInverterRowAndPanel(container, inv, idx));
+  } else {
+    // Agrupar por cabin_id
+    const groupMap = new Map();
+    const noCabin = [];
+
+    uniq.forEach(inv => {
+      const cabinId = inv.cabin_id;
+      if (cabinId == null) {
+        noCabin.push(inv);
+      } else {
+        if (!groupMap.has(cabinId)) {
+          groupMap.set(cabinId, {
+            name: inv.section_name ?? inv.cabin_name ?? inv.cabin_code ?? `Cabine ${cabinId}`,
+            displayOrder: inv.cabin_display_order ?? 999,
+            inverters: []
+          });
+        }
+        groupMap.get(cabinId).inverters.push(inv);
+      }
+    });
+
+    const sortedGroups = Array.from(groupMap.values())
+      .sort((a, b) => a.displayOrder - b.displayOrder);
+
+    if (noCabin.length > 0) {
+      sortedGroups.push({ name: "Sem cabine", displayOrder: 9999, inverters: noCabin });
+    }
+
+    let globalIdx = 0;
+    sortedGroups.forEach(group => {
+      const groupEl = document.createElement("div");
+      groupEl.className = "cabin-group";
+      groupEl.dataset.cabinCollapsed = "false";
+
+      const header = document.createElement("div");
+      header.className = "cabin-group-header";
+      header.innerHTML = `
+        <svg class="cabin-group-header__icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="2" y="7" width="20" height="13" rx="1"/>
+          <path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/>
+          <line x1="12" y1="12" x2="12" y2="16"/>
+          <line x1="10" y1="14" x2="14" y2="14"/>
+        </svg>
+        <span class="cabin-group-header__name">${group.name}</span>
+        <span class="cabin-group-header__count">${group.inverters.length} inversor${group.inverters.length !== 1 ? "es" : ""}</span>
+        <svg class="cabin-group-header__chevron" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="6 9 12 15 18 9"/>
+        </svg>
+      `;
+
+      const body = document.createElement("div");
+      body.className = "cabin-group-body";
+
+      header.addEventListener("click", () => {
+        const collapsed = groupEl.dataset.cabinCollapsed === "true";
+        groupEl.dataset.cabinCollapsed = collapsed ? "false" : "true";
+        body.classList.toggle("is-collapsed", !collapsed);
+      });
+
+      groupEl.appendChild(header);
+      groupEl.appendChild(body);
+
+      group.inverters.forEach(inv => {
+        appendInverterRowAndPanel(body, inv, globalIdx++);
+      });
+
+      container.appendChild(groupEl);
+    });
+  }
 
   if (preservedOpenId != null) {
     const row = container.querySelector(`.inverter-toggle[data-inverter-real-id="${preservedOpenId}"]`);
@@ -1362,26 +1444,75 @@ function renderHeaderSummary() {
 // RENDER — WEATHER
 // ======================================================
 function renderWeather(data) {
+  const hasWeather = !!(data && typeof data === "object");
+  const d = hasWeather ? data : {};
+
   const elIrr = document.getElementById("weatherIrradiance");
   const elAir = document.getElementById("weatherAirTemp");
   const elModule = document.getElementById("weatherModuleTemp");
 
-  const hasWeather = !!(data && typeof data === "object");
-
   if (elIrr) {
-    const value = hasWeather ? (data.irradiance_poa_wm2 ?? data.irradiance_ghi_wm2) : null;
+    const value = d.irradiance_poa_wm2 ?? d.POA_irradiance ?? null;
     elIrr.textContent = value != null ? `${Number(value).toFixed(0)} W/m²` : "—";
   }
-
   if (elAir) {
-    const value = hasWeather ? data.air_temperature_c : null;
+    const value = d.air_temperature_c ?? d.temp_ambiente ?? null;
     elAir.textContent = value != null ? `${Number(value).toFixed(1)} °C` : "—";
   }
-
   if (elModule) {
-    const value = hasWeather ? data.module_temperature_c : null;
+    const value = d.module_temperature_c ?? d.temp_modulo ?? null;
     elModule.textContent = value != null ? `${Number(value).toFixed(1)} °C` : "—";
   }
+
+  // Painel expandido
+  const wxWind = document.getElementById("wxWindSpeed");
+  if (wxWind) {
+    const v = d.wind_speed_ms ?? d.vel_vento ?? null;
+    wxWind.textContent = v != null ? `${Number(v).toFixed(1)} m/s` : "—";
+  }
+
+  const wxDir = document.getElementById("wxWindDir");
+  if (wxDir) {
+    const v = d.wind_direction_deg ?? d.wind_direction ?? null;
+    wxDir.textContent = v != null ? `${Number(v).toFixed(0)}°` : "—";
+  }
+
+  const wxGhi = document.getElementById("wxGhi");
+  if (wxGhi) {
+    const v = d.irradiance_ghi_wm2 ?? d.GHI_irradiance ?? null;
+    wxGhi.textContent = v != null ? `${Number(v).toFixed(0)} W/m²` : "—";
+  }
+
+  const wxRain = document.getElementById("wxRain");
+  if (wxRain) {
+    const hour = d.rainfall_hour_mm ?? d.acumulador_pluv_hour ?? null;
+    const month = d.rainfall_month_mm ?? d.acumulador_pluv_month ?? null;
+    const hStr = hour != null ? `${Number(hour).toFixed(1)}` : "—";
+    const mStr = month != null ? `${Number(month).toFixed(1)}` : "—";
+    wxRain.textContent = `${hStr} / ${mStr} mm`;
+  }
+
+  const wxBatt = document.getElementById("wxBattery");
+  if (wxBatt) {
+    const v = d.battery_voltage_v ?? d.volt_battery ?? null;
+    wxBatt.textContent = v != null ? `${Number(v).toFixed(2)} V` : "—";
+  }
+
+  const wxSensor = document.getElementById("wxRainSensor");
+  if (wxSensor) {
+    const v = d.rain_sensor ?? d.sensor_chuva ?? null;
+    wxSensor.textContent = v != null ? (Number(v) === 1 ? "Chuva" : "Seco") : "—";
+  }
+}
+
+function setupWeatherExpand() {
+  const btn = document.getElementById("weatherExpandBtn");
+  const panel = document.getElementById("weatherExpandPanel");
+  if (!btn || !panel) return;
+  btn.addEventListener("click", () => {
+    const open = panel.classList.toggle("is-open");
+    btn.classList.toggle("is-open", open);
+  });
 }
 
 // ======================================================
@@ -1530,6 +1661,7 @@ function ensureRelayUiScaffold() {
       relayRow.appendChild(el);
     }
     el.style.gridColumn = String(gridColumn);
+    el.style.gridRow = "1";
     return el;
   };
 
@@ -1545,6 +1677,7 @@ function ensureRelayUiScaffold() {
 
   if (commandBarWrap) {
     commandBarWrap.style.gridColumn = "7";
+    commandBarWrap.style.gridRow = "1";
     commandBarWrap.style.justifySelf = "center";
     commandBarWrap.dataset.label = "COMANDOS";
   }
@@ -1727,6 +1860,7 @@ function ensureMultimeterUiScaffold() {
       row.appendChild(el);
     }
     el.style.gridColumn = String(gridColumn);
+    el.style.gridRow = "1";
     return el;
   };
 
@@ -1742,6 +1876,7 @@ function ensureMultimeterUiScaffold() {
 
   if (commandBarWrap) {
     commandBarWrap.style.gridColumn = "7";
+    commandBarWrap.style.gridRow = "1";
     commandBarWrap.style.justifySelf = "center";
     commandBarWrap.dataset.label = "COMANDOS";
   }
@@ -2687,6 +2822,16 @@ function renderMonthlyChart() {
     return v >= exp ? "#7FD055" : "rgba(127,208,85,.70)";
   });
 
+  const isMobile = window.innerWidth <= 768;
+  const barThickExp     = isMobile ? 6  : 14;
+  const barThickReal    = isMobile ? 4  : 9;
+  const maxBarThickExp  = isMobile ? 10 : 20;
+  const maxBarThickReal = isMobile ? 8  : 16;
+  const catPerc         = isMobile ? 0.88 : 0.78;
+  const yTicksLimit     = isMobile ? 5 : 6;
+  const xTicksLimit     = isMobile ? 8 : 6;
+  const tickFontSize    = isMobile ? 10 : 12;
+
   monthlyChartInstance = new Chart(ctx, {
     type: "bar",
     data: {
@@ -2700,9 +2845,9 @@ function renderMonthlyChart() {
           borderWidth: 1,
           borderRadius: { topLeft: 5, topRight: 5 },
           borderSkipped: "bottom",
-          barThickness: 14,
-          maxBarThickness: 20,
-          categoryPercentage: 0.78,
+          barThickness: barThickExp,
+          maxBarThickness: maxBarThickExp,
+          categoryPercentage: catPerc,
           barPercentage: 0.92,
           order: 0,
           hoverBackgroundColor: "rgba(190,200,210,.46)"
@@ -2715,9 +2860,9 @@ function renderMonthlyChart() {
           borderWidth: 1,
           borderRadius: { topLeft: 4, topRight: 4 },
           borderSkipped: "bottom",
-          barThickness: 9,
-          maxBarThickness: 16,
-          categoryPercentage: 0.78,
+          barThickness: barThickReal,
+          maxBarThickness: maxBarThickReal,
+          categoryPercentage: catPerc,
           barPercentage: 0.70,
           order: 1
         }
@@ -2763,11 +2908,12 @@ function renderMonthlyChart() {
           offset: true,
           ticks: {
             color: "#9adbb8",
-            maxTicksLimit: 6,
+            maxTicksLimit: xTicksLimit,
             autoSkip: true,
             maxRotation: 0,
             minRotation: 0,
-            padding: 8
+            padding: 8,
+            font: { size: tickFontSize }
           },
           grid: { display: false }
         },
@@ -2777,8 +2923,9 @@ function renderMonthlyChart() {
           grace: "12%",
           ticks: {
             color: "#9adbb8",
-            maxTicksLimit: 6,
+            maxTicksLimit: yTicksLimit,
             padding: 8,
+            font: { size: tickFontSize },
             callback: (v) => formatNumberPtBR(v)
           },
           grid: {
@@ -3432,6 +3579,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   document.body.classList.add("plant-enter");
   setTimeout(() => document.body.classList.remove("plant-enter"), 500);
   setupInverterToggles();
+  setupWeatherExpand();
   wireDailyChartZoomControlsOnce();
   initTrackersPanel();
   setupDeviceNav();
