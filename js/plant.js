@@ -571,6 +571,116 @@ function ensureDeviceCommandModals() {
   document.body.appendChild(wrap);
 }
 
+function ensureCommandConsoleModal() {
+  if (document.getElementById("cmdConsoleOverlay")) return;
+  const el = document.createElement("div");
+  el.innerHTML = `
+    <div id="cmdConsoleOverlay" class="cmd-console-overlay hidden" role="dialog" aria-modal="true" aria-label="Console de Comandos">
+      <div class="cmd-console">
+        <div class="cmd-console__header">
+          <div class="cmd-console__title-group">
+            <div class="cmd-console__icon"><i class="fa-solid fa-terminal"></i></div>
+            <div>
+              <div class="cmd-console__label">Console de Comandos</div>
+              <div class="cmd-console__device-name" id="cmdConsoleDeviceName">—</div>
+            </div>
+          </div>
+          <button class="cmd-console__close" id="cmdConsoleClose" aria-label="Fechar console">
+            <i class="fa-solid fa-xmark"></i>
+          </button>
+        </div>
+        <div class="cmd-console__state-row">
+          <span class="cmd-console__state-dot is-unknown" id="cmdConsoleStateDot"></span>
+          <span class="cmd-console__state-text" id="cmdConsoleStateText">Estado desconhecido</span>
+        </div>
+        <div class="cmd-console__cmds">
+          <button class="cmd-console__cmd cmd-console__cmd--on" id="cmdConsoleBtnOn">
+            <i class="fa-solid fa-power-off"></i>
+            <span class="cmd-console__cmd-label">ON</span>
+            <span class="cmd-console__cmd-desc">Ligar equipamento</span>
+          </button>
+          <button class="cmd-console__cmd cmd-console__cmd--off" id="cmdConsoleBtnOff">
+            <i class="fa-solid fa-stop"></i>
+            <span class="cmd-console__cmd-label">OFF</span>
+            <span class="cmd-console__cmd-desc">Desligar equipamento</span>
+          </button>
+          <button class="cmd-console__cmd cmd-console__cmd--reset" id="cmdConsoleBtnReset">
+            <i class="fa-solid fa-rotate"></i>
+            <span class="cmd-console__cmd-label">RESET</span>
+            <span class="cmd-console__cmd-desc">Reiniciar equipamento</span>
+          </button>
+        </div>
+        <div class="cmd-console__footer">
+          <i class="fa-solid fa-triangle-exclamation"></i>
+          Todos os comandos requerem autenticação antes de serem executados.
+        </div>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(el);
+
+  // Fecha ao clicar fora do card
+  document.getElementById("cmdConsoleOverlay").addEventListener("click", (e) => {
+    if (e.target === e.currentTarget) closeCommandConsole();
+  });
+  // Fecha com Escape
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") closeCommandConsole();
+  });
+  document.getElementById("cmdConsoleClose").addEventListener("click", closeCommandConsole);
+}
+
+function openCommandConsole({ deviceType, deviceId }) {
+  ensureCommandConsoleModal();
+  ensureDeviceCommandModals();
+
+  const overlay = document.getElementById("cmdConsoleOverlay");
+  const nameEl = document.getElementById("cmdConsoleDeviceName");
+  const dotEl = document.getElementById("cmdConsoleStateDot");
+  const textEl = document.getElementById("cmdConsoleStateText");
+  const btnOn = document.getElementById("cmdConsoleBtnOn");
+  const btnOff = document.getElementById("cmdConsoleBtnOff");
+  const btnReset = document.getElementById("cmdConsoleBtnReset");
+  if (!overlay) return;
+
+  // Preenche nome do dispositivo
+  const typeLabel = String(deviceType || "").toUpperCase();
+  nameEl.textContent = `${typeLabel} — ID ${deviceId}`;
+
+  // Estado atual
+  const state = getDevicePersistentState(deviceType, deviceId, "off");
+  dotEl.className = "cmd-console__state-dot " + (state === "on" ? "is-on" : "is-off");
+  textEl.textContent = state === "on" ? "Estado atual: LIGADO" : "Estado atual: DESLIGADO";
+
+  // Desconecta handlers anteriores clonando os botões
+  [btnOn, btnOff, btnReset].forEach(btn => {
+    const clone = btn.cloneNode(true);
+    btn.parentNode.replaceChild(clone, btn);
+  });
+
+  const freshOn = document.getElementById("cmdConsoleBtnOn");
+  const freshOff = document.getElementById("cmdConsoleBtnOff");
+  const freshReset = document.getElementById("cmdConsoleBtnReset");
+
+  const dispatch = (action) => {
+    closeCommandConsole();
+    openCommandAuthFlow({ deviceType, deviceId, action });
+  };
+
+  freshOn.addEventListener("click", () => dispatch("on"));
+  freshOff.addEventListener("click", () => dispatch("off"));
+  freshReset.addEventListener("click", () => dispatch("reset"));
+
+  overlay.classList.remove("hidden");
+  document.body.style.overflow = "hidden";
+}
+
+function closeCommandConsole() {
+  const overlay = document.getElementById("cmdConsoleOverlay");
+  if (overlay) overlay.classList.add("hidden");
+  document.body.style.overflow = "";
+}
+
 function openCommandAuthFlow({ deviceType, deviceId, action }) {
   ensureDeviceCommandModals();
   const auth = document.getElementById("deviceCommandAuthModal");
@@ -647,16 +757,11 @@ function wireDeviceCommandButtons(rootEl) {
     btn.addEventListener("click", (e) => {
       e.preventDefault();
       e.stopPropagation();
-      const key = btn.dataset.deviceKey || "";
-      if (!key) return;
-      const control = document.querySelector(`.device-command-control[data-device-key="${key}"]`);
-      if (!control) return;
-      const shouldOpen = DEVICE_COMMAND_MENU_OPEN_KEY !== key;
       closeAllDeviceCommandMenus();
-      if (shouldOpen) {
-        control.classList.add("is-open");
-        DEVICE_COMMAND_MENU_OPEN_KEY = key;
-      }
+      openCommandConsole({
+        deviceType: btn.dataset.deviceType || "",
+        deviceId: btn.dataset.deviceId || "",
+      });
     });
   });
 
