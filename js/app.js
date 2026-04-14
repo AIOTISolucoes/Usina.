@@ -1770,6 +1770,15 @@ function updateSummaryUI(plants) {
   if (elPsfActive) elPsfActive.textContent = totalActivePower.toFixed(1) + " kW";
   if (elPsfRated) elPsfRated.textContent = totalRatedPower.toFixed(1) + " kWp";
   if (elPsfPercent) elPsfPercent.textContent = loadPct.toFixed(1) + "%";
+
+  // Update SVG progress ring
+  const ringFill = document.getElementById("psfRingFill");
+  if (ringFill) {
+    const circumference = 2 * Math.PI * 30;
+    const pct = Math.min(100, Math.max(0, loadPct));
+    const filled = (pct / 100) * circumference;
+    ringFill.setAttribute("stroke-dasharray", filled.toFixed(1) + " " + circumference.toFixed(1));
+  }
 }
 
 function renderPortfolioTable(plants) {
@@ -1794,6 +1803,14 @@ function renderPortfolioTable(plants) {
     tr.setAttribute("role", "link");
     tr.setAttribute("tabindex", "0");
 
+    // Linha cinza se planta sem dados ou status 28
+    const _pStatus  = Number(plant.plant_status);
+    const _pPower   = Number(plant.active_power_kw ?? 0);
+    const _pEnergy  = Number(plant.energy_today_kwh ?? plant.daily_energy_kwh ?? 0);
+    const _pIrr     = Number(plant.irradiance_wm2 ?? 0);
+    const _pOffline = _pStatus === 28 || (!(_pPower > 0) && !(_pEnergy > 0) && !(_pIrr > 0));
+    if (_pOffline) tr.classList.add("portfolio-row--offline");
+
     const alarmSeverity =
       normalizeAlarmSeverity(lastAlarmSeverityByPlant.get(plantId)) ||
       normalizeAlarmSeverity(lastAlarmSeverityByPlant.get(plantName)) ||
@@ -1814,7 +1831,7 @@ function renderPortfolioTable(plants) {
         </button>
       </td>
       <td class="metric-neutral">${Number(plant.rated_power_kw ?? 0).toFixed(1)} kWp</td>
-      <td class="metric-active">${Number(plant.active_power_kw ?? 0).toFixed(1)} kW</td>
+      <td class="metric-active${Number(plant.active_power_kw ?? 0) === 0 ? ' metric-zero' : ''}">${Number(plant.active_power_kw ?? 0).toFixed(1)} kW</td>
       <td class="metric-active">${Number(plant.energy_today_kwh ?? 0).toFixed(1)} kWh</td>
       <td>${plant.irradiance_wm2 != null ? Number(plant.irradiance_wm2).toFixed(0) + " W/m²" : "—"}</td>
       <td>${plant.inverter_availability_pct != null ? Number(plant.inverter_availability_pct).toFixed(1) + "%" : "—"}</td>
@@ -3056,6 +3073,19 @@ const views = {
   datastudio: document.getElementById("dataStudioView")
 };
 
+function syncTopSummaryLayout() {
+  const topSummary = document.getElementById("topSummary");
+  if (!topSummary) return;
+
+  const isOverviewVisible = !!views.overview && !views.overview.classList.contains("hidden");
+  topSummary.classList.toggle("hidden", !isOverviewVisible);
+
+  requestAnimationFrame(() => {
+    const summaryHeight = isOverviewVisible ? Math.ceil(topSummary.getBoundingClientRect().height) : 0;
+    document.documentElement.style.setProperty("--top-summary-height", `${summaryHeight}px`);
+  });
+}
+
 function showView(viewName) {
   localStorage.setItem("currentView", viewName);
   Object.values(views).forEach(v => { if (v) v.classList.add("hidden"); });
@@ -3074,11 +3104,7 @@ function showView(viewName) {
   const activeBtn = document.getElementById(btnMap[viewName]);
   if (activeBtn) activeBtn.classList.add("active");
 
-  const topSummary = document.getElementById("topSummary");
-  if (topSummary) {
-    if (viewName === "overview") topSummary.classList.remove("hidden");
-    else topSummary.classList.add("hidden");
-  }
+  syncTopSummaryLayout();
 
   if (viewName === "events") {
     EVENTS_STATE.page = 1;
@@ -3176,6 +3202,20 @@ async function refreshDashboard() {
 
   lastAlarmSeverityByPlant = buildPlantAlarmSeverityMap(alarms);
 
+  // Ícone de alarme na sidebar pisca vermelho se houver qualquer alarme ativo
+  const alarmBtn = document.getElementById("btnAlarms");
+  if (alarmBtn) {
+    if (lastAlarmSeverityByPlant.size > 0) {
+      alarmBtn.classList.add("sidebar-btn--alarm-active");
+    } else {
+      alarmBtn.classList.remove("sidebar-btn--alarm-active");
+    }
+  }
+
+  if (typeof _portfolioCurrentView !== "undefined" && _portfolioCurrentView === "card") {
+    updatePortfolioCardAlarms();
+  }
+
   try {
     const summary = await fetchPlantsSummary();
     refreshTopChipsGlobalFromSummary(summary);
@@ -3187,14 +3227,38 @@ async function refreshDashboard() {
   updateSummaryUI(lastValidPlants);
 
   renderPortfolioTable(lastValidPlants);
+
+  if (typeof _portfolioCurrentView !== "undefined" && _portfolioCurrentView === "card") {
+    const _cardGrid = document.getElementById("portfolioCardView");
+    if (!_cardGrid || _cardGrid.children.length === 0) {
+      renderPortfolioCards(typeof portfolioFilterPlants === "function"
+        ? portfolioFilterPlants(lastValidPlants) : lastValidPlants);
+    } else {
+      updatePortfolioCardAlarms();
+    }
+  }
+
   await refreshVisibleViewData();
+  syncTopSummaryLayout();
 }
 
 document.addEventListener("DOMContentLoaded", async () => {
   wireDataStudioOnce();
 
+  // Preenche nome do usuário logado
+  try {
+    const _u = JSON.parse(localStorage.getItem("user") || "{}");
+    const _name = _u.username || _u.name || _u.email || "Operador";
+    const _initials = _name.split(/[\s._@]+/).slice(0,2).map(p => p[0]?.toUpperCase() || "").join("") || "?";
+    const _nameEl = document.getElementById("userDisplayName");
+    const _avatarEl = document.getElementById("userAvatar");
+    if (_nameEl) _nameEl.textContent = _name;
+    if (_avatarEl) _avatarEl.textContent = _initials;
+  } catch(_e) {}
+
   const savedView = localStorage.getItem("currentView") || "overview";
   showView(savedView);
+  syncTopSummaryLayout();
 
   await refreshDashboard();
   setInterval(refreshDashboard, DASHBOARD_REFRESH_INTERVAL_MS);
@@ -3209,6 +3273,360 @@ document.addEventListener("DOMContentLoaded", async () => {
     await refreshDashboard();
   });
 
+  window.addEventListener("resize", () => {
+    syncTopSummaryLayout();
+  });
+
   document.querySelector(".logout-icon")?.addEventListener("click", logout);
   document.querySelector(".sidebar-logout")?.addEventListener("click", logout);
+});
+
+// =============================================================================
+// PORTFOLIO VIEW TOGGLE + SEARCH + CARD VIEW
+// =============================================================================
+
+let _portfolioCurrentView = "card";
+let _portfolioMiniCharts = new Map();
+
+function portfolioSetView(view) {
+  _portfolioCurrentView = view;
+  localStorage.setItem("portfolioView", view);
+  const listView = document.getElementById("portfolioListView");
+  const cardView = document.getElementById("portfolioCardView");
+  const btnList = document.getElementById("btnViewList");
+  const btnCard = document.getElementById("btnViewCard");
+  if (listView) listView.classList.toggle("hidden", view !== "list");
+  if (cardView) cardView.classList.toggle("hidden", view !== "card");
+  if (btnList) btnList.classList.toggle("active", view === "list");
+  if (btnCard) btnCard.classList.toggle("active", view === "card");
+  if (view === "card" && lastValidPlants.length > 0) {
+    renderPortfolioCards(lastValidPlants);
+  }
+}
+
+function portfolioGetSearchFilter() {
+  const input = document.getElementById("portfolioSearchInput");
+  return (input?.value || "").trim().toLowerCase();
+}
+
+function portfolioFilterPlants(plants) {
+  const q = portfolioGetSearchFilter();
+  if (!q) return plants;
+  return plants.filter(p => {
+    const name = (p.power_plant_name || p.plant_name || p.name || "").toLowerCase();
+    return name.includes(q);
+  });
+}
+
+function wirePortfolioControls() {
+  const btnList = document.getElementById("btnViewList");
+  const btnCard = document.getElementById("btnViewCard");
+  const searchInput = document.getElementById("portfolioSearchInput");
+
+  btnList?.addEventListener("click", () => portfolioSetView("list"));
+  btnCard?.addEventListener("click", () => portfolioSetView("card"));
+
+  searchInput?.addEventListener("input", () => {
+    const filtered = portfolioFilterPlants(lastValidPlants);
+    if (_portfolioCurrentView === "list") {
+      renderPortfolioTable(filtered);
+    } else {
+      renderPortfolioCards(filtered);
+    }
+  });
+
+  portfolioSetView(_portfolioCurrentView);
+}
+
+function updatePortfolioCardAlarms() {
+  const grid = document.getElementById("portfolioCardView");
+  if (!grid) return;
+  grid.querySelectorAll(".plant-card[data-plant-id]").forEach(card => {
+    const pid = card.dataset.plantId;
+    const pname = card.dataset.plantName || "";
+    const sev = normalizeAlarmSeverity(lastAlarmSeverityByPlant.get(pid))
+      || normalizeAlarmSeverity(lastAlarmSeverityByPlant.get(pname))
+      || normalizeAlarmSeverity(lastAlarmSeverityByPlant.get(Number(pid)))
+      || null;
+    const isOff = card.classList.contains("plant-card--offline");
+    card.className = `plant-card${isOff ? " plant-card--offline" : ""}${sev ? ` alarm-${sev}` : ""}`;
+    const icon = card.querySelector(".plant-card__icon");
+    if (icon) icon.className = sev ? `plant-card__icon alarm-${sev}` : "plant-card__icon";
+  });
+}
+
+function renderPortfolioCards(plants) {
+  const grid = document.getElementById("portfolioCardView");
+  if (!grid) return;
+
+  const validPlants = Array.isArray(plants) ? plants : [];
+  grid.innerHTML = "";
+
+  _portfolioMiniCharts.forEach(chart => { try { chart.destroy(); } catch(e) {} });
+  _portfolioMiniCharts.clear();
+
+  validPlants.forEach(plant => {
+    const plantId = plant.power_plant_id ?? plant.plant_id ?? plant.id;
+    const plantName = plant.power_plant_name ?? plant.plant_name ?? plant.name ?? "—";
+
+    const alarmSeverity = normalizeAlarmSeverity(lastAlarmSeverityByPlant.get(plantId))
+      || normalizeAlarmSeverity(lastAlarmSeverityByPlant.get(plantName)) || null;
+
+    const status = plant.plant_status_color || plant.plant_status || "";
+    const activePower = Number(plant.active_power_kw ?? 0);
+    const ratedPower = Number(plant.rated_power_kw ?? plant.rated_power_kwp ?? 0);
+    const energyToday = Number(plant.energy_today_kwh ?? plant.daily_energy_kwh ?? 0);
+    const pr = plant.pr_daily_pct != null ? Number(plant.pr_daily_pct).toFixed(1) + "%" : "—";
+    const irr = plant.irradiance_wm2 != null ? Number(plant.irradiance_wm2).toFixed(0) + " W/m²" : "—";
+    const invAvail = plant.inverter_availability_pct != null ? Number(plant.inverter_availability_pct).toFixed(1) + "%" : "—";
+
+    // Estado do card: offline (cinza), generating (verde), standby
+    const statusNum = Number(plant.plant_status);
+    const hasAnyData = activePower > 0 || energyToday > 0 || Number(plant.irradiance_wm2 ?? 0) > 0;
+    const isOffline  = statusNum === 28 || !hasAnyData;
+    const isGenerating = activePower > 0;
+
+    let statusDotClass = "plant-card__status-dot";
+    let statusText;
+    if (isOffline)       { statusDotClass += " offline";    statusText = "Sem dados"; }
+    else if (isGenerating){ statusDotClass += " generating"; statusText = "Em geração"; }
+    else                  { statusDotClass += " standby";   statusText = "Aguardando"; }
+
+    const offlineClass = isOffline ? " plant-card--offline" : "";
+    const alarmSuffix  = alarmSeverity ? ` alarm-${alarmSeverity}` : "";
+    const iconClass    = alarmSeverity ? `plant-card__icon alarm-${alarmSeverity}` : "plant-card__icon";
+    const cardClass    = `plant-card${offlineClass}${alarmSuffix}`;
+    const canvasId = "mini-chart-" + plantId;
+
+    const card = document.createElement("div");
+    card.className = cardClass;
+    card.setAttribute("role", "link");
+    card.setAttribute("tabindex", "0");
+    card.dataset.plantId = plantId;
+    card.dataset.plantName = plantName;
+
+    card.innerHTML = `
+      <div class="plant-card__top">
+        <div class="${iconClass}"><i class="fa-solid fa-seedling"></i></div>
+        <div class="plant-card__name">${plantName}</div>
+      </div>
+      <div class="plant-card__stats">
+        <div class="plant-card__stat">
+          <div class="plant-card__stat-label"><i class="fa-solid fa-bolt"></i> Active Power</div>
+          <div class="plant-card__stat-value active">${activePower.toFixed(1)} kW</div>
+        </div>
+        <div class="plant-card__stat">
+          <div class="plant-card__stat-label"><i class="fa-solid fa-layer-group"></i> Rated</div>
+          <div class="plant-card__stat-value muted">${ratedPower.toFixed(1)} kWp</div>
+        </div>
+        <div class="plant-card__stat">
+          <div class="plant-card__stat-label"><i class="fa-solid fa-calendar-day"></i> Hoje</div>
+          <div class="plant-card__stat-value">${energyToday.toFixed(1)} kWh</div>
+        </div>
+        <div class="plant-card__stat">
+          <div class="plant-card__stat-label"><i class="fa-solid fa-gauge-high"></i> PR Diário</div>
+          <div class="plant-card__stat-value">${pr}</div>
+        </div>
+        <div class="plant-card__stat">
+          <div class="plant-card__stat-label"><i class="fa-solid fa-sun"></i> Irradiância</div>
+          <div class="plant-card__stat-value">${irr}</div>
+        </div>
+        <div class="plant-card__stat">
+          <div class="plant-card__stat-label"><i class="fa-solid fa-microchip"></i> Inv. Disp.</div>
+          <div class="plant-card__stat-value">${invAvail}</div>
+        </div>
+      </div>
+      <div class="plant-card__chart-area">
+        <div class="plant-card__chart-wrap">
+          <canvas id="${canvasId}"></canvas>
+        </div>
+        <div class="plant-card__chart-legend">
+          <span class="pcc-leg pcc-leg--power">Active Power</span>
+          <span class="pcc-leg pcc-leg--irr">Irrad. POA</span>
+          <span class="pcc-leg pcc-leg--pr">PR</span>
+        </div>
+      </div>
+      <div class="plant-card__status">
+        <div class="${statusDotClass}"></div>
+        <span class="plant-card__status-text">${statusText}</span>
+      </div>
+    `;
+
+    const openPlant = () => {
+      if (plantId != null) window.location.href = `plant.html?plant_id=${encodeURIComponent(plantId)}`;
+    };
+    card.addEventListener("click", openPlant);
+    card.addEventListener("keydown", e => {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openPlant(); }
+    });
+
+    grid.appendChild(card);
+
+    requestAnimationFrame(() => {
+      const canvas = document.getElementById(canvasId);
+      if (!canvas) return;
+      fetchAndRenderMiniChart(canvas, plantId);
+    });
+  });
+}
+
+async function fetchAndRenderMiniChart(canvas, plantId) {
+  try {
+    const res = await apiFetch(`/plants/${plantId}/energy/daily`);
+    if (!res.ok) return;
+    const raw = await res.json();
+    const body = (raw && raw.body)
+      ? (typeof raw.body === "string" ? JSON.parse(raw.body) : raw.body)
+      : raw;
+
+    const labels   = body?.labels || [];
+    const powerRaw = body?.activePower || body?.active_power_kw || body?.power_kw || [];
+    const irrRaw   = body?.irradiance  || body?.irradiance_wm2  || [];
+    const prRaw    = body?.pr          || body?.pr_pct          || body?.performance_ratio || [];
+
+    if (!labels.length || (!powerRaw.length && !irrRaw.length)) return;
+
+    // Escalas reais para cada série
+    const toNums = arr => arr.map(v => (v == null ? null : Number(v)));
+    const seriesMax = arr => Math.max(...arr.filter(v => v != null && isFinite(v)), 0.001);
+    const fmtTick = (v, unit) => {
+      if (v === 0) return "0";
+      if (unit === "kW"  && v >= 1000) return (v/1000).toFixed(0) + "M";
+      if (unit === "W/m²"&& v >= 1000) return (v/1000).toFixed(1) + "k";
+      return v % 1 === 0 ? v.toFixed(0) : v.toFixed(1);
+    };
+
+    const pNums  = toNums(powerRaw);
+    const iNums  = toNums(irrRaw);
+    const prNums = toNums(prRaw);
+    const maxP   = powerRaw.length ? seriesMax(pNums)  : 0;
+    const maxI   = irrRaw.length   ? seriesMax(iNums)  : 0;
+
+    const datasets = [];
+
+    if (powerRaw.length) {
+      datasets.push({
+        label: "Active Power", _raw: powerRaw, _unit: "kW",
+        data: pNums, yAxisID: "y",
+        borderColor: "rgba(127,208,85,0.9)",
+        backgroundColor: "rgba(127,208,85,0.07)",
+        borderWidth: 1.5, pointRadius: 0, pointHoverRadius: 4,
+        pointHoverBackgroundColor: "#7fd055",
+        tension: 0.4, fill: true,
+      });
+    }
+
+    if (irrRaw.length) {
+      datasets.push({
+        label: "Irrad. POA", _raw: irrRaw, _unit: "W/m²",
+        data: iNums, yAxisID: "y1",
+        borderColor: "rgba(255,200,50,0.85)",
+        backgroundColor: "transparent",
+        borderWidth: 1.5, pointRadius: 0, pointHoverRadius: 4,
+        pointHoverBackgroundColor: "#ffc832",
+        tension: 0.4, fill: false,
+      });
+    }
+
+    if (prRaw.length) {
+      datasets.push({
+        label: "PR", _raw: prRaw, _unit: "%",
+        data: prNums, yAxisID: "y2",
+        borderColor: "rgba(80,200,255,0.75)",
+        backgroundColor: "transparent",
+        borderWidth: 1.5, borderDash: [4, 3],
+        pointRadius: 0, pointHoverRadius: 4,
+        pointHoverBackgroundColor: "#50c8ff",
+        tension: 0.4, fill: false,
+      });
+    }
+
+    if (!datasets.length) return;
+
+    const tickStyle = (color) => ({
+      display: true,
+      maxTicksLimit: 3,
+      color,
+      font: { family: "'JetBrains Mono', monospace", size: 8 },
+      padding: 2,
+    });
+
+    const ctx = canvas.getContext("2d");
+    const chart = new Chart(ctx, {
+      type: "line",
+      data: { labels, datasets },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: false,
+        interaction: { mode: "index", intersect: false },
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            enabled: true,
+            backgroundColor: "rgba(4,12,8,0.94)",
+            borderColor: "rgba(57,229,140,0.20)",
+            borderWidth: 1,
+            padding: { top: 7, bottom: 7, left: 10, right: 10 },
+            titleColor: "rgba(154,219,184,0.55)",
+            titleFont: { family: "'JetBrains Mono', monospace", size: 10 },
+            bodyColor: "#ddeee4",
+            bodyFont: { family: "'JetBrains Mono', monospace", size: 11 },
+            callbacks: {
+              title: items => items[0]?.label || "",
+              label: item => {
+                const raw = item.dataset._raw?.[item.dataIndex];
+                if (raw == null) return null;
+                return ` ${item.dataset.label}: ${Number(raw).toFixed(1)} ${item.dataset._unit}`;
+              },
+              labelColor: item => ({
+                borderColor: item.dataset.borderColor,
+                backgroundColor: item.dataset.borderColor,
+                borderRadius: 2,
+              }),
+            },
+          },
+        },
+        scales: {
+          x: {
+            display: true,
+            grid: { color: "rgba(57,229,140,0.08)", drawTicks: false },
+            ticks: { display: false },
+            border: { display: false },
+          },
+          y: {
+            type: "linear", position: "left",
+            display: powerRaw.length > 0,
+            min: 0, max: maxP * 1.12,
+            grid: { color: "rgba(57,229,140,0.08)", drawTicks: false },
+            ticks: { ...tickStyle("rgba(127,208,85,0.55)"), callback: v => fmtTick(v, "kW") },
+            border: { display: false },
+          },
+          y1: {
+            type: "linear", position: "right",
+            display: irrRaw.length > 0,
+            min: 0, max: maxI * 1.12,
+            grid: { drawOnChartArea: false, drawTicks: false },
+            ticks: { ...tickStyle("rgba(255,200,50,0.55)"), callback: v => fmtTick(v, "W/m²") },
+            border: { display: false },
+          },
+          y2: {
+            type: "linear", position: "right",
+            display: false,
+            min: 0, max: 100,
+            grid: { drawOnChartArea: false },
+          },
+        },
+        layout: { padding: { top: 4, bottom: 2, left: 0, right: 0 } },
+      },
+    });
+
+    _portfolioMiniCharts.set(plantId, chart);
+  } catch(e) {
+    console.warn("[mini-chart]", plantId, e?.message || e);
+  }
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+  setTimeout(wirePortfolioControls, 100);
 });
