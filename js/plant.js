@@ -589,10 +589,12 @@ function ensureCommandConsoleModal() {
             <i class="fa-solid fa-xmark"></i>
           </button>
         </div>
+
         <div class="cmd-console__state-row">
           <span class="cmd-console__state-dot is-unknown" id="cmdConsoleStateDot"></span>
           <span class="cmd-console__state-text" id="cmdConsoleStateText">Estado desconhecido</span>
         </div>
+
         <div class="cmd-console__cmds">
           <button class="cmd-console__cmd cmd-console__cmd--on" id="cmdConsoleBtnOn">
             <i class="fa-solid fa-power-off"></i>
@@ -610,8 +612,52 @@ function ensureCommandConsoleModal() {
             <span class="cmd-console__cmd-desc">Reiniciar equipamento</span>
           </button>
         </div>
+
+        <!-- Setar potência -->
+        <div class="cmd-console__power-section">
+          <div class="cmd-console__power-label">
+            <i class="fa-solid fa-sliders"></i>
+            Setar Potência Ativa
+          </div>
+          <div class="cmd-console__power-row">
+            <input
+              id="cmdConsolePowerInput"
+              class="cmd-console__power-input"
+              type="number"
+              min="0"
+              step="0.1"
+              placeholder="kW"
+              aria-label="Potência em kW"
+            />
+            <span class="cmd-console__power-unit">kW</span>
+            <button class="cmd-console__power-btn" id="cmdConsoleBtnSetPower">
+              <i class="fa-solid fa-paper-plane"></i>
+              Setar
+            </button>
+          </div>
+        </div>
+
+        <!-- Feedback de execução -->
+        <div class="cmd-console__feedback hidden" id="cmdConsoleFeedback">
+          <div class="cmd-console__feedback-inner">
+            <span class="cmd-console__feedback-icon" id="cmdConsoleFeedbackIcon"></span>
+            <span class="cmd-console__feedback-text" id="cmdConsoleFeedbackText"></span>
+          </div>
+        </div>
+
+        <!-- Alarmes do dispositivo -->
+        <div class="cmd-console__alarms-section">
+          <div class="cmd-console__alarms-title">
+            <i class="fa-solid fa-triangle-exclamation"></i>
+            Alarmes do dispositivo
+          </div>
+          <div id="cmdConsoleAlarmList" class="cmd-console__alarm-list">
+            <div class="cmd-console__alarm-empty">Nenhum alarme ativo</div>
+          </div>
+        </div>
+
         <div class="cmd-console__footer">
-          <i class="fa-solid fa-triangle-exclamation"></i>
+          <i class="fa-solid fa-lock"></i>
           Todos os comandos requerem autenticação antes de serem executados.
         </div>
       </div>
@@ -619,11 +665,9 @@ function ensureCommandConsoleModal() {
   `;
   document.body.appendChild(el);
 
-  // Fecha ao clicar fora do card
   document.getElementById("cmdConsoleOverlay").addEventListener("click", (e) => {
     if (e.target === e.currentTarget) closeCommandConsole();
   });
-  // Fecha com Escape
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape") closeCommandConsole();
   });
@@ -634,42 +678,81 @@ function openCommandConsole({ deviceType, deviceId }) {
   ensureCommandConsoleModal();
   ensureDeviceCommandModals();
 
-  const overlay = document.getElementById("cmdConsoleOverlay");
-  const nameEl = document.getElementById("cmdConsoleDeviceName");
-  const dotEl = document.getElementById("cmdConsoleStateDot");
-  const textEl = document.getElementById("cmdConsoleStateText");
-  const btnOn = document.getElementById("cmdConsoleBtnOn");
-  const btnOff = document.getElementById("cmdConsoleBtnOff");
-  const btnReset = document.getElementById("cmdConsoleBtnReset");
+  const overlay   = document.getElementById("cmdConsoleOverlay");
+  const nameEl    = document.getElementById("cmdConsoleDeviceName");
+  const dotEl     = document.getElementById("cmdConsoleStateDot");
+  const textEl    = document.getElementById("cmdConsoleStateText");
+  const feedbackEl= document.getElementById("cmdConsoleFeedback");
+  const alarmList = document.getElementById("cmdConsoleAlarmList");
   if (!overlay) return;
 
-  // Preenche nome do dispositivo
   const typeLabel = String(deviceType || "").toUpperCase();
   nameEl.textContent = `${typeLabel} — ID ${deviceId}`;
 
-  // Estado atual
   const state = getDevicePersistentState(deviceType, deviceId, "off");
   dotEl.className = "cmd-console__state-dot " + (state === "on" ? "is-on" : "is-off");
-  textEl.textContent = state === "on" ? "Estado atual: LIGADO" : "Estado atual: DESLIGADO";
+  textEl.textContent = state === "on" ? "ESTADO ATUAL: LIGADO" : "ESTADO ATUAL: DESLIGADO";
 
-  // Desconecta handlers anteriores clonando os botões
-  [btnOn, btnOff, btnReset].forEach(btn => {
-    const clone = btn.cloneNode(true);
-    btn.parentNode.replaceChild(clone, btn);
+  // Limpa feedback anterior
+  if (feedbackEl) feedbackEl.classList.add("hidden");
+
+  // Alarmes filtrados para este dispositivo
+  if (alarmList) {
+    const deviceAlarms = Array.isArray(ACTIVE_ALARMS)
+      ? ACTIVE_ALARMS.filter(a => {
+          const aid = String(a?.device_id ?? a?.deviceId ?? "");
+          return aid && aid === String(deviceId);
+        })
+      : [];
+    if (deviceAlarms.length === 0) {
+      alarmList.innerHTML = `<div class="cmd-console__alarm-empty">Nenhum alarme ativo</div>`;
+    } else {
+      alarmList.innerHTML = deviceAlarms.map(a => {
+        const msg = a.event_name
+          || (a.event_code != null ? `Evento ${a.event_code}` : null)
+          || a.message || a.description || a.alarm_message
+          || "Alarme sem descrição";
+        const ts = a.started_at ?? a.timestamp ?? a.created_at ?? null;
+        const timeStr = ts
+          ? new Date(ts).toLocaleString("pt-BR", { day:"2-digit", month:"2-digit", hour:"2-digit", minute:"2-digit" })
+          : "—";
+        const devLabel = a.device_name ? ` · ${a.device_name}` : "";
+        return `
+        <div class="cmd-console__alarm-item" title="${msg}">
+          <span class="cmd-console__alarm-dot"></span>
+          <span class="cmd-console__alarm-msg">${msg}${devLabel}</span>
+          <span class="cmd-console__alarm-time">${timeStr}</span>
+        </div>`;
+      }).join("");
+    }
+  }
+
+  // Reclona botões para limpar handlers anteriores
+  ["cmdConsoleBtnOn", "cmdConsoleBtnOff", "cmdConsoleBtnReset", "cmdConsoleBtnSetPower"].forEach(id => {
+    const btn = document.getElementById(id);
+    if (btn) { const c = btn.cloneNode(true); btn.parentNode.replaceChild(c, btn); }
   });
 
-  const freshOn = document.getElementById("cmdConsoleBtnOn");
-  const freshOff = document.getElementById("cmdConsoleBtnOff");
-  const freshReset = document.getElementById("cmdConsoleBtnReset");
+  // Limpa input de potência
+  const pwrInput = document.getElementById("cmdConsolePowerInput");
+  if (pwrInput) pwrInput.value = "";
 
-  const dispatch = (action) => {
+  const dispatch = (action, value) => {
     closeCommandConsole();
-    openCommandAuthFlow({ deviceType, deviceId, action });
+    openCommandAuthFlow({ deviceType, deviceId, action, value });
   };
-
-  freshOn.addEventListener("click", () => dispatch("on"));
-  freshOff.addEventListener("click", () => dispatch("off"));
-  freshReset.addEventListener("click", () => dispatch("reset"));
+  document.getElementById("cmdConsoleBtnOn").addEventListener("click",    () => dispatch("on"));
+  document.getElementById("cmdConsoleBtnOff").addEventListener("click",   () => dispatch("off"));
+  document.getElementById("cmdConsoleBtnReset").addEventListener("click", () => dispatch("reset"));
+  document.getElementById("cmdConsoleBtnSetPower").addEventListener("click", () => {
+    const input = document.getElementById("cmdConsolePowerInput");
+    const val = input ? parseFloat(input.value) : NaN;
+    if (isNaN(val) || val < 0) {
+      if (input) input.focus();
+      return;
+    }
+    dispatch("set_power", val);
+  });
 
   overlay.classList.remove("hidden");
   document.body.style.overflow = "hidden";
@@ -681,71 +764,110 @@ function closeCommandConsole() {
   document.body.style.overflow = "";
 }
 
-function openCommandAuthFlow({ deviceType, deviceId, action }) {
+function openCommandAuthFlow({ deviceType, deviceId, action, value }) {
   ensureDeviceCommandModals();
-  const auth = document.getElementById("deviceCommandAuthModal");
-  const run = document.getElementById("deviceCommandRunModal");
-  const authLabel = document.getElementById("deviceCommandAuthLabel");
-  const cancelBtn = document.getElementById("deviceCommandCancelBtn");
+  const auth       = document.getElementById("deviceCommandAuthModal");
+  const authLabel  = document.getElementById("deviceCommandAuthLabel");
+  const cancelBtn  = document.getElementById("deviceCommandCancelBtn");
   const confirmBtn = document.getElementById("deviceCommandConfirmBtn");
-  const runTitle = document.getElementById("deviceCommandRunTitle");
-  const runSub = document.getElementById("deviceCommandRunSub");
-  const runResult = document.getElementById("deviceCommandRunResult");
-  const bar = document.getElementById("deviceCommandProgressBar");
-  const pct = document.getElementById("deviceCommandProgressPct");
-  if (!auth || !run || !confirmBtn || !cancelBtn || !bar || !pct || !runSub || !runTitle || !runResult) return;
+  const userInput  = document.getElementById("deviceCommandUser");
+  const passInput  = document.getElementById("deviceCommandPass");
+  if (!auth || !confirmBtn || !cancelBtn || !userInput || !passInput) return;
 
-  authLabel.textContent = `${deviceType} ${deviceId} • ação ${action.toUpperCase()}`;
+  // Limpa campos e mostra modal de autenticação
+  userInput.value = "";
+  passInput.value = "";
+  const actionLabel = action === "set_power"
+    ? `SET POWER → ${value} kW`
+    : action.toUpperCase();
+  authLabel.textContent = `${String(deviceType).toUpperCase()} ${deviceId} • ${actionLabel}`;
   auth.classList.remove("hidden");
 
   const closeAuth = () => auth.classList.add("hidden");
   cancelBtn.onclick = closeAuth;
 
-  confirmBtn.onclick = () => {
-    closeAuth();
-    run.classList.remove("hidden");
-    runTitle.textContent = `${deviceType} ${deviceId}`;
-    runSub.textContent = action === "reset" ? "Resetando equipamento..." : `Executando ${action.toUpperCase()}...`;
-    runResult.textContent = "";
-    bar.style.width = "0%";
-    pct.textContent = "0%";
+  // Função auxiliar para exibir feedback no console (reabre se fechado)
+  function showConsoleFeedback({ success, message }) {
+    ensureCommandConsoleModal();
+    const overlay     = document.getElementById("cmdConsoleOverlay");
+    const feedbackEl  = document.getElementById("cmdConsoleFeedback");
+    const iconEl      = document.getElementById("cmdConsoleFeedbackIcon");
+    const textEl      = document.getElementById("cmdConsoleFeedbackText");
+    const nameEl      = document.getElementById("cmdConsoleDeviceName");
+    const dotEl       = document.getElementById("cmdConsoleStateDot");
+    const stateTextEl = document.getElementById("cmdConsoleStateText");
 
-    const previousState = getDevicePersistentState(deviceType, deviceId, "off");
-    const totalMs = 120000;
-    const startedAt = Date.now();
-    const tick = setInterval(() => {
-      const elapsed = Date.now() - startedAt;
-      const progress = Math.min(100, Math.round((elapsed / totalMs) * 100));
-      bar.style.width = `${progress}%`;
-      pct.textContent = `${progress}%`;
-      if (progress >= 100) {
-        clearInterval(tick);
-        const success = true;
-        if (!success) {
-          runResult.textContent = "Falha ao executar comando.";
-          setTimeout(() => run.classList.add("hidden"), 1800);
-          return;
-        }
+    if (overlay) { overlay.classList.remove("hidden"); document.body.style.overflow = "hidden"; }
+    if (nameEl) nameEl.textContent = `${String(deviceType).toUpperCase()} — ID ${deviceId}`;
 
-        if (action === "on" || action === "off") {
-          setDevicePersistentState(deviceType, deviceId, action);
-          applyDeviceVisualState(deviceType, deviceId, action);
-          runResult.textContent = `Comando ${action.toUpperCase()} executado com sucesso.`;
-        } else {
-          runResult.textContent = "Reset realizado com sucesso.";
-          document.querySelectorAll(`.device-command-control[data-device-key="${getDeviceKey(deviceType, deviceId)}"]`).forEach((el) => {
-            el.classList.add("is-reset-flash");
-          });
-          setTimeout(() => {
-            document.querySelectorAll(`.device-command-control[data-device-key="${getDeviceKey(deviceType, deviceId)}"]`).forEach((el) => {
-              el.classList.remove("is-reset-flash");
-            });
-            applyDeviceVisualState(deviceType, deviceId, previousState);
-          }, 1500);
-        }
-        setTimeout(() => run.classList.add("hidden"), 2200);
+    // Atualiza estado visual se bem-sucedido
+    if (success && (action === "on" || action === "off")) {
+      setDevicePersistentState(deviceType, deviceId, action);
+      applyDeviceVisualState(deviceType, deviceId, action);
+      if (dotEl) dotEl.className = "cmd-console__state-dot " + (action === "on" ? "is-on" : "is-off");
+      if (stateTextEl) stateTextEl.textContent = `ESTADO ATUAL: ${action === "on" ? "LIGADO" : "DESLIGADO"}`;
+    }
+
+    if (feedbackEl && iconEl && textEl) {
+      feedbackEl.classList.remove("hidden", "is-success", "is-error");
+      feedbackEl.classList.add(success ? "is-success" : "is-error");
+      iconEl.innerHTML = success
+        ? `<i class="fa-solid fa-circle-check"></i>`
+        : `<i class="fa-solid fa-circle-xmark"></i>`;
+      textEl.textContent = message;
+    }
+  }
+
+  confirmBtn.onclick = async () => {
+    const username = userInput.value.trim();
+    const password = passInput.value;
+
+    if (!username || !password) {
+      authLabel.textContent = "Preencha usuário e senha.";
+      return;
+    }
+
+    confirmBtn.disabled = true;
+    confirmBtn.textContent = "Aguarde...";
+
+    try {
+      if (!PLANT_ID) throw new Error("plant_id não encontrado na URL");
+
+      const headers = buildAuthHeaders(); // X-Customer-Id + X-Is-Superuser
+      const res = await fetch(`${API_BASE}/plants/${PLANT_ID}/devices/${deviceId}/command`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          action,
+          username,
+          password,
+          requested_by: username,
+          ...(action === "set_power" && value != null ? { value } : {}),
+        }),
+      });
+
+      let data = {};
+      try { data = await res.json(); } catch (_) {}
+
+      closeAuth();
+
+      if (res.ok && data.ok) {
+        const successMsg = action === "set_power"
+          ? `Potência setada para ${value} kW com sucesso.`
+          : `Comando ${action.toUpperCase()} enviado com sucesso.`;
+        showConsoleFeedback({ success: true, message: successMsg });
+      } else {
+        const errMsg = data.error
+          || (res.status === 401 ? "Credenciais inválidas." : `Falha ao executar comando. (${res.status})`)
+        showConsoleFeedback({ success: false, message: errMsg });
       }
-    }, 1000);
+    } catch (err) {
+      closeAuth();
+      showConsoleFeedback({ success: false, message: `Erro: ${err.message}` });
+    } finally {
+      confirmBtn.disabled = false;
+      confirmBtn.textContent = "Confirmar";
+    }
   };
 }
 
