@@ -17,6 +17,9 @@
   --accent-soft:  rgba(57, 229, 140, 0.07);
   --error:        #ff4f4f;
   --glow:         rgba(57, 229, 140, 0.16);
+  --topbar-height: 54px;
+  --top-summary-height: 86px;
+  --top-summary-stack-height: 140px;
 }
 
 /* =============================== 
@@ -173,12 +176,15 @@ html { scrollbar-gutter: stable; }
   /* ✅ scroll só vertical */
   overflow-y: auto;
   overflow-x: hidden;
-  scroll-padding-top: calc(54px + var(--top-summary-height, 86px));
+  scroll-padding-top: var(
+    --top-summary-stack-height,
+    calc(var(--topbar-height, 54px) + var(--top-summary-height, 86px))
+  );
 }
 
 /* topbar */
 .topbar {
-  height: 54px;
+  min-height: 54px;
   background: rgba(7, 16, 9, 0.97);
   border-bottom: 1px solid rgba(57, 229, 140, 0.12);
   box-shadow: 0 2px 16px rgba(0,0,0,0.35);
@@ -283,7 +289,7 @@ html { scrollbar-gutter: stable; }
   background: linear-gradient(180deg, rgba(3, 8, 5, 0.97) 0%, rgba(3, 8, 5, 0.70) 100%);
   border-bottom: 1px solid var(--border);
   position: sticky;
-  top: 54px;
+  top: var(--topbar-height, 54px);
   z-index: 250;
   backdrop-filter: blur(6px);
   overflow: hidden;
@@ -334,7 +340,7 @@ html { scrollbar-gutter: stable; }
 
 .psf-status-icons  { grid-area: status; }
 .psf-gauge         { grid-area: gauge; justify-self: center; }
-.psf-metrics-group { grid-area: metrics; justify-self: end; display: flex; align-items: center; gap: 4px; }
+.psf-metrics-group { grid-area: metrics; justify-self: end; display: flex; align-items: center; gap: 4px; min-width: 0; }
 
 .psf-sep {
   height: 40px;
@@ -369,6 +375,7 @@ html { scrollbar-gutter: stable; }
   letter-spacing: -0.01em;
   color: var(--text-main);
   line-height: 1;
+  white-space: nowrap;
 }
 
 .psf-active-value {
@@ -378,6 +385,7 @@ html { scrollbar-gutter: stable; }
   color: var(--accent-green);
   line-height: 1;
   text-shadow: 0 0 20px rgba(57, 229, 140, 0.35);
+  white-space: nowrap;
 }
 
 .psf-gauge {
@@ -1103,7 +1111,7 @@ tbody tr:hover td {
 /* 3) resumo fica grudado logo abaixo da topbar */
 .plant-summary-fixed{
   position: sticky;
-  top: 54px;              /* mesma altura da topbar */
+  top: var(--topbar-height, 54px);
   z-index: 250;
   background: linear-gradient(
     180deg,
@@ -1214,19 +1222,26 @@ tbody tr:hover td {
 
   .psf-inner{
     max-width: 100%;
-    grid-template-columns: auto auto 1fr;
+    grid-template-columns: auto minmax(0, 1fr);
     grid-template-areas:
-      "rated active gauge"
-      "status status status";
+      "gauge metrics"
+      "status status";
     row-gap: 12px;
     column-gap: 16px;
     padding: 12px 16px;
     min-height: unset;
   }
 
-  .psf-rated{ grid-area: rated; }
-  .psf-active{ grid-area: active; }
-  .psf-gauge{ grid-area: gauge; justify-self: end; }
+  .psf-gauge{
+    grid-area: gauge;
+    justify-self: start;
+    padding: 0;
+  }
+  .psf-metrics-group{
+    grid-area: metrics;
+    justify-self: end;
+    min-width: 0;
+  }
   .psf-status-icons{
     grid-area: status;
     justify-self: start;
@@ -1263,7 +1278,7 @@ tbody tr:hover td {
   }
 
   .topbar{
-    height: 56px;
+    min-height: 56px;
     padding: 0 12px;
   }
 
@@ -1272,19 +1287,28 @@ tbody tr:hover td {
   .topbar-right{ gap: 8px; }
   .user-pill{ padding: 4px 8px; }
 
-  .plant-summary-fixed{ top: 56px; }
-
   .psf-inner{
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: auto minmax(0, 1fr);
     grid-template-areas:
-      "rated active"
-      "gauge gauge"
+      "gauge metrics"
       "status status";
     row-gap: 10px;
     padding: 10px 12px;
   }
 
-  .psf-gauge{ justify-self: center; }
+  .psf-gauge{
+    grid-area: gauge;
+    justify-self: start;
+    padding: 0;
+  }
+
+  .psf-metrics-group{
+    grid-area: metrics;
+    justify-self: stretch;
+    width: 100%;
+    min-width: 0;
+    justify-content: flex-end;
+  }
 
   .psf-gauge-circle{
     width: 74px;
@@ -1380,68 +1404,151 @@ tbody tr:hover td {
     height: auto;
     min-height: 100dvh;
     padding-bottom: 74px; /* espaço da barra inferior */
-    scroll-padding-top: var(--top-summary-height, 0px);
   }
 
   .topbar{
-    height: auto;
-    min-height: 52px;
+    min-height: 56px;
     padding: 8px 10px;
     gap: 8px;
-    flex-wrap: wrap;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+    align-items: center;
   }
 
+  .topbar-left,
+  .topbar-center,
   .topbar-right{
-    width: 100%;
-    justify-content: center;
-    gap: 10px;
+    min-width: 0;
+  }
+
+  .topbar-left{ justify-content: flex-start; }
+  .topbar-center{ justify-content: center; }
+  .topbar-right{
+    justify-content: flex-end;
+    gap: 6px;
   }
 
   .status-pill,
-  .user-pill{ font-size: 10px; }
+  .user-pill{
+    max-width: 100%;
+    font-size: 9px;
+    padding: 4px 8px;
+  }
+
+  .status-pill span:last-child,
+  .user-pill span{
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .avatar{
+    width: 24px;
+    height: 24px;
+    font-size: 8px;
+  }
+
+  .plant-name{
+    font-size: clamp(15px, 4.2vw, 18px);
+    letter-spacing: 0.04em;
+  }
 
   .plant-summary-fixed{
-    position: sticky;
-    top: 0;
+    top: var(--topbar-height, 56px);
   }
 
   .psf-inner{
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
     grid-template-areas:
-      "rated"
-      "active"
-      "gauge"
-      "status";
+      "rated gauge active"
+      "status status status";
+    align-items: center;
     text-align: center;
-    padding: 10px;
-    justify-items: center;
+    padding: 12px 10px;
+    column-gap: 10px;
+    row-gap: 12px;
   }
 
-  .psf-rated,
-  .psf-active,
-  .psf-gauge,
   .psf-status-icons{
-    justify-self: center;
     width: 100%;
   }
 
   .psf-gauge{
-    display: grid;
-    place-items: center;
+    grid-area: gauge;
+    justify-self: center;
+    padding: 0;
+  }
+
+  .psf-ring-wrap{
+    width: 64px;
+    height: 64px;
+  }
+
+  .psf-ring-label{
+    font-size: 12px;
+  }
+
+  .psf-metrics-group{
+    display: contents;
+  }
+
+  .psf-rated,
+  .psf-active{
+    width: 100%;
+    text-align: center;
+  }
+
+  .psf-rated{
+    grid-area: rated;
+    align-items: flex-end;
+    padding: 0 10px 0 0;
+    border-right: 1px solid rgba(57,229,140,0.14);
+    border-bottom: 0;
+  }
+
+  .psf-active{
+    grid-area: active;
+    align-items: flex-start;
+    padding: 0 0 0 10px;
+  }
+
+  .psf-rated-label,
+  .psf-rated-value{
+    text-align: right;
+  }
+
+  .psf-active-label,
+  .psf-active-value{
+    text-align: left;
   }
 
   .psf-status-icons{
-    justify-content: center;
-    gap: 10px;
-    flex-wrap: wrap;
+    display: grid !important;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    justify-self: stretch;
+    align-items: stretch;
+    gap: 8px;
+    white-space: normal;
   }
 
   .psf-status{
-    height: auto;
-    padding: 0 4px;
-    font-size: 12px;
-    border: none;
-    box-shadow: none;
+    width: 100%;
+    min-width: 0;
+    min-height: 40px;
+    padding: 6px 4px;
+    font-size: 10px;
+    text-align: center;
+    border: 1px solid rgba(57,229,140,0.10);
+    border-radius: 10px;
+    background: rgba(57,229,140,0.03);
+  }
+
+  .psf-status > span{
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .content{ padding: 10px; }
@@ -1485,8 +1592,6 @@ tbody tr:hover td {
    MOBILE UX — centralização + tabelas completas (alarms/events)
 ================================ */
 @media (max-width: 640px){
-  .topbar,
-  .topbar-right,
   .content,
   .card-header,
   .alarms-tabs{
@@ -1494,7 +1599,6 @@ tbody tr:hover td {
     text-align: center;
   }
 
-  .plant-name,
   .plant-location,
   .card-title{
     text-align: center;
