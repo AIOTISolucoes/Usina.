@@ -1743,7 +1743,7 @@ async function loadEvents(page = 1, { silent = false } = {}) {
 // SUMMARY + PORTFOLIO
 // =============================================================================
 function updateSummaryUI(plants) {
-  const validPlants = Array.isArray(plants) ? plants : [];
+  const validPlants = sortPortfolioPlants(plants);
 
   let totalActivePower = 0;
   let totalRatedPower = 0;
@@ -1781,11 +1781,56 @@ function updateSummaryUI(plants) {
   }
 }
 
+function getPortfolioPlantVisualState(plant) {
+  const activePower = Number(plant?.active_power_kw ?? 0);
+  const energyToday = Number(plant?.energy_today_kwh ?? plant?.daily_energy_kwh ?? 0);
+  const irradiance = Number(plant?.irradiance_wm2 ?? 0);
+  const statusNum = Number(plant?.plant_status);
+  const hasAnyData = activePower > 0 || energyToday > 0 || irradiance > 0;
+
+  if (activePower > 0) {
+    return { priority: 0, kind: "generating", activePower, energyToday, irradiance, isOffline: false };
+  }
+
+  if (statusNum === 28 || !hasAnyData) {
+    return { priority: 2, kind: "offline", activePower, energyToday, irradiance, isOffline: true };
+  }
+
+  return { priority: 1, kind: "standby", activePower, energyToday, irradiance, isOffline: false };
+}
+
+function sortPortfolioPlants(plants) {
+  const validPlants = Array.isArray(plants) ? [...plants] : [];
+
+  validPlants.sort((a, b) => {
+    const stateA = getPortfolioPlantVisualState(a);
+    const stateB = getPortfolioPlantVisualState(b);
+
+    if (stateA.priority !== stateB.priority) {
+      return stateA.priority - stateB.priority;
+    }
+
+    if (stateA.kind === "generating" && stateB.kind === "generating" && stateA.activePower !== stateB.activePower) {
+      return stateB.activePower - stateA.activePower;
+    }
+
+    if (stateA.kind === "standby" && stateB.kind === "standby" && stateA.energyToday !== stateB.energyToday) {
+      return stateB.energyToday - stateA.energyToday;
+    }
+
+    const nameA = String(a?.power_plant_name ?? a?.plant_name ?? a?.name ?? "");
+    const nameB = String(b?.power_plant_name ?? b?.plant_name ?? b?.name ?? "");
+    return nameA.localeCompare(nameB, "pt-BR", { sensitivity: "base" });
+  });
+
+  return validPlants;
+}
+
 function renderPortfolioTable(plants) {
   const tbody = document.getElementById("portfolioTbody");
   if (!tbody) return;
 
-  const validPlants = Array.isArray(plants) ? plants : [];
+  const validPlants = sortPortfolioPlants(plants);
   if (validPlants.length === 0) return;
 
   tbody.innerHTML = "";
@@ -1804,12 +1849,8 @@ function renderPortfolioTable(plants) {
     tr.setAttribute("tabindex", "0");
 
     // Linha cinza se planta sem dados ou status 28
-    const _pStatus  = Number(plant.plant_status);
-    const _pPower   = Number(plant.active_power_kw ?? 0);
-    const _pEnergy  = Number(plant.energy_today_kwh ?? plant.daily_energy_kwh ?? 0);
-    const _pIrr     = Number(plant.irradiance_wm2 ?? 0);
-    const _pOffline = _pStatus === 28 || (!(_pPower > 0) && !(_pEnergy > 0) && !(_pIrr > 0));
-    if (_pOffline) tr.classList.add("portfolio-row--offline");
+    const plantState = getPortfolioPlantVisualState(plant);
+    if (plantState.isOffline) tr.classList.add("portfolio-row--offline");
 
     const alarmSeverity =
       normalizeAlarmSeverity(lastAlarmSeverityByPlant.get(plantId)) ||
@@ -3074,7 +3115,12 @@ const views = {
 };
 
 function syncTopSummaryLayout() {
+  const rootStyle = document.documentElement.style;
+  const topbar = document.querySelector(".topbar");
   const topSummary = document.getElementById("topSummary");
+  const topbarHeight = topbar ? Math.ceil(topbar.getBoundingClientRect().height) : 54;
+
+  rootStyle.setProperty("--topbar-height", `${topbarHeight}px`);
   if (!topSummary) return;
 
   const isOverviewVisible = !!views.overview && !views.overview.classList.contains("hidden");
@@ -3082,7 +3128,8 @@ function syncTopSummaryLayout() {
 
   requestAnimationFrame(() => {
     const summaryHeight = isOverviewVisible ? Math.ceil(topSummary.getBoundingClientRect().height) : 0;
-    document.documentElement.style.setProperty("--top-summary-height", `${summaryHeight}px`);
+    rootStyle.setProperty("--top-summary-height", `${summaryHeight}px`);
+    rootStyle.setProperty("--top-summary-stack-height", `${topbarHeight + summaryHeight}px`);
   });
 }
 
@@ -3359,7 +3406,7 @@ function renderPortfolioCards(plants) {
   const grid = document.getElementById("portfolioCardView");
   if (!grid) return;
 
-  const validPlants = Array.isArray(plants) ? plants : [];
+  const validPlants = sortPortfolioPlants(plants);
   grid.innerHTML = "";
 
   _portfolioMiniCharts.forEach(chart => { try { chart.destroy(); } catch(e) {} });
@@ -3372,23 +3419,23 @@ function renderPortfolioCards(plants) {
     const alarmSeverity = normalizeAlarmSeverity(lastAlarmSeverityByPlant.get(plantId))
       || normalizeAlarmSeverity(lastAlarmSeverityByPlant.get(plantName)) || null;
 
-    const status = plant.plant_status_color || plant.plant_status || "";
-    const activePower = Number(plant.active_power_kw ?? 0);
+    const plantState = getPortfolioPlantVisualState(plant);
+    const activePower = plantState.activePower;
     const ratedPower = Number(plant.rated_power_kw ?? plant.rated_power_kwp ?? 0);
-    const energyToday = Number(plant.energy_today_kwh ?? plant.daily_energy_kwh ?? 0);
+    const energyToday = plantState.energyToday;
     const pr = plant.pr_daily_pct != null ? Number(plant.pr_daily_pct).toFixed(1) + "%" : "—";
     const irr = plant.irradiance_wm2 != null ? Number(plant.irradiance_wm2).toFixed(0) + " W/m²" : "—";
     const invAvail = plant.inverter_availability_pct != null ? Number(plant.inverter_availability_pct).toFixed(1) + "%" : "—";
 
     // Estado do card: offline (cinza), generating (verde), standby
-    const statusNum = Number(plant.plant_status);
-    const hasAnyData = activePower > 0 || energyToday > 0 || Number(plant.irradiance_wm2 ?? 0) > 0;
-    const isOffline  = statusNum === 28 || !hasAnyData;
-    const isGenerating = activePower > 0;
-
+    const isOffline = plantState.isOffline;
+    const isGenerating = plantState.kind === "generating";
     let statusDotClass = "plant-card__status-dot";
     let statusText;
-    if (isOffline)       { statusDotClass += " offline";    statusText = "Sem dados"; }
+    if (plantState.kind === "offline") {
+      statusDotClass += " offline";
+      statusText = "Sem dados";
+    }
     else if (isGenerating){ statusDotClass += " generating"; statusText = "Em geração"; }
     else                  { statusDotClass += " standby";   statusText = "Aguardando"; }
 
@@ -3590,7 +3637,7 @@ async function fetchAndRenderMiniChart(canvas, plantId) {
         scales: {
           x: {
             display: true,
-            grid: { color: "rgba(57,229,140,0.08)", drawTicks: false },
+            grid: { display: false },
             ticks: { display: false },
             border: { display: false },
           },
@@ -3598,8 +3645,8 @@ async function fetchAndRenderMiniChart(canvas, plantId) {
             type: "linear", position: "left",
             display: powerRaw.length > 0,
             min: 0, max: maxP * 1.12,
-            grid: { color: "rgba(57,229,140,0.08)", drawTicks: false },
-            ticks: { ...tickStyle("rgba(127,208,85,0.55)"), callback: v => fmtTick(v, "kW") },
+            grid: { display: false },
+            ticks: { ...tickStyle("rgba(57,229,140,0.55)"), callback: v => fmtTick(v, "kW") },
             border: { display: false },
           },
           y1: {
