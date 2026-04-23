@@ -3181,6 +3181,10 @@ document.getElementById("btnAlarms")?.addEventListener("click", async () => {
 
 document.getElementById("btnEvents")?.addEventListener("click", () => showView("events"));
 document.getElementById("btnDataStudio")?.addEventListener("click", () => showView("datastudio"));
+// Botão OS desabilitado temporariamente — não disponível para clientes ainda
+// document.getElementById("btnOS")?.addEventListener("click", () => {
+//   window.location.href = "os.html";
+// });
 
 document.querySelectorAll(".tab-btn").forEach(btn => {
   btn.addEventListener("click", async () => {
@@ -3307,6 +3311,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   showView(savedView);
   syncTopSummaryLayout();
 
+  wirePortfolioControls();
   await refreshDashboard();
   setInterval(refreshDashboard, DASHBOARD_REFRESH_INTERVAL_MS);
 
@@ -3332,8 +3337,11 @@ document.addEventListener("DOMContentLoaded", async () => {
 // PORTFOLIO VIEW TOGGLE + SEARCH + CARD VIEW
 // =============================================================================
 
-let _portfolioCurrentView = "card";
+let _portfolioCurrentView = localStorage.getItem("portfolioView") || "card";
 let _portfolioMiniCharts = new Map();
+let _portfolioRenderGen = 0;
+const _miniChartDataCache = new Map(); // plantId → { ts, body }
+const _MINI_CHART_CACHE_TTL_MS = 5 * 60 * 1000;
 
 function portfolioSetView(view) {
   _portfolioCurrentView = view;
@@ -3347,7 +3355,10 @@ function portfolioSetView(view) {
   if (btnList) btnList.classList.toggle("active", view === "list");
   if (btnCard) btnCard.classList.toggle("active", view === "card");
   if (view === "card" && lastValidPlants.length > 0) {
-    renderPortfolioCards(lastValidPlants);
+    const _grid = document.getElementById("portfolioCardView");
+    if (!_grid || _grid.children.length === 0) {
+      renderPortfolioCards(lastValidPlants);
+    }
   }
 }
 
@@ -3406,15 +3417,19 @@ function renderPortfolioCards(plants) {
   const grid = document.getElementById("portfolioCardView");
   if (!grid) return;
 
+  const renderGen = ++_portfolioRenderGen;
   const validPlants = sortPortfolioPlants(plants);
   grid.innerHTML = "";
 
   _portfolioMiniCharts.forEach(chart => { try { chart.destroy(); } catch(e) {} });
   _portfolioMiniCharts.clear();
 
+  // Coleta (canvasId, plantId) para render de charts depois
+  const chartTargets = [];
+
   validPlants.forEach(plant => {
     const plantId = plant.power_plant_id ?? plant.plant_id ?? plant.id;
-    const plantName = plant.power_plant_name ?? plant.plant_name ?? plant.name ?? "—";
+    const plantName = plant.power_plant_name ?? plant.plant_name ?? plant.name ?? "\u2014";
 
     const alarmSeverity = normalizeAlarmSeverity(lastAlarmSeverityByPlant.get(plantId))
       || normalizeAlarmSeverity(lastAlarmSeverityByPlant.get(plantName)) || null;
@@ -3423,11 +3438,10 @@ function renderPortfolioCards(plants) {
     const activePower = plantState.activePower;
     const ratedPower = Number(plant.rated_power_kw ?? plant.rated_power_kwp ?? 0);
     const energyToday = plantState.energyToday;
-    const pr = plant.pr_daily_pct != null ? Number(plant.pr_daily_pct).toFixed(1) + "%" : "—";
-    const irr = plant.irradiance_wm2 != null ? Number(plant.irradiance_wm2).toFixed(0) + " W/m²" : "—";
-    const invAvail = plant.inverter_availability_pct != null ? Number(plant.inverter_availability_pct).toFixed(1) + "%" : "—";
+    const pr = plant.pr_daily_pct != null ? Number(plant.pr_daily_pct).toFixed(1) + "%" : "\u2014";
+    const irr = plant.irradiance_wm2 != null ? Number(plant.irradiance_wm2).toFixed(0) + " W/m\u00B2" : "\u2014";
+    const invAvail = plant.inverter_availability_pct != null ? Number(plant.inverter_availability_pct).toFixed(1) + "%" : "\u2014";
 
-    // Estado do card: offline (cinza), generating (verde), standby
     const isOffline = plantState.isOffline;
     const isGenerating = plantState.kind === "generating";
     let statusDotClass = "plant-card__status-dot";
@@ -3436,7 +3450,7 @@ function renderPortfolioCards(plants) {
       statusDotClass += " offline";
       statusText = "Sem dados";
     }
-    else if (isGenerating){ statusDotClass += " generating"; statusText = "Em geração"; }
+    else if (isGenerating){ statusDotClass += " generating"; statusText = "Em gera\u00E7\u00E3o"; }
     else                  { statusDotClass += " standby";   statusText = "Aguardando"; }
 
     const offlineClass = isOffline ? " plant-card--offline" : "";
@@ -3471,11 +3485,11 @@ function renderPortfolioCards(plants) {
           <div class="plant-card__stat-value">${energyToday.toFixed(1)} kWh</div>
         </div>
         <div class="plant-card__stat">
-          <div class="plant-card__stat-label"><i class="fa-solid fa-gauge-high"></i> PR Diário</div>
+          <div class="plant-card__stat-label"><i class="fa-solid fa-gauge-high"></i> PR Di\u00E1rio</div>
           <div class="plant-card__stat-value">${pr}</div>
         </div>
         <div class="plant-card__stat">
-          <div class="plant-card__stat-label"><i class="fa-solid fa-sun"></i> Irradiância</div>
+          <div class="plant-card__stat-label"><i class="fa-solid fa-sun"></i> Irradi\u00E2ncia</div>
           <div class="plant-card__stat-value">${irr}</div>
         </div>
         <div class="plant-card__stat">
@@ -3508,172 +3522,243 @@ function renderPortfolioCards(plants) {
     });
 
     grid.appendChild(card);
-
-    requestAnimationFrame(() => {
-      const canvas = document.getElementById(canvasId);
-      if (!canvas) return;
-      fetchAndRenderMiniChart(canvas, plantId);
-    });
+    chartTargets.push({ canvasId, plantId });
   });
-}
 
-async function fetchAndRenderMiniChart(canvas, plantId) {
-  try {
-    const res = await apiFetch(`/plants/${plantId}/energy/daily`);
-    if (!res.ok) return;
-    const raw = await res.json();
-    const body = (raw && raw.body)
-      ? (typeof raw.body === "string" ? JSON.parse(raw.body) : raw.body)
-      : raw;
-
-    const labels   = body?.labels || [];
-    const powerRaw = body?.activePower || body?.active_power_kw || body?.power_kw || [];
-    const irrRaw   = body?.irradiance  || body?.irradiance_wm2  || [];
-    const prRaw    = body?.pr          || body?.pr_pct          || body?.performance_ratio || [];
-
-    if (!labels.length || (!powerRaw.length && !irrRaw.length)) return;
-
-    // Escalas reais para cada série
-    const toNums = arr => arr.map(v => (v == null ? null : Number(v)));
-    const seriesMax = arr => Math.max(...arr.filter(v => v != null && isFinite(v)), 0.001);
-    const fmtTick = (v, unit) => {
-      if (v === 0) return "0";
-      if (unit === "kW"  && v >= 1000) return (v/1000).toFixed(0) + "M";
-      if (unit === "W/m²"&& v >= 1000) return (v/1000).toFixed(1) + "k";
-      return v % 1 === 0 ? v.toFixed(0) : v.toFixed(1);
-    };
-
-    const pNums  = toNums(powerRaw);
-    const iNums  = toNums(irrRaw);
-    const prNums = toNums(prRaw);
-    const maxP   = powerRaw.length ? seriesMax(pNums)  : 0;
-    const maxI   = irrRaw.length   ? seriesMax(iNums)  : 0;
-
-    const datasets = [];
-
-    if (powerRaw.length) {
-      datasets.push({
-        label: "Active Power", _raw: powerRaw, _unit: "kW",
-        data: pNums, yAxisID: "y",
-        borderColor: "rgba(127,208,85,0.9)",
-        backgroundColor: "rgba(127,208,85,0.07)",
-        borderWidth: 1.5, pointRadius: 0, pointHoverRadius: 4,
-        pointHoverBackgroundColor: "#7fd055",
-        tension: 0.4, fill: true,
-      });
-    }
-
-    if (irrRaw.length) {
-      datasets.push({
-        label: "Irrad. POA", _raw: irrRaw, _unit: "W/m²",
-        data: iNums, yAxisID: "y1",
-        borderColor: "rgba(255,200,50,0.85)",
-        backgroundColor: "transparent",
-        borderWidth: 1.5, pointRadius: 0, pointHoverRadius: 4,
-        pointHoverBackgroundColor: "#ffc832",
-        tension: 0.4, fill: false,
-      });
-    }
-
-    if (prRaw.length) {
-      datasets.push({
-        label: "PR", _raw: prRaw, _unit: "%",
-        data: prNums, yAxisID: "y2",
-        borderColor: "rgba(80,200,255,0.75)",
-        backgroundColor: "transparent",
-        borderWidth: 1.5, borderDash: [4, 3],
-        pointRadius: 0, pointHoverRadius: 4,
-        pointHoverBackgroundColor: "#50c8ff",
-        tension: 0.4, fill: false,
-      });
-    }
-
-    if (!datasets.length) return;
-
-    const tickStyle = (color) => ({
-      display: true,
-      maxTicksLimit: 3,
-      color,
-      font: { family: "'JetBrains Mono', monospace", size: 8 },
-      padding: 2,
-    });
-
-    const ctx = canvas.getContext("2d");
-    const chart = new Chart(ctx, {
-      type: "line",
-      data: { labels, datasets },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        animation: false,
-        interaction: { mode: "index", intersect: false },
-        plugins: {
-          legend: { display: false },
-          tooltip: {
-            enabled: true,
-            backgroundColor: "rgba(4,12,8,0.94)",
-            borderColor: "rgba(57,229,140,0.20)",
-            borderWidth: 1,
-            padding: { top: 7, bottom: 7, left: 10, right: 10 },
-            titleColor: "rgba(154,219,184,0.55)",
-            titleFont: { family: "'JetBrains Mono', monospace", size: 10 },
-            bodyColor: "#ddeee4",
-            bodyFont: { family: "'JetBrains Mono', monospace", size: 11 },
-            callbacks: {
-              title: items => items[0]?.label || "",
-              label: item => {
-                const raw = item.dataset._raw?.[item.dataIndex];
-                if (raw == null) return null;
-                return ` ${item.dataset.label}: ${Number(raw).toFixed(1)} ${item.dataset._unit}`;
-              },
-              labelColor: item => ({
-                borderColor: item.dataset.borderColor,
-                backgroundColor: item.dataset.borderColor,
-                borderRadius: 2,
-              }),
-            },
-          },
-        },
-        scales: {
-          x: {
-            display: true,
-            grid: { display: false },
-            ticks: { display: false },
-            border: { display: false },
-          },
-          y: {
-            type: "linear", position: "left",
-            display: powerRaw.length > 0,
-            min: 0, max: maxP * 1.12,
-            grid: { display: false },
-            ticks: { ...tickStyle("rgba(57,229,140,0.55)"), callback: v => fmtTick(v, "kW") },
-            border: { display: false },
-          },
-          y1: {
-            type: "linear", position: "right",
-            display: irrRaw.length > 0,
-            min: 0, max: maxI * 1.12,
-            grid: { drawOnChartArea: false, drawTicks: false },
-            ticks: { ...tickStyle("rgba(255,200,50,0.55)"), callback: v => fmtTick(v, "W/m²") },
-            border: { display: false },
-          },
-          y2: {
-            type: "linear", position: "right",
-            display: false,
-            min: 0, max: 100,
-            grid: { drawOnChartArea: false },
-          },
-        },
-        layout: { padding: { top: 4, bottom: 2, left: 0, right: 0 } },
-      },
-    });
-
-    _portfolioMiniCharts.set(plantId, chart);
-  } catch(e) {
-    console.warn("[mini-chart]", plantId, e?.message || e);
+  // Inicia fetch de todos os mini-charts APOS todo o DOM estar montado,
+  // com concorrencia controlada (3 por vez) e retry automatico.
+  if (chartTargets.length > 0) {
+    _startMiniChartBatch(chartTargets, renderGen);
   }
 }
 
-document.addEventListener("DOMContentLoaded", () => {
-  setTimeout(wirePortfolioControls, 100);
-});
+/**
+ * Busca dados e renderiza mini-charts em lotes de CONCURRENCY,
+ * com 1 retry automatico por falha. Usa cache (TTL 5 min).
+ * Verifica renderGen antes de cada chart para abortar se houve re-render.
+ */
+async function _startMiniChartBatch(targets, renderGen) {
+  const CONCURRENCY = 3;
+  const queue = [...targets];
+  const failed = [];
+
+  async function processOne(target) {
+    if (renderGen !== _portfolioRenderGen) return;
+    try {
+      await _fetchAndRenderOneMiniChart(target.canvasId, target.plantId, renderGen);
+    } catch (e) {
+      console.warn("[mini-chart] falhou, sera retentado:", target.plantId, e?.message || e);
+      failed.push(target);
+    }
+  }
+
+  // Pool de concorrencia: no maximo CONCURRENCY simultaneos
+  async function drainQueue() {
+    while (queue.length > 0) {
+      if (renderGen !== _portfolioRenderGen) return;
+      const batch = queue.splice(0, CONCURRENCY);
+      await Promise.allSettled(batch.map(t => processOne(t)));
+    }
+  }
+
+  // Aguarda 2 frames de layout do browser antes de criar os Chart.js
+  await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+  if (renderGen !== _portfolioRenderGen) return;
+
+  await drainQueue();
+
+  // Retry das que falharam (1 tentativa extra, sequencial)
+  if (failed.length > 0 && renderGen === _portfolioRenderGen) {
+    console.log("[mini-chart] retentando", failed.length, "charts que falharam");
+    await new Promise(r => setTimeout(r, 1500));
+    for (const target of failed) {
+      if (renderGen !== _portfolioRenderGen) return;
+      try {
+        await _fetchAndRenderOneMiniChart(target.canvasId, target.plantId, renderGen);
+      } catch (e) {
+        console.warn("[mini-chart] retry falhou:", target.plantId, e?.message || e);
+      }
+    }
+  }
+}
+
+async function _fetchAndRenderOneMiniChart(canvasId, plantId, renderGen) {
+  // 1) Busca dados (cache ou fetch)
+  let body;
+  const cached = _miniChartDataCache.get(plantId);
+  if (cached && (Date.now() - cached.ts) < _MINI_CHART_CACHE_TTL_MS) {
+    body = cached.body;
+  } else {
+    const res = await apiFetch(`/plants/${plantId}/energy/daily`);
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status} para plant ${plantId}`);
+    }
+    const raw = await res.json();
+    body = (raw && raw.body)
+      ? (typeof raw.body === "string" ? JSON.parse(raw.body) : raw.body)
+      : raw;
+    _miniChartDataCache.set(plantId, { ts: Date.now(), body });
+  }
+
+  // 2) Verifica se ainda estamos no mesmo render
+  if (renderGen !== _portfolioRenderGen) return;
+
+  // 3) Re-busca canvas no DOM (pode ter mudado)
+  const canvas = document.getElementById(canvasId);
+  if (!canvas) return;
+
+  // 4) Monta chart
+  _renderMiniChartOnCanvas(canvas, plantId, body);
+}
+
+function _renderMiniChartOnCanvas(canvas, plantId, body) {
+  const labels   = body?.labels || [];
+  const powerRaw = body?.activePower || body?.active_power_kw || body?.power_kw || [];
+  const irrRaw   = body?.irradiance  || body?.irradiance_wm2  || [];
+  const prRaw    = body?.pr          || body?.pr_pct          || body?.performance_ratio || [];
+
+  if (!labels.length || (!powerRaw.length && !irrRaw.length)) return;
+
+  const toNums = arr => arr.map(v => (v == null ? null : Number(v)));
+  const seriesMax = arr => Math.max(...arr.filter(v => v != null && isFinite(v)), 0.001);
+  const fmtTick = (v, unit) => {
+    if (v === 0) return "0";
+    if (unit === "kW"  && v >= 1000) return (v/1000).toFixed(0) + "M";
+    if (unit === "W/m\u00B2"&& v >= 1000) return (v/1000).toFixed(1) + "k";
+    return v % 1 === 0 ? v.toFixed(0) : v.toFixed(1);
+  };
+
+  const pNums  = toNums(powerRaw);
+  const iNums  = toNums(irrRaw);
+  const prNums = toNums(prRaw);
+  const maxP   = powerRaw.length ? seriesMax(pNums)  : 0;
+  const maxI   = irrRaw.length   ? seriesMax(iNums)  : 0;
+
+  const datasets = [];
+
+  if (powerRaw.length) {
+    datasets.push({
+      label: "Active Power", _raw: powerRaw, _unit: "kW",
+      data: pNums, yAxisID: "y",
+      borderColor: "rgba(127,208,85,0.9)",
+      backgroundColor: "rgba(127,208,85,0.07)",
+      borderWidth: 1.5, pointRadius: 0, pointHoverRadius: 4,
+      pointHoverBackgroundColor: "#7fd055",
+      tension: 0.4, fill: true,
+    });
+  }
+
+  if (irrRaw.length) {
+    datasets.push({
+      label: "Irrad. POA", _raw: irrRaw, _unit: "W/m\u00B2",
+      data: iNums, yAxisID: "y1",
+      borderColor: "rgba(255,200,50,0.85)",
+      backgroundColor: "transparent",
+      borderWidth: 1.5, pointRadius: 0, pointHoverRadius: 4,
+      pointHoverBackgroundColor: "#ffc832",
+      tension: 0.4, fill: false,
+    });
+  }
+
+  if (prRaw.length) {
+    datasets.push({
+      label: "PR", _raw: prRaw, _unit: "%",
+      data: prNums, yAxisID: "y2",
+      borderColor: "rgba(80,200,255,0.75)",
+      backgroundColor: "transparent",
+      borderWidth: 1.5, borderDash: [4, 3],
+      pointRadius: 0, pointHoverRadius: 4,
+      pointHoverBackgroundColor: "#50c8ff",
+      tension: 0.4, fill: false,
+    });
+  }
+
+  if (!datasets.length) return;
+
+  const tickStyle = (color) => ({
+    display: true,
+    maxTicksLimit: 3,
+    color,
+    font: { family: "'JetBrains Mono', monospace", size: 8 },
+    padding: 2,
+  });
+
+  try {
+    const existing = Chart.getChart(canvas);
+    if (existing) existing.destroy();
+  } catch (_) {}
+
+  const ctx = canvas.getContext("2d");
+  const chart = new Chart(ctx, {
+    type: "line",
+    data: { labels, datasets },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      interaction: { mode: "index", intersect: false },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          enabled: true,
+          backgroundColor: "rgba(4,12,8,0.94)",
+          borderColor: "rgba(57,229,140,0.20)",
+          borderWidth: 1,
+          padding: { top: 7, bottom: 7, left: 10, right: 10 },
+          titleColor: "rgba(154,219,184,0.55)",
+          titleFont: { family: "'JetBrains Mono', monospace", size: 10 },
+          bodyColor: "#ddeee4",
+          bodyFont: { family: "'JetBrains Mono', monospace", size: 11 },
+          callbacks: {
+            title: items => items[0]?.label || "",
+            label: item => {
+              const raw = item.dataset._raw?.[item.dataIndex];
+              if (raw == null) return null;
+              return ` ${item.dataset.label}: ${Number(raw).toFixed(1)} ${item.dataset._unit}`;
+            },
+            labelColor: item => ({
+              borderColor: item.dataset.borderColor,
+              backgroundColor: item.dataset.borderColor,
+              borderRadius: 2,
+            }),
+          },
+        },
+      },
+      scales: {
+        x: {
+          display: true,
+          grid: { display: false },
+          ticks: { display: false },
+          border: { display: false },
+        },
+        y: {
+          type: "linear", position: "left",
+          display: powerRaw.length > 0,
+          min: 0, max: maxP * 1.12,
+          grid: { display: false },
+          ticks: { ...tickStyle("rgba(57,229,140,0.55)"), callback: v => fmtTick(v, "kW") },
+          border: { display: false },
+        },
+        y1: {
+          type: "linear", position: "right",
+          display: irrRaw.length > 0,
+          min: 0, max: maxI * 1.12,
+          grid: { drawOnChartArea: false, drawTicks: false },
+          ticks: { ...tickStyle("rgba(255,200,50,0.55)"), callback: v => fmtTick(v, "W/m\u00B2") },
+          border: { display: false },
+        },
+        y2: {
+          type: "linear", position: "right",
+          display: false,
+          min: 0, max: 100,
+          grid: { drawOnChartArea: false },
+        },
+      },
+      layout: { padding: { top: 4, bottom: 2, left: 0, right: 0 } },
+    },
+  });
+
+  _portfolioMiniCharts.set(plantId, chart);
+}
+
+// wirePortfolioControls is now called synchronously inside the main DOMContentLoaded listener (above).
