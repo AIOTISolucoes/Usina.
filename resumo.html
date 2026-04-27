@@ -501,6 +501,47 @@
       </main>
     </div>
 
+    <div id="plantEditModal" class="plant-edit-modal hidden" aria-hidden="true">
+      <div class="plant-edit-modal__backdrop"></div>
+      <div class="plant-edit-modal__box" role="dialog" aria-modal="true" aria-labelledby="plantEditModalTitle">
+        <div class="plant-edit-modal__header">
+          <h3 id="plantEditModalTitle">Editar usina</h3>
+          <button class="plant-edit-modal__close" type="button" onclick="closePlantEditModal()" aria-label="Fechar">
+            <i class="fa-solid fa-xmark"></i>
+          </button>
+        </div>
+
+        <div class="plant-edit-section">
+          <label for="plantEditNameInput">Nome da usina</label>
+          <div class="plant-edit-inline">
+            <input type="text" id="plantEditNameInput" placeholder="Nome da usina" />
+            <button type="button" onclick="savePlantName()" title="Salvar nome da usina" aria-label="Salvar nome da usina">
+              <i class="fa-solid fa-check"></i>
+            </button>
+          </div>
+          <div id="plantEditNameFeedback" class="plant-edit-feedback" aria-live="polite"></div>
+        </div>
+
+        <div class="plant-edit-section" id="plantEditRatedSection">
+          <label for="plantEditRatedInput">Rated Power (kWp)</label>
+          <div class="plant-edit-inline">
+            <input type="number" id="plantEditRatedInput" placeholder="Ex: 1500.0" min="0" step="0.1" />
+            <button type="button" onclick="savePlantRatedPower()" title="Salvar rated power" aria-label="Salvar rated power">
+              <i class="fa-solid fa-check"></i>
+            </button>
+          </div>
+          <div id="plantEditRatedFeedback" class="plant-edit-feedback" aria-live="polite"></div>
+        </div>
+
+        <hr class="plant-edit-divider" />
+
+        <div class="plant-edit-section">
+          <label>Dispositivos</label>
+          <div id="plantEditDevicesList" class="plant-edit-devices-list" tabindex="-1" aria-live="polite"></div>
+        </div>
+      </div>
+    </div>
+
     <script src="js/app.js"></script>
   </body>
   </html>
