@@ -1893,12 +1893,22 @@ function renderPortfolioTable(plants) {
       <td>${plant.relay_availability_pct != null ? Number(plant.relay_availability_pct).toFixed(1) + "%" : "—"}</td>
       <td>${plant.pr_daily_pct != null ? Number(plant.pr_daily_pct).toFixed(1) + "%" : "—"}</td>
       <td>${plant.pr_accumulated_pct != null ? Number(plant.pr_accumulated_pct).toFixed(1) + "%" : "—"}</td>
-      <td style="text-align:center;">
+      <td style="text-align:center; white-space:nowrap;">
+        <button class="plant-action-btn" title="Ações da usina" aria-label="Ações da usina" aria-haspopup="menu" aria-expanded="false" data-plant-id="${plantId}" style="margin-right:6px;">
+          <svg viewBox="0 0 18 18" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+            <path d="M10.5 1.5 L4 10 L8.5 10 L7.5 16.5 L14 8 L9.5 8 Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" stroke-linecap="round" fill="currentColor" fill-opacity="0.18"/>
+          </svg>
+        </button>
         <button class="plant-link-btn" title="Abrir usina" data-plant-id="${plantId}">
           <i class="fa-solid fa-arrow-up-right-from-square"></i>
         </button>
       </td>
     `;
+
+    tr.querySelector(".plant-action-btn").addEventListener("click", (e) => {
+      e.stopPropagation();
+      openPortfolioPlantActionMenu(e, plantId, plantName);
+    });
 
     tr.querySelector(".plant-link-btn").addEventListener("click", (e) => {
       e.stopPropagation();
@@ -4193,7 +4203,9 @@ function renderPortfolioCards(plants) {
       </div>
       <div class="plant-card__status">
         <button class="plant-card__edit-btn" type="button" data-plant-id="${escapeHtml(plantId)}" title="Ações da usina" aria-label="Ações da usina" aria-haspopup="menu" aria-expanded="false">
-          <i class="fa-solid fa-ellipsis"></i>
+          <svg viewBox="0 0 18 18" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+            <path d="M10.5 1.5 L4 10 L8.5 10 L7.5 16.5 L14 8 L9.5 8 Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" stroke-linecap="round" fill="currentColor" fill-opacity="0.18"/>
+          </svg>
         </button>
         <div class="${statusDotClass}"></div>
         <span class="plant-card__status-text">${statusText}</span>
