@@ -42,6 +42,23 @@ function apiFetch(path, options = {}) {
   });
 }
 
+function normalizeApiPayload(data) {
+  if (data && Object.prototype.hasOwnProperty.call(data, "body")) {
+    return typeof data.body === "string" ? JSON.parse(data.body) : data.body;
+  }
+  return data;
+}
+
+function escapeHtml(value) {
+  return String(value ?? "").replace(/[&<>"']/g, char => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#39;"
+  }[char]));
+}
+
 // =============================================================================
 // CONFIGURAÇÃO GLOBAL E ESTADO
 // =============================================================================
@@ -542,11 +559,8 @@ async function fetchPlantDeviceOptions(plantId) {
   if (!res.ok) throw new Error("Erro ao buscar equipamentos da usina");
 
   const data = await res.json();
-  if (data && data.body) {
-    const parsed = typeof data.body === "string" ? JSON.parse(data.body) : data.body;
-    return Array.isArray(parsed?.items) ? parsed.items : (Array.isArray(parsed) ? parsed : []);
-  }
-  return Array.isArray(data?.items) ? data.items : (Array.isArray(data) ? data : []);
+  const parsed = normalizeApiPayload(data);
+  return Array.isArray(parsed?.items) ? parsed.items : (Array.isArray(parsed) ? parsed : []);
 }
 
 
@@ -3295,6 +3309,7 @@ async function refreshDashboard() {
 
 document.addEventListener("DOMContentLoaded", async () => {
   wireDataStudioOnce();
+  wirePlantEditModalOnce();
 
   // Preenche nome do usuário logado
   try {
@@ -3342,6 +3357,675 @@ let _portfolioMiniCharts = new Map();
 let _portfolioRenderGen = 0;
 const _miniChartDataCache = new Map(); // plantId → { ts, body }
 const _MINI_CHART_CACHE_TTL_MS = 5 * 60 * 1000;
+
+let currentEditPlantId = null;
+let currentEditPlantName = "";
+let _plantEditModalWired = false;
+let _plantEditLastFocus = null;
+let _portfolioActionMenuWired = false;
+let _portfolioActionMenuButton = null;
+let _portfolioActionMenuContext = null;
+
+function getOrCreatePlantEditModal() {
+  let modal = document.getElementById("plantEditModal");
+  if (modal) return modal;
+
+  document.body.insertAdjacentHTML("beforeend", `
+    <div id="plantEditModal" class="plant-edit-modal hidden" aria-hidden="true">
+      <div class="plant-edit-modal__backdrop"></div>
+      <div class="plant-edit-modal__box" role="dialog" aria-modal="true" aria-labelledby="plantEditModalTitle">
+        <div class="plant-edit-modal__header">
+          <h3 id="plantEditModalTitle">Editar usina</h3>
+          <button class="plant-edit-modal__close" type="button" onclick="closePlantEditModal()" aria-label="Fechar">
+            <i class="fa-solid fa-xmark"></i>
+          </button>
+        </div>
+        <div class="plant-edit-section">
+          <label for="plantEditNameInput">Nome da usina</label>
+          <div class="plant-edit-inline">
+            <input type="text" id="plantEditNameInput" placeholder="Nome da usina" />
+            <button type="button" onclick="savePlantName()" title="Salvar nome da usina" aria-label="Salvar nome da usina">
+              <i class="fa-solid fa-check"></i>
+            </button>
+          </div>
+          <div id="plantEditNameFeedback" class="plant-edit-feedback" aria-live="polite"></div>
+        </div>
+        <div class="plant-edit-section" id="plantEditRatedSection">
+          <label for="plantEditRatedInput">Rated Power (kWp)</label>
+          <div class="plant-edit-inline">
+            <input type="number" id="plantEditRatedInput" placeholder="Ex: 1500.0" min="0" step="0.1" />
+            <button type="button" onclick="savePlantRatedPower()" title="Salvar rated power" aria-label="Salvar rated power">
+              <i class="fa-solid fa-check"></i>
+            </button>
+          </div>
+          <div id="plantEditRatedFeedback" class="plant-edit-feedback" aria-live="polite"></div>
+        </div>
+        <hr class="plant-edit-divider" />
+        <div class="plant-edit-section">
+          <label>Dispositivos</label>
+          <div id="plantEditDevicesList" class="plant-edit-devices-list" tabindex="-1" aria-live="polite"></div>
+        </div>
+      </div>
+    </div>
+  `);
+
+  return document.getElementById("plantEditModal");
+}
+
+function wirePlantEditModalOnce() {
+  if (_plantEditModalWired) return;
+
+  const modal = getOrCreatePlantEditModal();
+  if (!modal) return;
+
+  modal.querySelector(".plant-edit-modal__backdrop")?.addEventListener("click", closePlantEditModal);
+  document.getElementById("plantEditNameInput")?.addEventListener("keydown", event => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      savePlantName();
+    }
+  });
+
+  document.getElementById("plantEditRatedInput")?.addEventListener("keydown", event => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      savePlantRatedPower();
+    }
+  });
+
+  document.addEventListener("keydown", event => {
+    if (event.key === "Escape" && !modal.classList.contains("hidden")) {
+      closePlantEditModal();
+    }
+  });
+
+  _plantEditModalWired = true;
+}
+
+function plantEditSetFeedback(el, message = "", type = "") {
+  if (!el) return;
+  el.textContent = message;
+  el.classList.remove("ok", "err");
+  if (type) el.classList.add(type);
+}
+
+function formatPlantEditDeviceMeta(device) {
+  const parts = [];
+  const deviceId = device?.device_id ?? device?.id;
+  const original = device?.original_name || device?.device_default_name || device?.name;
+  const cabin = device?.cabin || device?.cabin_name || device?.electrocenter || device?.electrocenter_name;
+
+  if (deviceId != null) parts.push(`ID ${deviceId}`);
+  if (original) parts.push(`Original: ${original}`);
+  if (device?.is_active != null) parts.push(device.is_active ? "Ativo" : "Inativo");
+  if (cabin) parts.push(`Cabine: ${cabin}`);
+
+  return parts.join(" • ");
+}
+
+function renderPlantEditDeviceRows(devices) {
+  const list = document.getElementById("plantEditDevicesList");
+  if (!list) return;
+
+  list.innerHTML = "";
+  const items = Array.isArray(devices) ? devices : [];
+
+  if (items.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "plant-edit-empty";
+    empty.textContent = "Nenhum dispositivo encontrado.";
+    list.appendChild(empty);
+    return;
+  }
+
+  items.forEach(device => {
+    const deviceId = device?.device_id;
+    const row = document.createElement("div");
+    row.className = "plant-edit-device-row";
+    row.dataset.deviceId = String(deviceId ?? "");
+
+    const info = document.createElement("div");
+    info.className = "plant-edit-device-info";
+
+    const type = document.createElement("span");
+    type.className = "plant-edit-device-type";
+    type.textContent = device?.device_type || "Device";
+    type.title = type.textContent;
+
+    const meta = document.createElement("span");
+    meta.className = "plant-edit-device-meta";
+    meta.textContent = formatPlantEditDeviceMeta(device);
+    meta.title = meta.textContent;
+
+    info.append(type, meta);
+
+    const input = document.createElement("input");
+    input.type = "text";
+    input.className = "plant-edit-device-name";
+    input.placeholder = "Nome do dispositivo";
+    input.value = device?.display_name || device?.device_name || device?.name || "";
+    input.addEventListener("keydown", event => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        saveDeviceName(deviceId);
+      }
+    });
+
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "plant-edit-device-save";
+    button.title = "Salvar nome do dispositivo";
+    button.setAttribute("aria-label", "Salvar nome do dispositivo");
+    button.innerHTML = '<i class="fa-solid fa-check"></i>';
+    button.addEventListener("click", () => saveDeviceName(deviceId));
+
+    const feedback = document.createElement("span");
+    feedback.className = "plant-edit-device-feedback";
+    feedback.setAttribute("aria-live", "polite");
+
+    row.append(info, input, button, feedback);
+    list.appendChild(row);
+  });
+}
+
+async function loadPlantDevices(plantId) {
+  const list = document.getElementById("plantEditDevicesList");
+  if (!list) return;
+
+  list.innerHTML = '<div class="plant-edit-empty">Carregando dispositivos...</div>';
+
+  try {
+    const devices = await fetchPlantDeviceOptions(plantId);
+    if (String(currentEditPlantId) !== String(plantId)) return;
+    renderPlantEditDeviceRows(devices);
+  } catch (err) {
+    console.error("[PlantEdit] erro ao carregar dispositivos:", err);
+    list.innerHTML = '<div class="plant-edit-empty plant-edit-empty--error">Erro ao carregar dispositivos.</div>';
+  }
+}
+
+function openPlantEditModal(event, plantId, plantName, options = {}) {
+  if (event) {
+    event.preventDefault();
+    event.stopPropagation();
+  }
+
+  const modal = getOrCreatePlantEditModal();
+  if (!modal) return;
+
+  wirePlantEditModalOnce();
+
+  currentEditPlantId = plantId;
+  currentEditPlantName = String(plantName ?? "");
+  _plantEditLastFocus = document.activeElement;
+
+  const nameInput = document.getElementById("plantEditNameInput");
+  const nameFeedback = document.getElementById("plantEditNameFeedback");
+  const devicesList = document.getElementById("plantEditDevicesList");
+  const title = document.getElementById("plantEditModalTitle");
+  const mode = options.mode || "plant";
+  const plantSection = nameInput?.closest(".plant-edit-section");
+  const devicesSection = devicesList?.closest(".plant-edit-section");
+  const divider = modal.querySelector(".plant-edit-divider");
+
+  if (nameInput) nameInput.value = currentEditPlantName;
+
+  const ratedInput = document.getElementById("plantEditRatedInput");
+  const ratedFeedback = document.getElementById("plantEditRatedFeedback");
+  const ratedSection = document.getElementById("plantEditRatedSection");
+
+  // Buscar rated power atual da planta no array lastValidPlants
+  const currentPlant = lastValidPlants.find(p =>
+    String(p.power_plant_id ?? p.plant_id ?? p.id) === String(plantId)
+  );
+  const currentRated = currentPlant?.capacity_dc ?? currentPlant?.rated_power_kwp ?? currentPlant?.rated_power_kw ?? "";
+  if (ratedInput) ratedInput.value = currentRated !== "" && currentRated != null ? Number(currentRated) : "";
+  plantEditSetFeedback(ratedFeedback);
+
+  // Esconder rated section no modo "devices"
+  if (ratedSection) ratedSection.style.display = mode === "devices" ? "none" : "";
+
+  if (title) title.textContent = mode === "devices" ? "Gerenciar dispositivos" : "Editar usina";
+  if (plantSection) plantSection.style.display = mode === "devices" ? "none" : "";
+  if (devicesSection) devicesSection.style.display = mode === "plant" ? "none" : "";
+  if (divider) divider.style.display = "none";
+  plantEditSetFeedback(nameFeedback);
+  if (devicesList) devicesList.innerHTML = "";
+
+  modal.classList.remove("hidden");
+  modal.setAttribute("aria-hidden", "false");
+  document.body.classList.add("plant-edit-modal-open");
+
+  window.setTimeout(() => {
+    if (mode === "devices") {
+      devicesList?.focus?.();
+      return;
+    }
+    nameInput?.focus();
+    nameInput?.select();
+  }, 0);
+
+  if (mode !== "plant") loadPlantDevices(plantId);
+}
+
+function closePlantEditModal() {
+  const modal = document.getElementById("plantEditModal");
+  if (!modal) return;
+
+  modal.classList.add("hidden");
+  modal.setAttribute("aria-hidden", "true");
+  document.body.classList.remove("plant-edit-modal-open");
+
+  if (_plantEditLastFocus && document.contains(_plantEditLastFocus)) {
+    _plantEditLastFocus.focus?.();
+  }
+}
+
+function getPlantEditDeviceRow(deviceId) {
+  return Array.from(document.querySelectorAll("#plantEditDevicesList .plant-edit-device-row"))
+    .find(row => row.dataset.deviceId === String(deviceId));
+}
+
+function updatePortfolioPlantName(plantId, plantName) {
+  const idText = String(plantId);
+  document.querySelectorAll(".plant-card[data-plant-id]").forEach(card => {
+    if (String(card.dataset.plantId) !== idText) return;
+    card.dataset.plantName = plantName;
+    const nameEl = card.querySelector(".plant-card__name");
+    if (nameEl) nameEl.textContent = plantName;
+  });
+
+  lastValidPlants.forEach(plant => {
+    const pid = plant?.power_plant_id ?? plant?.plant_id ?? plant?.id;
+    if (String(pid) !== idText) return;
+    plant.power_plant_name = plantName;
+    if (Object.prototype.hasOwnProperty.call(plant, "plant_name")) plant.plant_name = plantName;
+    if (Object.prototype.hasOwnProperty.call(plant, "name")) plant.name = plantName;
+  });
+
+  const listView = document.getElementById("portfolioListView");
+  if (listView && !listView.classList.contains("hidden")) {
+    const plants = typeof portfolioFilterPlants === "function"
+      ? portfolioFilterPlants(lastValidPlants)
+      : lastValidPlants;
+    renderPortfolioTable(plants);
+  }
+}
+
+async function savePlantName() {
+  const nameInput = document.getElementById("plantEditNameInput");
+  const feedback = document.getElementById("plantEditNameFeedback");
+  const button = document.querySelector(".plant-edit-inline button");
+  const newName = (nameInput?.value || "").trim();
+
+  if (!currentEditPlantId) {
+    plantEditSetFeedback(feedback, "Usina invalida.", "err");
+    return;
+  }
+  if (!newName) {
+    plantEditSetFeedback(feedback, "Informe um nome.", "err");
+    nameInput?.focus();
+    return;
+  }
+
+  if (button) button.disabled = true;
+  plantEditSetFeedback(feedback, "Salvando...");
+
+  try {
+    const res = await apiFetch(`/plants/${encodeURIComponent(currentEditPlantId)}/name`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ plant_name: newName })
+    });
+    const data = await res.json().catch(() => ({}));
+    const parsed = normalizeApiPayload(data) || {};
+
+    if (!res.ok || parsed.ok === false) {
+      throw new Error(parsed.error || `Falha ao salvar (${res.status})`);
+    }
+
+    const savedName = parsed.power_plant_name || parsed.plant_name || newName;
+    currentEditPlantName = savedName;
+    if (nameInput) nameInput.value = savedName;
+    updatePortfolioPlantName(currentEditPlantId, savedName);
+    plantEditSetFeedback(feedback, "Salvo.", "ok");
+  } catch (err) {
+    console.error("[PlantEdit] erro ao salvar nome da usina:", err);
+    plantEditSetFeedback(feedback, err?.message || "Erro ao salvar.", "err");
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+async function savePlantRatedPower() {
+  const ratedInput = document.getElementById("plantEditRatedInput");
+  const feedback = document.getElementById("plantEditRatedFeedback");
+  const button = ratedInput?.closest(".plant-edit-inline")?.querySelector("button");
+  const rawValue = (ratedInput?.value ?? "").trim();
+
+  if (!currentEditPlantId) {
+    plantEditSetFeedback(feedback, "Usina inválida.", "err");
+    return;
+  }
+  if (rawValue === "" || isNaN(Number(rawValue)) || Number(rawValue) < 0) {
+    plantEditSetFeedback(feedback, "Informe um valor válido (>= 0).", "err");
+    ratedInput?.focus();
+    return;
+  }
+
+  if (button) button.disabled = true;
+  plantEditSetFeedback(feedback, "Salvando...");
+
+  try {
+    const res = await apiFetch(`/plants/${encodeURIComponent(currentEditPlantId)}/name`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ capacity_dc: Number(rawValue) })
+    });
+    const data = await res.json().catch(() => ({}));
+    const parsed = normalizeApiPayload(data) || {};
+
+    if (!res.ok || parsed.ok === false) {
+      throw new Error(parsed.error || `Falha ao salvar (${res.status})`);
+    }
+
+    const savedValue = parsed.capacity_dc;
+    if (ratedInput && savedValue != null) ratedInput.value = savedValue;
+
+    // Atualizar o card no portfólio sem reload
+    const idText = String(currentEditPlantId);
+    lastValidPlants.forEach(plant => {
+      const pid = plant?.power_plant_id ?? plant?.plant_id ?? plant?.id;
+      if (String(pid) !== idText) return;
+      plant.capacity_dc = savedValue;
+      plant.rated_power_kwp = savedValue;
+      plant.rated_power_kw = savedValue;
+    });
+    // Re-render dos cards para refletir o novo rated
+    if (typeof _portfolioCurrentView !== "undefined" && _portfolioCurrentView === "card") {
+      renderPortfolioCards(typeof portfolioFilterPlants === "function"
+        ? portfolioFilterPlants(lastValidPlants) : lastValidPlants);
+    }
+
+    plantEditSetFeedback(feedback, "Salvo.", "ok");
+  } catch (err) {
+    console.error("[PlantEdit] erro ao salvar rated power:", err);
+    plantEditSetFeedback(feedback, err?.message || "Erro ao salvar.", "err");
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+async function saveDeviceName(deviceId) {
+  const row = getPlantEditDeviceRow(deviceId);
+  const input = row?.querySelector(".plant-edit-device-name");
+  const feedback = row?.querySelector(".plant-edit-device-feedback");
+  const button = row?.querySelector(".plant-edit-device-save");
+  const newName = (input?.value || "").trim();
+
+  if (!currentEditPlantId || !row) return;
+  if (!newName) {
+    plantEditSetFeedback(feedback, "Informe um nome.", "err");
+    input?.focus();
+    return;
+  }
+
+  if (button) button.disabled = true;
+  plantEditSetFeedback(feedback, "Salvando...");
+
+  try {
+    const res = await apiFetch(`/plants/${encodeURIComponent(currentEditPlantId)}/devices/${encodeURIComponent(deviceId)}/name`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ display_name: newName })
+    });
+    const data = await res.json().catch(() => ({}));
+    const parsed = normalizeApiPayload(data) || {};
+
+    if (!res.ok || parsed.ok === false) {
+      throw new Error(parsed.error || `Falha ao salvar (${res.status})`);
+    }
+
+    const savedName = parsed.display_name || newName;
+    if (input) input.value = savedName;
+    plantEditSetFeedback(feedback, "Salvo.", "ok");
+  } catch (err) {
+    console.error("[PlantEdit] erro ao salvar nome do dispositivo:", err);
+    plantEditSetFeedback(feedback, err?.message || "Erro.", "err");
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+function getPlantPageUrl(plantId, { hash = "", action = "" } = {}) {
+  const params = new URLSearchParams({ plant_id: String(plantId) });
+  if (action) params.set("action", action);
+  return `plant.html?${params.toString()}${hash || ""}`;
+}
+
+function navigateToPlantPage(plantId, options = {}) {
+  if (plantId == null) return;
+  window.location.href = getPlantPageUrl(plantId, options);
+}
+
+function ensurePortfolioPlantActionMenu() {
+  let menu = document.getElementById("portfolioPlantActionMenu");
+  if (!menu) {
+    menu = document.createElement("div");
+    menu.id = "portfolioPlantActionMenu";
+    menu.className = "portfolio-plant-action-menu hidden";
+    menu.setAttribute("role", "menu");
+    document.body.appendChild(menu);
+  }
+
+  if (!_portfolioActionMenuWired) {
+    menu.addEventListener("click", event => event.stopPropagation());
+    document.addEventListener("click", event => {
+      if (menu.classList.contains("hidden")) return;
+      if (menu.contains(event.target) || _portfolioActionMenuButton?.contains?.(event.target)) return;
+      closePortfolioPlantActionMenu();
+    });
+    document.addEventListener("keydown", event => {
+      if (event.key === "Escape") closePortfolioPlantActionMenu();
+    });
+    window.addEventListener("resize", closePortfolioPlantActionMenu);
+    window.addEventListener("scroll", closePortfolioPlantActionMenu, true);
+    _portfolioActionMenuWired = true;
+  }
+
+  return menu;
+}
+
+function positionPortfolioPlantActionMenu(menu, button) {
+  if (!menu || !button) return;
+
+  const rect = button.getBoundingClientRect();
+  menu.classList.remove("hidden");
+
+  const width = menu.offsetWidth || 260;
+  const height = menu.offsetHeight || 320;
+  const margin = 12;
+
+  let left = rect.left;
+  let top = rect.bottom + 8;
+
+  if (left + width > window.innerWidth - margin) left = window.innerWidth - width - margin;
+  if (top + height > window.innerHeight - margin) top = rect.top - height - 8;
+
+  menu.style.left = `${Math.max(margin, left)}px`;
+  menu.style.top = `${Math.max(margin, top)}px`;
+}
+
+function buildPortfolioPlantActionItems() {
+  return [
+    { action: "open", icon: "fa-up-right-from-square", label: "Abrir usina / Ver supervisório" },
+    { action: "edit", icon: "fa-pen-to-square", label: "Editar dados da usina" },
+    { action: "devices", icon: "fa-microchip", label: "Gerenciar dispositivos" },
+    { type: "separator" },
+    { action: "inverters", icon: "fa-bolt", label: "Gerenciar inversores / strings" },
+    { action: "relay", icon: "fa-tower-broadcast", label: "Gerenciar relé" },
+    { action: "multimeter", icon: "fa-gauge-high", label: "Gerenciar multimedidor" },
+    { action: "trackers", icon: "fa-satellite-dish", label: "Gerenciar trackers" },
+    { type: "separator" },
+    { action: "events", icon: "fa-triangle-exclamation", label: "Ver eventos/alarmes" },
+    { action: "datastudio", icon: "fa-flask-vial", label: "Abrir Data Studio da usina" },
+    { action: "command", icon: "fa-terminal", label: "Console de comandos" }
+  ];
+}
+
+function renderPortfolioPlantActionMenu(menu, plantId, plantName) {
+  menu.innerHTML = "";
+  const header = document.createElement("div");
+  header.className = "portfolio-plant-action-menu__header";
+  header.textContent = plantName || `Usina ${plantId}`;
+  menu.appendChild(header);
+
+  buildPortfolioPlantActionItems().forEach(item => {
+    if (item.type === "separator") {
+      const sep = document.createElement("div");
+      sep.className = "portfolio-plant-action-menu__separator";
+      sep.setAttribute("role", "separator");
+      menu.appendChild(sep);
+      return;
+    }
+
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "portfolio-plant-action-menu__item";
+    btn.setAttribute("role", "menuitem");
+    btn.dataset.action = item.action;
+    btn.innerHTML = `<i class="fa-solid ${item.icon}" aria-hidden="true"></i><span>${escapeHtml(item.label)}</span>`;
+    btn.addEventListener("click", () => runPortfolioPlantAction(item.action, plantId, plantName));
+    menu.appendChild(btn);
+  });
+}
+
+function openPortfolioPlantActionMenu(event, plantId, plantName) {
+  event?.preventDefault();
+  event?.stopPropagation();
+
+  const button = event?.currentTarget;
+  const menu = ensurePortfolioPlantActionMenu();
+  const sameButtonOpen =
+    _portfolioActionMenuButton === button &&
+    !menu.classList.contains("hidden");
+
+  closePortfolioPlantActionMenu();
+  if (sameButtonOpen) return;
+
+  _portfolioActionMenuButton = button;
+  _portfolioActionMenuContext = { plantId, plantName };
+  renderPortfolioPlantActionMenu(menu, plantId, plantName);
+  button?.setAttribute("aria-expanded", "true");
+  positionPortfolioPlantActionMenu(menu, button);
+}
+
+function closePortfolioPlantActionMenu() {
+  const menu = document.getElementById("portfolioPlantActionMenu");
+  if (menu) {
+    menu.classList.add("hidden");
+    menu.innerHTML = "";
+  }
+  _portfolioActionMenuButton?.setAttribute("aria-expanded", "false");
+  _portfolioActionMenuButton = null;
+  _portfolioActionMenuContext = null;
+}
+
+function openPortfolioEventsForPlant(plantId) {
+  wireEventsFiltersOnce();
+  populateEventsPlantSelect(lastValidPlants);
+
+  const ui = getEventsUIElements();
+  if (ui.plantSelect) ui.plantSelect.value = String(plantId);
+  if (ui.equipmentSelect) ui.equipmentSelect.value = "all";
+  if (ui.desc) ui.desc.value = "";
+  if (ui.typeSelect) ui.typeSelect.value = "all";
+  if (ui.statusSelect) ui.statusSelect.value = "all";
+  if (ui.severitySelect) ui.severitySelect.value = "all";
+  ensureDefaultEventsDateTimes();
+
+  EVENTS_STATE.page = 1;
+  showView("events");
+  void refreshEventsEquipmentOptionsForPlant(plantId);
+}
+
+function openPortfolioDataStudioForPlant(plantId) {
+  showView("datastudio");
+  wireDataStudioOnce();
+  populateDataStudioPlantSelect(lastValidPlants);
+
+  const ui = getDataStudioUIElements();
+  if (ui.plantSelect) ui.plantSelect.value = String(plantId);
+  if (ui.dataKindSelect) ui.dataKindSelect.value = "all";
+  if (ui.sourceSelect) ui.sourceSelect.value = "all";
+  if (ui.searchInput) ui.searchInput.value = "";
+
+  DATASTUDIO_STATE.selectedPlantId = String(plantId);
+  DATASTUDIO_STATE.selectedTags = [];
+  DATASTUDIO_STATE.availableTags = [];
+  DATASTUDIO_STATE.selectionId = null;
+  DATASTUDIO_STATE.chartData = null;
+  DATASTUDIO_STATE.selectedDataKind = "all";
+  DATASTUDIO_STATE.selectedSource = "all";
+  DATASTUDIO_STATE.selectedContext = "all";
+  DATASTUDIO_STATE.searchText = "";
+  DATASTUDIO_STATE.catalogOpen = true;
+  DATASTUDIO_STATE.catalogConfirmed = false;
+  DATASTUDIO_STATE.forceHeroState = false;
+
+  if (ui.contextSelect) {
+    ui.contextSelect.innerHTML = "";
+    const opt = document.createElement("option");
+    opt.value = "all";
+    opt.textContent = "Todos contextos";
+    ui.contextSelect.appendChild(opt);
+    ui.contextSelect.value = "all";
+  }
+
+  renderDataStudioTagsTable([]);
+  renderDataStudioChart(null);
+  updateSelectedTagsCounter();
+  updateDataStudioExportButton();
+  updateDataStudioStageUI();
+  fetchDataStudioTags();
+}
+
+function runPortfolioPlantAction(action, plantId, plantName) {
+  closePortfolioPlantActionMenu();
+
+  switch (action) {
+    case "open":
+      navigateToPlantPage(plantId);
+      break;
+    case "edit":
+      openPlantEditModal(null, plantId, plantName, { mode: "plant" });
+      break;
+    case "devices":
+      openPlantEditModal(null, plantId, plantName, { mode: "devices" });
+      break;
+    case "inverters":
+      navigateToPlantPage(plantId, { hash: "#sec-inverters" });
+      break;
+    case "relay":
+      navigateToPlantPage(plantId, { hash: "#sec-relay" });
+      break;
+    case "multimeter":
+      navigateToPlantPage(plantId, { hash: "#sec-multimeter" });
+      break;
+    case "trackers":
+      navigateToPlantPage(plantId, { hash: "#sec-trackers" });
+      break;
+    case "events":
+      openPortfolioEventsForPlant(plantId);
+      break;
+    case "datastudio":
+      openPortfolioDataStudioForPlant(plantId);
+      break;
+    case "command":
+      navigateToPlantPage(plantId, { action: "command" });
+      break;
+  }
+}
 
 function portfolioSetView(view) {
   _portfolioCurrentView = view;
@@ -3429,7 +4113,7 @@ function renderPortfolioCards(plants) {
 
   validPlants.forEach(plant => {
     const plantId = plant.power_plant_id ?? plant.plant_id ?? plant.id;
-    const plantName = plant.power_plant_name ?? plant.plant_name ?? plant.name ?? "\u2014";
+    const plantName = String(plant.power_plant_name ?? plant.plant_name ?? plant.name ?? "\u2014");
 
     const alarmSeverity = normalizeAlarmSeverity(lastAlarmSeverityByPlant.get(plantId))
       || normalizeAlarmSeverity(lastAlarmSeverityByPlant.get(plantName)) || null;
@@ -3469,7 +4153,7 @@ function renderPortfolioCards(plants) {
     card.innerHTML = `
       <div class="plant-card__top">
         <div class="${iconClass}"><i class="fa-solid fa-seedling"></i></div>
-        <div class="plant-card__name">${plantName}</div>
+        <div class="plant-card__name">${escapeHtml(plantName)}</div>
       </div>
       <div class="plant-card__stats">
         <div class="plant-card__stat">
@@ -3508,10 +4192,22 @@ function renderPortfolioCards(plants) {
         </div>
       </div>
       <div class="plant-card__status">
+        <button class="plant-card__edit-btn" type="button" data-plant-id="${escapeHtml(plantId)}" title="Ações da usina" aria-label="Ações da usina" aria-haspopup="menu" aria-expanded="false">
+          <i class="fa-solid fa-ellipsis"></i>
+        </button>
         <div class="${statusDotClass}"></div>
         <span class="plant-card__status-text">${statusText}</span>
       </div>
     `;
+
+    card.querySelector(".plant-card__edit-btn")?.addEventListener("click", event => {
+      openPortfolioPlantActionMenu(event, plantId, card.dataset.plantName || plantName);
+    });
+    card.querySelector(".plant-card__edit-btn")?.addEventListener("keydown", event => {
+      if (event.key === "Enter" || event.key === " ") {
+        openPortfolioPlantActionMenu(event, plantId, card.dataset.plantName || plantName);
+      }
+    });
 
     const openPlant = () => {
       if (plantId != null) window.location.href = `plant.html?plant_id=${encodeURIComponent(plantId)}`;
