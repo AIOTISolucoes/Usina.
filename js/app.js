@@ -1872,7 +1872,7 @@ function renderPortfolioTable(plants) {
       null;
     const plantIconClass = alarmSeverity
       ? `plant-icon plant-icon--${alarmSeverity}`
-      : "plant-icon plant-icon--ok";
+      : (plantState.kind === "standby" ? "plant-icon plant-icon--standby" : "plant-icon plant-icon--ok");
 
     tr.innerHTML = `
       <td>
@@ -4103,9 +4103,11 @@ function updatePortfolioCardAlarms() {
       || normalizeAlarmSeverity(lastAlarmSeverityByPlant.get(Number(pid)))
       || null;
     const isOff = card.classList.contains("plant-card--offline");
-    card.className = `plant-card${isOff ? " plant-card--offline" : ""}${sev ? ` alarm-${sev}` : ""}`;
+    const kind = card.dataset.plantKind || "";
+    const isStandby = !sev && kind === "standby";
+    card.className = `plant-card${isOff ? " plant-card--offline" : ""}${sev ? ` alarm-${sev}` : ""}${isStandby ? " standby-card" : ""}`;
     const icon = card.querySelector(".plant-card__icon");
-    if (icon) icon.className = sev ? `plant-card__icon alarm-${sev}` : "plant-card__icon";
+    if (icon) icon.className = sev ? `plant-card__icon alarm-${sev}` : `plant-card__icon${isStandby ? " standby-icon" : ""}`;
   });
 }
 
@@ -4151,8 +4153,10 @@ function renderPortfolioCards(plants) {
 
     const offlineClass = isOffline ? " plant-card--offline" : "";
     const alarmSuffix  = alarmSeverity ? ` alarm-${alarmSeverity}` : "";
-    const iconClass    = alarmSeverity ? `plant-card__icon alarm-${alarmSeverity}` : "plant-card__icon";
-    const cardClass    = `plant-card${offlineClass}${alarmSuffix}`;
+    const standbyIcon  = (!alarmSeverity && plantState.kind === "standby") ? " standby-icon" : "";
+    const iconClass    = alarmSeverity ? `plant-card__icon alarm-${alarmSeverity}` : `plant-card__icon${standbyIcon}`;
+    const standbyCard  = (!alarmSeverity && plantState.kind === "standby") ? " standby-card" : "";
+    const cardClass    = `plant-card${offlineClass}${alarmSuffix}${standbyCard}`;
     const canvasId = "mini-chart-" + plantId;
 
     const card = document.createElement("div");
@@ -4161,6 +4165,7 @@ function renderPortfolioCards(plants) {
     card.setAttribute("tabindex", "0");
     card.dataset.plantId = plantId;
     card.dataset.plantName = plantName;
+    card.dataset.plantKind = plantState.kind;
 
     card.innerHTML = `
       <div class="plant-card__top">
