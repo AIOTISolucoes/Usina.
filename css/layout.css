@@ -3435,3 +3435,31 @@ body.plant-edit-modal-open {
     grid-column: 1 / -1;
   }
 }
+
+/* === STANDBY (amarelo) — card view === */
+.plant-card__icon.standby-icon {
+  border-color: rgba(255, 200, 60, 0.50);
+  color: #ffd84d;
+  background: radial-gradient(circle, rgba(255,200,60,0.18) 0%, rgba(255,200,60,0.04) 100%);
+  box-shadow: 0 0 12px rgba(255,200,60,0.18), 0 0 4px rgba(255,200,60,0.08) inset;
+}
+
+/* === STANDBY (amarelo) — table/list view === */
+.plant-icon--standby {
+  color: #ffd84d;
+  box-shadow:
+    0 0 0 1.5px rgba(255, 216, 77, 0.45),
+    0 0 12px rgba(255, 216, 77, 0.50),
+    0 0 22px rgba(255, 216, 77, 0.14),
+    inset 0 0 5px rgba(255, 216, 77, 0.15);
+}
+
+/* === STANDBY card border amarelo sutil === */
+.plant-card.standby-card {
+  border-color: rgba(255, 200, 60, 0.22);
+  border-top-color: rgba(255, 200, 60, 0.35);
+}
+.plant-card.standby-card::before {
+  background: linear-gradient(90deg, transparent, rgba(255,200,60,0.40), transparent);
+}
+}
