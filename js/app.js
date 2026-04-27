@@ -1896,7 +1896,9 @@ function renderPortfolioTable(plants) {
       <td style="text-align:center; white-space:nowrap;">
         <button class="plant-action-btn" title="Ações da usina" aria-label="Ações da usina" aria-haspopup="menu" aria-expanded="false" data-plant-id="${plantId}" style="margin-right:6px;">
           <svg viewBox="0 0 18 18" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-            <path d="M10.5 1.5 L4 10 L8.5 10 L7.5 16.5 L14 8 L9.5 8 Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" stroke-linecap="round" fill="currentColor" fill-opacity="0.18"/>
+            <path d="M10.5 3.5 L2.5 11.5 L2 15.5 L6 15 L14 7 Z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" stroke-linecap="round" fill="currentColor" fill-opacity="0.12"/>
+            <path d="M8.5 5.5 L12 9" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+            <path d="M13 2.5 L15 4.5 L14 7 L10.5 3.5 Z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" fill="currentColor" fill-opacity="0.3"/>
           </svg>
         </button>
         <button class="plant-link-btn" title="Abrir usina" data-plant-id="${plantId}">
@@ -4204,7 +4206,9 @@ function renderPortfolioCards(plants) {
       <div class="plant-card__status">
         <button class="plant-card__edit-btn" type="button" data-plant-id="${escapeHtml(plantId)}" title="Ações da usina" aria-label="Ações da usina" aria-haspopup="menu" aria-expanded="false">
           <svg viewBox="0 0 18 18" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-            <path d="M10.5 1.5 L4 10 L8.5 10 L7.5 16.5 L14 8 L9.5 8 Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" stroke-linecap="round" fill="currentColor" fill-opacity="0.18"/>
+            <path d="M10.5 3.5 L2.5 11.5 L2 15.5 L6 15 L14 7 Z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" stroke-linecap="round" fill="currentColor" fill-opacity="0.12"/>
+            <path d="M8.5 5.5 L12 9" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+            <path d="M13 2.5 L15 4.5 L14 7 L10.5 3.5 Z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" fill="currentColor" fill-opacity="0.3"/>
           </svg>
         </button>
         <div class="${statusDotClass}"></div>
