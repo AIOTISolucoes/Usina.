@@ -3053,44 +3053,90 @@ tbody tr:hover td {
 /* === PLANT EDIT BUTTON === */
 .plant-card__edit-btn {
   position: absolute;
-  bottom: 10px;
-  left: 10px;
-  width: 28px;
-  height: 26px;
+  top: 10px;
+  right: 10px;
+  width: 30px;
+  height: 30px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  background: transparent;
-  border: none;
-  color: var(--text-muted);
-  font-size: 14px;
+  background: rgba(57,229,140,0.07);
+  border: 1px solid rgba(57,229,140,0.28);
+  color: #39e58c;
   cursor: pointer;
   padding: 0;
-  border-radius: 6px;
-  opacity: 0;
-  transition: opacity 0.2s, background 0.2s, color 0.2s;
-  z-index: 10;
-}
-
-.plant-card:hover .plant-card__edit-btn,
-.plant-card__edit-btn:focus-visible {
+  border-radius: 8px;
   opacity: 1;
+  transition: background 0.2s, border-color 0.2s, box-shadow 0.2s, transform 0.15s, color 0.2s;
+  z-index: 10;
+  box-shadow: 0 0 8px rgba(57,229,140,0.12), 0 0 2px rgba(57,229,140,0.08) inset;
 }
 
 .plant-card__edit-btn:hover,
 .plant-card__edit-btn:focus-visible {
-  background: rgba(255,255,255,0.08);
-  color: var(--text-primary);
+  background: rgba(57,229,140,0.16);
+  border-color: rgba(57,229,140,0.65);
+  color: #7fffc4;
+  box-shadow: 0 0 18px rgba(57,229,140,0.38), 0 0 6px rgba(57,229,140,0.18) inset;
+  transform: scale(1.1);
   outline: none;
 }
 
-.plant-card__edit-btn i {
+.plant-card__edit-btn svg {
+  width: 14px;
+  height: 14px;
   pointer-events: none;
+  filter: drop-shadow(0 0 3px rgba(57,229,140,0.55));
+}
+
+.plant-card__edit-btn:hover svg,
+.plant-card__edit-btn:focus-visible svg {
+  filter: drop-shadow(0 0 5px rgba(57,229,140,0.85));
+}
+
+/* botão de ação na lista */
+.plant-action-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  background: rgba(57,229,140,0.07);
+  border: 1px solid rgba(57,229,140,0.28);
+  border-radius: 7px;
+  color: #39e58c;
+  cursor: pointer;
+  padding: 0;
+  transition: background 0.2s, border-color 0.2s, box-shadow 0.2s, transform 0.15s, color 0.2s;
+  box-shadow: 0 0 7px rgba(57,229,140,0.1);
+  vertical-align: middle;
+}
+
+.plant-action-btn:hover,
+.plant-action-btn:focus-visible {
+  background: rgba(57,229,140,0.18);
+  border-color: rgba(57,229,140,0.65);
+  color: #7fffc4;
+  box-shadow: 0 0 16px rgba(57,229,140,0.38), 0 0 5px rgba(57,229,140,0.15) inset;
+  transform: scale(1.1);
+  outline: none;
+}
+
+.plant-action-btn svg {
+  width: 13px;
+  height: 13px;
+  pointer-events: none;
+  filter: drop-shadow(0 0 3px rgba(57,229,140,0.5));
+}
+
+.plant-action-btn:hover svg,
+.plant-action-btn:focus-visible svg {
+  filter: drop-shadow(0 0 5px rgba(57,229,140,0.85));
 }
 
 @media (hover: none) {
   .plant-card__edit-btn {
-    opacity: 0.82;
+    opacity: 1;
   }
 }
 
