@@ -14,9 +14,14 @@ let PLANT_STATE = {
 // ======================================================
 // CONFIG (ONLINE/OFFLINE)
 // ======================================================
-const INVERTER_ONLINE_AFTER_MS = 15 * 60 * 1000; // 15 min
-const INVERTER_NO_COMM_AFTER_MS = 15 * 60 * 1000; // 15 min
-const STRING_STALE_AFTER_MS = 15 * 60 * 1000;
+const MINUTE_MS = 60 * 1000;
+
+const INVERTER_OFFLINE_AFTER_MINUTES = 25;
+const STRING_STALE_AFTER_MINUTES = 25;
+
+const INVERTER_ONLINE_AFTER_MS = INVERTER_OFFLINE_AFTER_MINUTES * MINUTE_MS;
+const INVERTER_NO_COMM_AFTER_MS = INVERTER_OFFLINE_AFTER_MINUTES * MINUTE_MS;
+const STRING_STALE_AFTER_MS = STRING_STALE_AFTER_MINUTES * MINUTE_MS;
 
 // ======================================================
 // FUNÇÕES AUXILIARES
@@ -517,7 +522,20 @@ function renderDeviceCommandControl(deviceType, deviceId, currentState = "off") 
   const key = getDeviceKey(safeType, safeId);
   return `
     <div class="device-command-control ${stateClass}" data-device-key="${key}" data-device-type="${safeType}" data-device-id="${safeId}">
-      <button type="button" class="device-command-trigger" data-device-key="${key}" data-device-type="${safeType}" data-device-id="${safeId}" aria-label="Comandos do dispositivo"></button>
+      <button type="button" class="device-command-trigger" data-device-key="${key}" data-device-type="${safeType}" data-device-id="${safeId}" aria-label="Comandos do dispositivo">
+        <span class="device-command-switch" aria-hidden="true">
+          <svg class="device-command-switch-track" viewBox="0 0 72 40" preserveAspectRatio="none" focusable="false" aria-hidden="true">
+            <rect class="device-command-switch-track__outer" x="2" y="4" width="68" height="32" rx="16"></rect>
+            <rect class="device-command-switch-track__inner" x="4.5" y="6.5" width="63" height="27" rx="13.5"></rect>
+            <path class="device-command-switch-track__pulse" d="M14 21h10l4-6 6 12 5-8h18"></path>
+          </svg>
+          <span class="device-command-switch-thumb">
+            <svg class="device-command-switch-glyph" viewBox="0 0 24 24" focusable="false" aria-hidden="true">
+              <use href="#device-command-switch-glyph"></use>
+            </svg>
+          </span>
+        </span>
+      </button>
       <div class="device-command-popover" data-device-key="${key}">
         <button type="button" class="device-command-option device-command-option--on" data-device-type="${safeType}" data-device-id="${safeId}" data-device-key="${key}" data-action="on"><span class="dot"></span><span>ON</span></button>
         <button type="button" class="device-command-option device-command-option--off" data-device-type="${safeType}" data-device-id="${safeId}" data-device-key="${key}" data-action="off"><span class="dot"></span><span>OFF</span></button>
@@ -897,7 +915,6 @@ function wireDeviceCommandButtons(rootEl) {
       const deviceId = btn.dataset.deviceId || "";
       const action = btn.dataset.action || "";
       closeAllDeviceCommandMenus();
-      console.log("[device-command]", { deviceType, deviceId, action });
       openCommandAuthFlow({ deviceType, deviceId, action });
     });
   });
@@ -1871,7 +1888,7 @@ function ensureRelayUiScaffold() {
   }
 
   relayRow.classList.add("relay-row--table");
-  relayRow.style.gridTemplateColumns = "14px minmax(250px,1.45fr) minmax(150px,0.95fr) minmax(150px,0.95fr) minmax(150px,0.95fr) minmax(190px,1fr) 64px";
+  relayRow.style.gridTemplateColumns = "14px minmax(250px,1.45fr) minmax(150px,0.95fr) minmax(150px,0.95fr) minmax(150px,0.95fr) minmax(190px,1fr) 88px";
 
   let expandIcon = relayRow.querySelector("#relayExpandIcon");
   if (!expandIcon) {
@@ -2078,7 +2095,7 @@ function ensureMultimeterUiScaffold() {
   }
 
   row.classList.add("relay-row--table");
-  row.style.gridTemplateColumns = "14px minmax(250px,1.45fr) minmax(150px,0.95fr) minmax(150px,0.95fr) minmax(150px,0.95fr) minmax(190px,1fr) 64px";
+  row.style.gridTemplateColumns = "14px minmax(250px,1.45fr) minmax(150px,0.95fr) minmax(150px,0.95fr) minmax(150px,0.95fr) minmax(190px,1fr) 88px";
 
   const ensureMetricCell = (id, gridColumn) => {
     let el = row.querySelector(`#${id}`);
@@ -2123,7 +2140,12 @@ function ensureMultimeterUiScaffold() {
 function renderRelayCommandBar(deviceId, currentState = "off") {
   const wrap = document.getElementById("relayCommandBarWrap");
   if (!wrap) return;
-  const safeId = String(deviceId ?? "relay");
+  if (deviceId == null || !/^\d+$/.test(String(deviceId))) {
+    wrap.innerHTML = "";
+    wrap.style.display = "none";
+    return;
+  }
+  const safeId = String(deviceId);
   const normalizedState = currentState === "on" ? "on" : "off";
   setDevicePersistentState("relay", safeId, normalizedState);
   wrap.innerHTML = renderDeviceCommandControl("relay", safeId, normalizedState);
@@ -2137,7 +2159,12 @@ function renderRelayCommandBar(deviceId, currentState = "off") {
 function renderMultimeterCommandBar(deviceId) {
   const wrap = document.getElementById("multimeterCommandBarWrap");
   if (!wrap) return;
-  const safeId = String(deviceId ?? "multimeter");
+  if (deviceId == null || !/^\d+$/.test(String(deviceId))) {
+    wrap.innerHTML = "";
+    wrap.style.display = "none";
+    return;
+  }
+  const safeId = String(deviceId);
   wrap.innerHTML = renderDeviceCommandControl("multimeter", safeId, getDevicePersistentState("multimeter", safeId, "off"));
   wrap.style.display = "flex";
   wrap.style.alignItems = "center";
@@ -2167,7 +2194,7 @@ function renderRelayCard(relayItem) {
       detailsPanel.style.maxHeight = "0px";
     }
     renderRelayDetailsPanel(null);
-    renderRelayCommandBar("relay", "off");
+    renderRelayCommandBar(null, "off");
     return;
   }
 
@@ -2183,7 +2210,7 @@ function renderRelayCard(relayItem) {
     relayItem?.analog?.timestamp ??
     relayItem?.event?.timestamp ??
     null;
-  const deviceId = relayItem?.device_id ?? relayItem?.relay_id ?? "relay";
+  const deviceId = relayItem?.device_id ?? relayItem?.relay_id ?? null;
 
   // classes do row (para a bolinha)
   relayRow.classList.remove("online", "offline");
@@ -2226,7 +2253,7 @@ function renderMultimeterCard(item) {
     reactivePowerEl.textContent = "—";
     tsEl.textContent = "—";
     if (dot) dot.style.opacity = "0.65";
-    renderMultimeterCommandBar("multimeter");
+    renderMultimeterCommandBar(null);
     return;
   }
 
@@ -2237,7 +2264,7 @@ function renderMultimeterCard(item) {
   const reactivePower = pickDeviceMetricValue(item, analog, ["reactive_power_kvar", "power_reactive_kvar", "reactive_power", "reactive_power_var"]);
   const lastUpdate = item.last_update ?? item.timestamp ?? null;
 
-  renderMultimeterCommandBar(item?.device_id ?? item?.multimeter_id ?? "multimeter");
+  renderMultimeterCommandBar(item?.device_id ?? item?.multimeter_id ?? null);
 
   row.classList.remove("online", "offline");
   row.classList.add(isOnline ? "online" : "offline");
@@ -3212,7 +3239,6 @@ function setupInverterToggles() {
     row.classList.add("open");
     panel.classList.add("open");
     panel.style.opacity = "1";
-    panel.style.maxHeight = panel.scrollHeight + "px";
 
     // Mostra spinner enquanto carrega
     const stringsGrid = panel.querySelector(".strings-grid");
@@ -3223,6 +3249,8 @@ function setupInverterToggles() {
       stringsGrid.innerHTML = "";
       stringsGrid.appendChild(loader);
     }
+
+    panel.style.maxHeight = panel.scrollHeight + "px";
 
     refreshStringsForRealInverter(inverterRealId).finally(() => {
       // ✅ renderiza extras (chips amarelos) abaixo das strings
@@ -3770,56 +3798,188 @@ function initTrackersPanel() {
   setTrackersCollapsed(true);
 }
 
+function scrollPlantSectionTarget(target) {
+  if (!target) return;
+
+  if (target === "#sec-trackers") {
+    const section = document.getElementById("trackersSection");
+    const tab = document.getElementById("trackersTabToggle");
+    if (!section) return;
+
+    TRACKERS_USER_OPENED = true;
+    setTrackersSectionVisible(true);
+    setTrackersCollapsed(false);
+    TRACKERS_LAST_HAS_DATA = true;
+    tab?.setAttribute("aria-expanded", "true");
+
+    const anchor = document.querySelector(target);
+    if (anchor) {
+      anchor.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+
+    requestAnimationFrame(() => {
+      applyTrackersTransform();
+      if (Array.isArray(TRACKERS_DATA) && TRACKERS_DATA.length) {
+        renderTrackersPanel();
+      }
+    });
+
+    return;
+  }
+
+  const el = document.querySelector(target);
+  if (!el) return;
+  el.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
 function setupDeviceNav() {
   const btns = document.querySelectorAll(".device-nav-btn[data-target]");
   if (!btns.length) return;
 
-  function scrollToTarget(target) {
-    if (!target) return;
-
-    if (target === "#sec-trackers") {
-      const section = document.getElementById("trackersSection");
-      const tab = document.getElementById("trackersTabToggle");
-      if (!section) return;
-
-      TRACKERS_USER_OPENED = true;
-      setTrackersSectionVisible(true);
-      setTrackersCollapsed(false);
-      TRACKERS_LAST_HAS_DATA = true;
-      tab?.setAttribute("aria-expanded", "true");
-
-      const anchor = document.querySelector(target);
-      if (anchor) {
-        anchor.scrollIntoView({ behavior: "smooth", block: "start" });
-      }
-
-      requestAnimationFrame(() => {
-        applyTrackersTransform();
-        if (Array.isArray(TRACKERS_DATA) && TRACKERS_DATA.length) {
-          renderTrackersPanel();
-        }
-      });
-
-      return;
-    }
-
-    const el = document.querySelector(target);
-    if (!el) return;
-    el.scrollIntoView({ behavior: "smooth", block: "start" });
-  }
-
   btns.forEach((btn) => {
     btn.addEventListener("click", (e) => {
       e.preventDefault();
-      scrollToTarget(btn.getAttribute("data-target"));
+      scrollPlantSectionTarget(btn.getAttribute("data-target"));
     });
   });
 
   if (location.hash) {
     const hash = location.hash;
-    setTimeout(() => scrollToTarget(hash), 0);
+    setTimeout(() => scrollPlantSectionTarget(hash), 0);
   }
 }
+
+function buildCommandDeviceOptions() {
+  const out = [];
+  const seen = new Set();
+  const add = (deviceType, deviceId, label) => {
+    if (deviceId == null || deviceId === "") return;
+    const key = `${deviceType}:${deviceId}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push({
+      deviceType,
+      deviceId: String(deviceId),
+      label: label || `${String(deviceType).toUpperCase()} ${deviceId}`,
+    });
+  };
+
+  const inverters = Array.isArray(PLANT_CATALOG.inverters) && PLANT_CATALOG.inverters.length
+    ? PLANT_CATALOG.inverters
+    : INVERTERS_REALTIME;
+
+  (Array.isArray(inverters) ? inverters : []).forEach((inv, index) => {
+    const id = getInverterRealId(inv);
+    add("inverter", id, getInverterDisplayName(inv, index));
+  });
+
+  const relayId = RELAY_REALTIME?.device_id ?? RELAY_REALTIME?.relay_id ?? null;
+  add("relay", relayId, RELAY_REALTIME?.device_name || RELAY_REALTIME?.name || "Relé");
+
+  const meterId = MULTIMETER_REALTIME?.device_id ?? MULTIMETER_REALTIME?.multimeter_id ?? null;
+  add("multimeter", meterId, MULTIMETER_REALTIME?.device_name || MULTIMETER_REALTIME?.name || "Multimedidor");
+
+  return out;
+}
+
+function ensureCommandDevicePickerModal() {
+  if (document.getElementById("cmdDevicePickerOverlay")) return;
+
+  const el = document.createElement("div");
+  el.innerHTML = `
+    <div id="cmdDevicePickerOverlay" class="cmd-console-overlay hidden" role="dialog" aria-modal="true" aria-label="Selecionar dispositivo para comando">
+      <div class="cmd-console cmd-device-picker">
+        <div class="cmd-console__header">
+          <div class="cmd-console__title-group">
+            <div class="cmd-console__icon"><i class="fa-solid fa-terminal"></i></div>
+            <div>
+              <div class="cmd-console__label">Console de Comandos</div>
+              <div class="cmd-console__device-name">Selecione um dispositivo</div>
+            </div>
+          </div>
+          <button class="cmd-console__close" id="cmdDevicePickerClose" aria-label="Fechar seleção">
+            <i class="fa-solid fa-xmark"></i>
+          </button>
+        </div>
+        <div id="cmdDevicePickerList" class="cmd-device-picker__list"></div>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(el);
+
+  const overlay = document.getElementById("cmdDevicePickerOverlay");
+  overlay?.addEventListener("click", (event) => {
+    if (event.target === overlay) closeCommandDevicePicker();
+  });
+  document.getElementById("cmdDevicePickerClose")?.addEventListener("click", closeCommandDevicePicker);
+}
+
+function closeCommandDevicePicker() {
+  document.getElementById("cmdDevicePickerOverlay")?.classList.add("hidden");
+  document.body.style.overflow = "";
+}
+
+function openCommandDevicePicker() {
+  ensureCommandConsoleModal();
+  ensureDeviceCommandModals();
+  ensureCommandDevicePickerModal();
+
+  const overlay = document.getElementById("cmdDevicePickerOverlay");
+  const list = document.getElementById("cmdDevicePickerList");
+  if (!overlay || !list) return;
+
+  const devices = buildCommandDeviceOptions();
+  list.innerHTML = "";
+
+  if (!devices.length) {
+    list.innerHTML = `
+      <div class="cmd-device-picker__empty">
+        Nenhum dispositivo com comando real foi encontrado para esta usina.
+      </div>
+    `;
+  } else {
+    devices.forEach((device) => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "cmd-device-picker__item";
+      const type = document.createElement("span");
+      type.className = "cmd-device-picker__type";
+      type.textContent = String(device.deviceType).toUpperCase();
+      const label = document.createElement("span");
+      label.className = "cmd-device-picker__label";
+      label.textContent = device.label;
+      const id = document.createElement("span");
+      id.className = "cmd-device-picker__id";
+      id.textContent = `ID ${device.deviceId}`;
+      btn.append(type, label, id);
+      btn.addEventListener("click", () => {
+        closeCommandDevicePicker();
+        openCommandConsole({
+          deviceType: device.deviceType,
+          deviceId: device.deviceId,
+        });
+      });
+      list.appendChild(btn);
+    });
+  }
+
+  overlay.classList.remove("hidden");
+  document.body.style.overflow = "hidden";
+}
+
+function handleInitialPlantAction() {
+  const action = new URLSearchParams(window.location.search).get("action");
+  if (action === "command") {
+    setTimeout(openCommandDevicePicker, 120);
+  }
+}
+
+window.PlantActions = {
+  ...(window.PlantActions || {}),
+  openCommandDevicePicker,
+  openCommandConsole,
+  scrollToSection: scrollPlantSectionTarget,
+};
 
 // ======================================================
 // INIT
@@ -3834,8 +3994,8 @@ document.addEventListener("DOMContentLoaded", async () => {
   setupDeviceNav();
   setupPlantAlarmMenu();
   renderAlarmMenuButton();
-  renderRelayCommandBar("relay");
-  renderMultimeterCommandBar("multimeter");
+  renderRelayCommandBar(null);
+  renderMultimeterCommandBar(null);
   wireDeviceCommandButtons(document);
   document.addEventListener("click", () => closeAllDeviceCommandMenus());
   document.addEventListener("keydown", (e) => {
@@ -3868,6 +4028,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
 
     await refreshPromise;
+    handleInitialPlantAction();
 
     setInterval(() => {
       void refreshRealtimeEverything();
