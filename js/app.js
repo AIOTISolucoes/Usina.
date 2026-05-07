@@ -1966,13 +1966,52 @@ function dsContextMatches(tagContext, selectedContext) {
 
   const tagNorm = dsNormalizeContextText(tagContext);
   const selectedNorm = dsNormalizeContextText(selectedContext);
-  if (!tagNorm) return false;
+  if (!tagNorm || !selectedNorm) return false;
 
-  const tagNum = tagNorm.match(/\d+/)?.[0] || null;
-  const selectedNum = selectedNorm.match(/\d+/)?.[0] || null;
-  if (tagNum && selectedNum && tagNum === selectedNum) return true;
+  return tagNorm === selectedNorm ||
+         tagNorm.includes(selectedNorm) ||
+         selectedNorm.includes(tagNorm);
+}
 
-  return tagNorm.includes(selectedNorm) || selectedNorm.includes(tagNorm);
+function dsTagGroup(tag) {
+  const pathname = String(tag?.pathname || tag?.path_name || "");
+  const deviceType = String(tag?.device_type || "").toLowerCase();
+
+  if (pathname.startsWith("PLANT.")) return "plant";
+  if (pathname.startsWith("WEATHER_") || deviceType.includes("weather")) return "weather";
+  if (pathname.startsWith("METER_") || deviceType.includes("meter")) return "meter";
+  if (pathname.startsWith("RELAY_") || deviceType.includes("relay")) return "relay";
+  if (pathname.startsWith("INV_") || deviceType.includes("inverter")) return "inverter";
+  return "outro";
+}
+
+function dsSortTags(tags) {
+  const order = {
+    plant: 0,
+    weather: 1,
+    meter: 2,
+    relay: 3,
+    inverter: 4,
+    outro: 9
+  };
+
+  return [...(Array.isArray(tags) ? tags : [])].sort((a, b) => {
+    const ga = dsTagGroup(a);
+    const gb = dsTagGroup(b);
+
+    if ((order[ga] ?? 9) !== (order[gb] ?? 9)) {
+      return (order[ga] ?? 9) - (order[gb] ?? 9);
+    }
+
+    const ca = String(a?.context || "");
+    const cb = String(b?.context || "");
+    const c = ca.localeCompare(cb, "pt-BR", { sensitivity: "base", numeric: true });
+    if (c !== 0) return c;
+
+    const da = String(a?.description || a?.point_name || a?.pathname || "");
+    const db = String(b?.description || b?.point_name || b?.pathname || "");
+    return da.localeCompare(db, "pt-BR", { sensitivity: "base", numeric: true });
+  });
 }
 
 function getDataStudioUIElements() {
@@ -2039,9 +2078,19 @@ function renderSelectedTagsList() {
     const chip = document.createElement("div");
     chip.className = "ds-selected-tag-chip";
 
+    const CHIP_COLORS = [
+      '#1d9e75','#378add','#d4537e','#ef9f27',
+      '#7f77dd','#5dcaa5','#e24b4a','#639922',
+      '#ba7517','#185fa5','#993556','#0f6e56'
+    ];
+    const colorIdx = DATASTUDIO_STATE.selectedTags.indexOf(tag) % CHIP_COLORS.length;
+    const chipColor = CHIP_COLORS[Math.max(0, colorIdx)];
+    chip.style.setProperty('--ds-chip-color', chipColor);
+
     const label = `${valueOrDash(tag?.context)} • ${valueOrDash(tag?.point_name || tag?.description || tag?.pathname)}`;
     chip.innerHTML = `
-      <span class="ds-selected-tag-chip__text">${label}</span>
+      <span class="ds-selected-tag-chip__dot"></span>
+      <span class="ds-selected-tag-chip__text" title="${label}">${label}</span>
       <button type="button" class="ds-selected-tag-chip__remove" aria-label="Remover medida">×</button>
     `;
 
@@ -2062,7 +2111,7 @@ function populateDataStudioContextSelect(tags) {
   const prev = dsSafeTrim(contextSelect.value || DATASTUDIO_STATE.selectedContext) || "all";
   const contexts = Array.from(new Set((Array.isArray(tags) ? tags : [])
     .map((t) => dsSafeTrim(t?.context))
-    .filter(Boolean))).sort((a, b) => a.localeCompare(b, "pt-BR"));
+    .filter(Boolean)));
 
   contextSelect.innerHTML = "";
   const allOpt = document.createElement("option");
@@ -2168,15 +2217,49 @@ function renderDataStudioTagsTable(tags) {
     tr.classList.add("ds-table-row-clickable");
     const checked = isTagSelected(tag) ? "checked" : "";
 
+    const isAlarm = (tag?.data_kind === 'discrete') || (tag?.description || '').startsWith('âš ');
+    const isPlant = (tag?.context || '').toUpperCase().startsWith('PLANT') ||
+                    (tag?.pathname || '').startsWith('PLANT.');
+    const isWeather = (tag?.device_type || '').toLowerCase().includes('weather') ||
+                      (tag?.pathname || '').toLowerCase().includes('weather');
+    const isMeter   = (tag?.device_type || '').toLowerCase().includes('meter') ||
+                      (tag?.context || '').toLowerCase().includes('medidor') ||
+                      (tag?.context || '').toLowerCase().includes('meter');
+    const isRelay = (tag?.device_type || '').toLowerCase().includes('relay') ||
+                    (tag?.pathname || '').startsWith('RELAY_');
+
+    const svgInverter = `<svg width="12" height="12" viewBox="0 0 12 12" fill="none"><rect x="1" y="3" width="10" height="7" rx="1.5" stroke="rgba(57,229,140,.8)" stroke-width="1.2"/><path d="M4 3V2a2 2 0 014 0v1" stroke="rgba(57,229,140,.8)" stroke-width="1.2"/><line x1="4" y1="6.5" x2="8" y2="6.5" stroke="rgba(57,229,140,.6)" stroke-width="1"/></svg>`;
+    const svgPlant   = `<svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M6 10V5M3 7l3-3 3 3" stroke="rgba(55,138,221,.9)" stroke-width="1.2" stroke-linecap="round"/><rect x="1" y="1" width="4" height="3" rx="0.8" stroke="rgba(55,138,221,.7)" stroke-width="1"/><rect x="7" y="1" width="4" height="3" rx="0.8" stroke="rgba(55,138,221,.7)" stroke-width="1"/></svg>`;
+    const svgWeather = `<svg width="12" height="12" viewBox="0 0 12 12" fill="none"><circle cx="6" cy="5" r="2.5" stroke="rgba(239,159,39,.8)" stroke-width="1.2"/><line x1="6" y1="1" x2="6" y2="2" stroke="rgba(239,159,39,.7)" stroke-width="1" stroke-linecap="round"/><line x1="6" y1="8" x2="6" y2="9" stroke="rgba(239,159,39,.7)" stroke-width="1" stroke-linecap="round"/><line x1="2" y1="5" x2="3" y2="5" stroke="rgba(239,159,39,.7)" stroke-width="1" stroke-linecap="round"/><line x1="9" y1="5" x2="10" y2="5" stroke="rgba(239,159,39,.7)" stroke-width="1" stroke-linecap="round"/></svg>`;
+    const svgMeter   = `<svg width="12" height="12" viewBox="0 0 12 12" fill="none"><rect x="1" y="2" width="10" height="8" rx="1.5" stroke="rgba(212,83,126,.8)" stroke-width="1.2"/><path d="M3.5 7.5 C3.5 5.5 8.5 5.5 8.5 7.5" stroke="rgba(212,83,126,.7)" stroke-width="1" fill="none"/><line x1="6" y1="7.5" x2="5" y2="5.5" stroke="rgba(212,83,126,.9)" stroke-width="1" stroke-linecap="round"/></svg>`;
+    const svgRelay   = `<svg width="12" height="12" viewBox="0 0 12 12" fill="none"><rect x="1" y="2.5" width="10" height="7" rx="1.3" stroke="rgba(57,229,140,.8)" stroke-width="1.1"/><line x1="3" y1="8" x2="8.5" y2="8" stroke="rgba(57,229,140,.75)" stroke-width="1.1" stroke-linecap="round"/><line x1="3" y1="8" x2="5" y2="5" stroke="rgba(57,229,140,.85)" stroke-width="1.1" stroke-linecap="round"/><line x1="3" y1="5" x2="8.5" y2="5" stroke="rgba(57,229,140,.35)" stroke-width=".9" stroke-dasharray="2 1.3" stroke-linecap="round"/></svg>`;
+    const svgAlarm   = `<svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M6 1.5L1.5 9.5h9L6 1.5z" stroke="rgba(239,159,39,.9)" stroke-width="1.2" stroke-linejoin="round"/><line x1="6" y1="5" x2="6" y2="7.5" stroke="rgba(239,159,39,.9)" stroke-width="1" stroke-linecap="round"/><circle cx="6" cy="9" r=".6" fill="rgba(239,159,39,.9)"/></svg>`;
+
+    let iconSvg = svgInverter;
+    let iconClass = 'analog';
+    if (isAlarm)        { iconSvg = svgAlarm;   iconClass = 'discrete'; }
+    else if (isPlant)   { iconSvg = svgPlant;   iconClass = 'plant'; }
+    else if (isWeather) { iconSvg = svgWeather; iconClass = 'analog'; }
+    else if (isMeter)   { iconSvg = svgMeter;   iconClass = 'analog'; }
+    else if (isRelay)   { iconSvg = svgRelay;   iconClass = 'analog'; }
+
+    const unitHtml = tag?.unit ? `<span class="ds-unit-badge">${tag.unit}</span>` : '<span style="opacity:.35">â€”</span>';
+    const descHtml = valueOrDash(tag?.description);
+
     tr.innerHTML = `
-      <td><input type="checkbox" data-ds-pathname="${pathname.replaceAll('"', '&quot;')}" ${checked}></td>
-      <td>${valueOrDash(tag?.context)}</td>
-      <td>${valueOrDash(tag?.description)}</td>
-      <td>${valueOrDash(tag?.source)}</td>
-      <td>${valueOrDash(tag?.data_kind)}</td>
-      <td>${valueOrDash(tag?.unit)}</td>
-      <td>${valueOrDash(tag?.power_plant_id)}</td>
-      <td class="ds-pathname-cell" title="${pathname.replaceAll('"', '&quot;')}">${valueOrDash(pathname)}</td>
+      <td><input type="checkbox" data-ds-pathname="${pathname.replaceAll('"','&quot;')}" ${checked}></td>
+      <td>
+        <div class="ds-tag-context-cell">
+          <span class="ds-tag-icon ds-tag-icon--${iconClass}">${iconSvg}</span>
+          ${valueOrDash(tag?.context)}
+        </div>
+      </td>
+      <td style="white-space:normal;line-height:1.35;font-size:11px;">${descHtml}</td>
+      <td style="display:none;">${valueOrDash(tag?.source)}</td>
+      <td style="display:none;">${valueOrDash(tag?.data_kind)}</td>
+      <td>${unitHtml}</td>
+      <td style="display:none;">${valueOrDash(tag?.power_plant_id)}</td>
+      <td class="ds-pathname-cell" title="${pathname.replaceAll('"','&quot;')}" style="display:none;">${valueOrDash(pathname)}</td>
     `;
 
     const checkbox = tr.querySelector("input[type='checkbox']");
@@ -2545,7 +2628,7 @@ async function fetchDataStudioTags() {
   if (dataKind && dataKind !== "all") params.set("data_kind", dataKind);
   if (source && source !== "all") params.set("source", source);
   if (q) params.set("q", q);
-  params.set("limit", "1000");
+  params.set("limit", "3000");
 
   const normalizeTagsResponse = (parsed) => {
     if (Array.isArray(parsed)) return parsed;
@@ -2565,15 +2648,21 @@ async function fetchDataStudioTags() {
 
     const allTags = normalizeTagsResponse(parsed);
     console.log("[DataStudio] TAGS RECEBIDAS:", allTags.length);
+    console.table(Object.entries(allTags.reduce((acc, tag) => {
+      const g = dsTagGroup(tag);
+      acc[g] = (acc[g] || 0) + 1;
+      return acc;
+    }, {})).map(([grupo, count]) => ({ grupo, count })));
 
-    populateDataStudioContextSelect(allTags);
+    const sortedTags = dsSortTags(allTags);
+    populateDataStudioContextSelect(sortedTags);
 
     const contextAfterPopulate = dsSafeTrim(contextSelect?.value || DATASTUDIO_STATE.selectedContext || "all");
     DATASTUDIO_STATE.selectedContext = contextAfterPopulate || "all";
 
     const filteredTags = (contextAfterPopulate && contextAfterPopulate !== "all")
-      ? allTags.filter((tag) => dsContextMatches(tag?.context, contextAfterPopulate))
-      : allTags;
+      ? sortedTags.filter((tag) => dsContextMatches(tag?.context, contextAfterPopulate))
+      : sortedTags;
 
     DATASTUDIO_STATE.availableTags = filteredTags;
     updateDataStudioContextInfo();
@@ -3181,9 +3270,10 @@ document.getElementById("btnAlarms")?.addEventListener("click", async () => {
 
 document.getElementById("btnEvents")?.addEventListener("click", () => showView("events"));
 document.getElementById("btnDataStudio")?.addEventListener("click", () => showView("datastudio"));
-document.getElementById("btnOS")?.addEventListener("click", () => {
-  window.location.href = "os.html";
-});
+// Botão OS desabilitado temporariamente — não disponível para clientes ainda
+// document.getElementById("btnOS")?.addEventListener("click", () => {
+//   window.location.href = "os.html";
+// });
 
 document.querySelectorAll(".tab-btn").forEach(btn => {
   btn.addEventListener("click", async () => {
@@ -3310,6 +3400,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   showView(savedView);
   syncTopSummaryLayout();
 
+  wirePortfolioControls();
   await refreshDashboard();
   setInterval(refreshDashboard, DASHBOARD_REFRESH_INTERVAL_MS);
 
@@ -3335,9 +3426,11 @@ document.addEventListener("DOMContentLoaded", async () => {
 // PORTFOLIO VIEW TOGGLE + SEARCH + CARD VIEW
 // =============================================================================
 
-let _portfolioCurrentView = "card";
+let _portfolioCurrentView = localStorage.getItem("portfolioView") || "card";
 let _portfolioMiniCharts = new Map();
 let _portfolioRenderGen = 0;
+const _miniChartDataCache = new Map(); // plantId → { ts, body }
+const _MINI_CHART_CACHE_TTL_MS = 5 * 60 * 1000;
 
 function portfolioSetView(view) {
   _portfolioCurrentView = view;
@@ -3351,7 +3444,10 @@ function portfolioSetView(view) {
   if (btnList) btnList.classList.toggle("active", view === "list");
   if (btnCard) btnCard.classList.toggle("active", view === "card");
   if (view === "card" && lastValidPlants.length > 0) {
-    renderPortfolioCards(lastValidPlants);
+    const _grid = document.getElementById("portfolioCardView");
+    if (!_grid || _grid.children.length === 0) {
+      renderPortfolioCards(lastValidPlants);
+    }
   }
 }
 
@@ -3417,9 +3513,12 @@ function renderPortfolioCards(plants) {
   _portfolioMiniCharts.forEach(chart => { try { chart.destroy(); } catch(e) {} });
   _portfolioMiniCharts.clear();
 
+  // Coleta (canvasId, plantId) para render de charts depois
+  const chartTargets = [];
+
   validPlants.forEach(plant => {
     const plantId = plant.power_plant_id ?? plant.plant_id ?? plant.id;
-    const plantName = plant.power_plant_name ?? plant.plant_name ?? plant.name ?? "—";
+    const plantName = plant.power_plant_name ?? plant.plant_name ?? plant.name ?? "\u2014";
 
     const alarmSeverity = normalizeAlarmSeverity(lastAlarmSeverityByPlant.get(plantId))
       || normalizeAlarmSeverity(lastAlarmSeverityByPlant.get(plantName)) || null;
@@ -3428,11 +3527,10 @@ function renderPortfolioCards(plants) {
     const activePower = plantState.activePower;
     const ratedPower = Number(plant.rated_power_kw ?? plant.rated_power_kwp ?? 0);
     const energyToday = plantState.energyToday;
-    const pr = plant.pr_daily_pct != null ? Number(plant.pr_daily_pct).toFixed(1) + "%" : "—";
-    const irr = plant.irradiance_wm2 != null ? Number(plant.irradiance_wm2).toFixed(0) + " W/m²" : "—";
-    const invAvail = plant.inverter_availability_pct != null ? Number(plant.inverter_availability_pct).toFixed(1) + "%" : "—";
+    const pr = plant.pr_daily_pct != null ? Number(plant.pr_daily_pct).toFixed(1) + "%" : "\u2014";
+    const irr = plant.irradiance_wm2 != null ? Number(plant.irradiance_wm2).toFixed(0) + " W/m\u00B2" : "\u2014";
+    const invAvail = plant.inverter_availability_pct != null ? Number(plant.inverter_availability_pct).toFixed(1) + "%" : "\u2014";
 
-    // Estado do card: offline (cinza), generating (verde), standby
     const isOffline = plantState.isOffline;
     const isGenerating = plantState.kind === "generating";
     let statusDotClass = "plant-card__status-dot";
@@ -3441,7 +3539,7 @@ function renderPortfolioCards(plants) {
       statusDotClass += " offline";
       statusText = "Sem dados";
     }
-    else if (isGenerating){ statusDotClass += " generating"; statusText = "Em geração"; }
+    else if (isGenerating){ statusDotClass += " generating"; statusText = "Em gera\u00E7\u00E3o"; }
     else                  { statusDotClass += " standby";   statusText = "Aguardando"; }
 
     const offlineClass = isOffline ? " plant-card--offline" : "";
@@ -3476,11 +3574,11 @@ function renderPortfolioCards(plants) {
           <div class="plant-card__stat-value">${energyToday.toFixed(1)} kWh</div>
         </div>
         <div class="plant-card__stat">
-          <div class="plant-card__stat-label"><i class="fa-solid fa-gauge-high"></i> PR Diário</div>
+          <div class="plant-card__stat-label"><i class="fa-solid fa-gauge-high"></i> PR Di\u00E1rio</div>
           <div class="plant-card__stat-value">${pr}</div>
         </div>
         <div class="plant-card__stat">
-          <div class="plant-card__stat-label"><i class="fa-solid fa-sun"></i> Irradiância</div>
+          <div class="plant-card__stat-label"><i class="fa-solid fa-sun"></i> Irradi\u00E2ncia</div>
           <div class="plant-card__stat-value">${irr}</div>
         </div>
         <div class="plant-card__stat">
@@ -3513,178 +3611,243 @@ function renderPortfolioCards(plants) {
     });
 
     grid.appendChild(card);
-
-    requestAnimationFrame(() => {
-      if (renderGen !== _portfolioRenderGen) return;
-      const canvas = document.getElementById(canvasId);
-      if (!canvas) return;
-      fetchAndRenderMiniChart(canvas, plantId, renderGen);
-    });
+    chartTargets.push({ canvasId, plantId });
   });
-}
 
-async function fetchAndRenderMiniChart(canvas, plantId, renderGen) {
-  try {
-    const res = await apiFetch(`/plants/${plantId}/energy/daily`);
-    if (!res.ok) return;
-    if (renderGen !== _portfolioRenderGen) return;
-    const raw = await res.json();
-    if (renderGen !== _portfolioRenderGen) return;
-    const body = (raw && raw.body)
-      ? (typeof raw.body === "string" ? JSON.parse(raw.body) : raw.body)
-      : raw;
-
-    const labels   = body?.labels || [];
-    const powerRaw = body?.activePower || body?.active_power_kw || body?.power_kw || [];
-    const irrRaw   = body?.irradiance  || body?.irradiance_wm2  || [];
-    const prRaw    = body?.pr          || body?.pr_pct          || body?.performance_ratio || [];
-
-    if (!labels.length || (!powerRaw.length && !irrRaw.length)) return;
-
-    // Escalas reais para cada série
-    const toNums = arr => arr.map(v => (v == null ? null : Number(v)));
-    const seriesMax = arr => Math.max(...arr.filter(v => v != null && isFinite(v)), 0.001);
-    const fmtTick = (v, unit) => {
-      if (v === 0) return "0";
-      if (unit === "kW"  && v >= 1000) return (v/1000).toFixed(0) + "M";
-      if (unit === "W/m²"&& v >= 1000) return (v/1000).toFixed(1) + "k";
-      return v % 1 === 0 ? v.toFixed(0) : v.toFixed(1);
-    };
-
-    const pNums  = toNums(powerRaw);
-    const iNums  = toNums(irrRaw);
-    const prNums = toNums(prRaw);
-    const maxP   = powerRaw.length ? seriesMax(pNums)  : 0;
-    const maxI   = irrRaw.length   ? seriesMax(iNums)  : 0;
-
-    const datasets = [];
-
-    if (powerRaw.length) {
-      datasets.push({
-        label: "Active Power", _raw: powerRaw, _unit: "kW",
-        data: pNums, yAxisID: "y",
-        borderColor: "rgba(127,208,85,0.9)",
-        backgroundColor: "rgba(127,208,85,0.07)",
-        borderWidth: 1.5, pointRadius: 0, pointHoverRadius: 4,
-        pointHoverBackgroundColor: "#7fd055",
-        tension: 0.4, fill: true,
-      });
-    }
-
-    if (irrRaw.length) {
-      datasets.push({
-        label: "Irrad. POA", _raw: irrRaw, _unit: "W/m²",
-        data: iNums, yAxisID: "y1",
-        borderColor: "rgba(255,200,50,0.85)",
-        backgroundColor: "transparent",
-        borderWidth: 1.5, pointRadius: 0, pointHoverRadius: 4,
-        pointHoverBackgroundColor: "#ffc832",
-        tension: 0.4, fill: false,
-      });
-    }
-
-    if (prRaw.length) {
-      datasets.push({
-        label: "PR", _raw: prRaw, _unit: "%",
-        data: prNums, yAxisID: "y2",
-        borderColor: "rgba(80,200,255,0.75)",
-        backgroundColor: "transparent",
-        borderWidth: 1.5, borderDash: [4, 3],
-        pointRadius: 0, pointHoverRadius: 4,
-        pointHoverBackgroundColor: "#50c8ff",
-        tension: 0.4, fill: false,
-      });
-    }
-
-    if (!datasets.length) return;
-
-    const tickStyle = (color) => ({
-      display: true,
-      maxTicksLimit: 3,
-      color,
-      font: { family: "'JetBrains Mono', monospace", size: 8 },
-      padding: 2,
-    });
-
-    const existing = Chart.getChart(canvas);
-    if (existing) existing.destroy();
-
-    const ctx = canvas.getContext("2d");
-    const chart = new Chart(ctx, {
-      type: "line",
-      data: { labels, datasets },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        animation: false,
-        interaction: { mode: "index", intersect: false },
-        plugins: {
-          legend: { display: false },
-          tooltip: {
-            enabled: true,
-            backgroundColor: "rgba(4,12,8,0.94)",
-            borderColor: "rgba(57,229,140,0.20)",
-            borderWidth: 1,
-            padding: { top: 7, bottom: 7, left: 10, right: 10 },
-            titleColor: "rgba(154,219,184,0.55)",
-            titleFont: { family: "'JetBrains Mono', monospace", size: 10 },
-            bodyColor: "#ddeee4",
-            bodyFont: { family: "'JetBrains Mono', monospace", size: 11 },
-            callbacks: {
-              title: items => items[0]?.label || "",
-              label: item => {
-                const raw = item.dataset._raw?.[item.dataIndex];
-                if (raw == null) return null;
-                return ` ${item.dataset.label}: ${Number(raw).toFixed(1)} ${item.dataset._unit}`;
-              },
-              labelColor: item => ({
-                borderColor: item.dataset.borderColor,
-                backgroundColor: item.dataset.borderColor,
-                borderRadius: 2,
-              }),
-            },
-          },
-        },
-        scales: {
-          x: {
-            display: true,
-            grid: { display: false },
-            ticks: { display: false },
-            border: { display: false },
-          },
-          y: {
-            type: "linear", position: "left",
-            display: powerRaw.length > 0,
-            min: 0, max: maxP * 1.12,
-            grid: { display: false },
-            ticks: { ...tickStyle("rgba(57,229,140,0.55)"), callback: v => fmtTick(v, "kW") },
-            border: { display: false },
-          },
-          y1: {
-            type: "linear", position: "right",
-            display: irrRaw.length > 0,
-            min: 0, max: maxI * 1.12,
-            grid: { drawOnChartArea: false, drawTicks: false },
-            ticks: { ...tickStyle("rgba(255,200,50,0.55)"), callback: v => fmtTick(v, "W/m²") },
-            border: { display: false },
-          },
-          y2: {
-            type: "linear", position: "right",
-            display: false,
-            min: 0, max: 100,
-            grid: { drawOnChartArea: false },
-          },
-        },
-        layout: { padding: { top: 4, bottom: 2, left: 0, right: 0 } },
-      },
-    });
-
-    _portfolioMiniCharts.set(plantId, chart);
-  } catch(e) {
-    console.warn("[mini-chart]", plantId, e?.message || e);
+  // Inicia fetch de todos os mini-charts APOS todo o DOM estar montado,
+  // com concorrencia controlada (3 por vez) e retry automatico.
+  if (chartTargets.length > 0) {
+    _startMiniChartBatch(chartTargets, renderGen);
   }
 }
 
-document.addEventListener("DOMContentLoaded", () => {
-  setTimeout(wirePortfolioControls, 100);
-});
+/**
+ * Busca dados e renderiza mini-charts em lotes de CONCURRENCY,
+ * com 1 retry automatico por falha. Usa cache (TTL 5 min).
+ * Verifica renderGen antes de cada chart para abortar se houve re-render.
+ */
+async function _startMiniChartBatch(targets, renderGen) {
+  const CONCURRENCY = 3;
+  const queue = [...targets];
+  const failed = [];
+
+  async function processOne(target) {
+    if (renderGen !== _portfolioRenderGen) return;
+    try {
+      await _fetchAndRenderOneMiniChart(target.canvasId, target.plantId, renderGen);
+    } catch (e) {
+      console.warn("[mini-chart] falhou, sera retentado:", target.plantId, e?.message || e);
+      failed.push(target);
+    }
+  }
+
+  // Pool de concorrencia: no maximo CONCURRENCY simultaneos
+  async function drainQueue() {
+    while (queue.length > 0) {
+      if (renderGen !== _portfolioRenderGen) return;
+      const batch = queue.splice(0, CONCURRENCY);
+      await Promise.allSettled(batch.map(t => processOne(t)));
+    }
+  }
+
+  // Aguarda 2 frames de layout do browser antes de criar os Chart.js
+  await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+  if (renderGen !== _portfolioRenderGen) return;
+
+  await drainQueue();
+
+  // Retry das que falharam (1 tentativa extra, sequencial)
+  if (failed.length > 0 && renderGen === _portfolioRenderGen) {
+    console.log("[mini-chart] retentando", failed.length, "charts que falharam");
+    await new Promise(r => setTimeout(r, 1500));
+    for (const target of failed) {
+      if (renderGen !== _portfolioRenderGen) return;
+      try {
+        await _fetchAndRenderOneMiniChart(target.canvasId, target.plantId, renderGen);
+      } catch (e) {
+        console.warn("[mini-chart] retry falhou:", target.plantId, e?.message || e);
+      }
+    }
+  }
+}
+
+async function _fetchAndRenderOneMiniChart(canvasId, plantId, renderGen) {
+  // 1) Busca dados (cache ou fetch)
+  let body;
+  const cached = _miniChartDataCache.get(plantId);
+  if (cached && (Date.now() - cached.ts) < _MINI_CHART_CACHE_TTL_MS) {
+    body = cached.body;
+  } else {
+    const res = await apiFetch(`/plants/${plantId}/energy/daily`);
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status} para plant ${plantId}`);
+    }
+    const raw = await res.json();
+    body = (raw && raw.body)
+      ? (typeof raw.body === "string" ? JSON.parse(raw.body) : raw.body)
+      : raw;
+    _miniChartDataCache.set(plantId, { ts: Date.now(), body });
+  }
+
+  // 2) Verifica se ainda estamos no mesmo render
+  if (renderGen !== _portfolioRenderGen) return;
+
+  // 3) Re-busca canvas no DOM (pode ter mudado)
+  const canvas = document.getElementById(canvasId);
+  if (!canvas) return;
+
+  // 4) Monta chart
+  _renderMiniChartOnCanvas(canvas, plantId, body);
+}
+
+function _renderMiniChartOnCanvas(canvas, plantId, body) {
+  const labels   = body?.labels || [];
+  const powerRaw = body?.activePower || body?.active_power_kw || body?.power_kw || [];
+  const irrRaw   = body?.irradiance  || body?.irradiance_wm2  || [];
+  const prRaw    = body?.pr          || body?.pr_pct          || body?.performance_ratio || [];
+
+  if (!labels.length || (!powerRaw.length && !irrRaw.length)) return;
+
+  const toNums = arr => arr.map(v => (v == null ? null : Number(v)));
+  const seriesMax = arr => Math.max(...arr.filter(v => v != null && isFinite(v)), 0.001);
+  const fmtTick = (v, unit) => {
+    if (v === 0) return "0";
+    if (unit === "kW"  && v >= 1000) return (v/1000).toFixed(0) + "M";
+    if (unit === "W/m\u00B2"&& v >= 1000) return (v/1000).toFixed(1) + "k";
+    return v % 1 === 0 ? v.toFixed(0) : v.toFixed(1);
+  };
+
+  const pNums  = toNums(powerRaw);
+  const iNums  = toNums(irrRaw);
+  const prNums = toNums(prRaw);
+  const maxP   = powerRaw.length ? seriesMax(pNums)  : 0;
+  const maxI   = irrRaw.length   ? seriesMax(iNums)  : 0;
+
+  const datasets = [];
+
+  if (powerRaw.length) {
+    datasets.push({
+      label: "Active Power", _raw: powerRaw, _unit: "kW",
+      data: pNums, yAxisID: "y",
+      borderColor: "rgba(127,208,85,0.9)",
+      backgroundColor: "rgba(127,208,85,0.07)",
+      borderWidth: 1.5, pointRadius: 0, pointHoverRadius: 4,
+      pointHoverBackgroundColor: "#7fd055",
+      tension: 0.4, fill: true,
+    });
+  }
+
+  if (irrRaw.length) {
+    datasets.push({
+      label: "Irrad. POA", _raw: irrRaw, _unit: "W/m\u00B2",
+      data: iNums, yAxisID: "y1",
+      borderColor: "rgba(255,200,50,0.85)",
+      backgroundColor: "transparent",
+      borderWidth: 1.5, pointRadius: 0, pointHoverRadius: 4,
+      pointHoverBackgroundColor: "#ffc832",
+      tension: 0.4, fill: false,
+    });
+  }
+
+  if (prRaw.length) {
+    datasets.push({
+      label: "PR", _raw: prRaw, _unit: "%",
+      data: prNums, yAxisID: "y2",
+      borderColor: "rgba(80,200,255,0.75)",
+      backgroundColor: "transparent",
+      borderWidth: 1.5, borderDash: [4, 3],
+      pointRadius: 0, pointHoverRadius: 4,
+      pointHoverBackgroundColor: "#50c8ff",
+      tension: 0.4, fill: false,
+    });
+  }
+
+  if (!datasets.length) return;
+
+  const tickStyle = (color) => ({
+    display: true,
+    maxTicksLimit: 3,
+    color,
+    font: { family: "'JetBrains Mono', monospace", size: 8 },
+    padding: 2,
+  });
+
+  try {
+    const existing = Chart.getChart(canvas);
+    if (existing) existing.destroy();
+  } catch (_) {}
+
+  const ctx = canvas.getContext("2d");
+  const chart = new Chart(ctx, {
+    type: "line",
+    data: { labels, datasets },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      interaction: { mode: "index", intersect: false },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          enabled: true,
+          backgroundColor: "rgba(4,12,8,0.94)",
+          borderColor: "rgba(57,229,140,0.20)",
+          borderWidth: 1,
+          padding: { top: 7, bottom: 7, left: 10, right: 10 },
+          titleColor: "rgba(154,219,184,0.55)",
+          titleFont: { family: "'JetBrains Mono', monospace", size: 10 },
+          bodyColor: "#ddeee4",
+          bodyFont: { family: "'JetBrains Mono', monospace", size: 11 },
+          callbacks: {
+            title: items => items[0]?.label || "",
+            label: item => {
+              const raw = item.dataset._raw?.[item.dataIndex];
+              if (raw == null) return null;
+              return ` ${item.dataset.label}: ${Number(raw).toFixed(1)} ${item.dataset._unit}`;
+            },
+            labelColor: item => ({
+              borderColor: item.dataset.borderColor,
+              backgroundColor: item.dataset.borderColor,
+              borderRadius: 2,
+            }),
+          },
+        },
+      },
+      scales: {
+        x: {
+          display: true,
+          grid: { display: false },
+          ticks: { display: false },
+          border: { display: false },
+        },
+        y: {
+          type: "linear", position: "left",
+          display: powerRaw.length > 0,
+          min: 0, max: maxP * 1.12,
+          grid: { display: false },
+          ticks: { ...tickStyle("rgba(57,229,140,0.55)"), callback: v => fmtTick(v, "kW") },
+          border: { display: false },
+        },
+        y1: {
+          type: "linear", position: "right",
+          display: irrRaw.length > 0,
+          min: 0, max: maxI * 1.12,
+          grid: { drawOnChartArea: false, drawTicks: false },
+          ticks: { ...tickStyle("rgba(255,200,50,0.55)"), callback: v => fmtTick(v, "W/m\u00B2") },
+          border: { display: false },
+        },
+        y2: {
+          type: "linear", position: "right",
+          display: false,
+          min: 0, max: 100,
+          grid: { drawOnChartArea: false },
+        },
+      },
+      layout: { padding: { top: 4, bottom: 2, left: 0, right: 0 } },
+    },
+  });
+
+  _portfolioMiniCharts.set(plantId, chart);
+}
+
+// wirePortfolioControls is now called synchronously inside the main DOMContentLoaded listener (above).
