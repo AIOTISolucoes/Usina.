@@ -293,193 +293,220 @@
 
           <!-- TELA DATA STUDIO (fluxo em etapas) -->
           <div id="dataStudioView" class="view-section hidden ds-view">
-            <div class="ds-shell card">
-              <div class="ds-page-head">
-                <div>
-                  <h2 class="ds-title">Data Studio</h2>
-                  <p class="ds-subtitle">Análise visual em etapas: período → medidas → séries</p>
-                </div>
+  <div class="ds-shell">
+
+    <!-- HEADER: título + campos de período/usina + botão + contador -->
+    <div class="ds-topbar">
+      <div class="ds-topbar-left">
+        <button id="dsOpenTagsBtn" class="ds-plus-button" type="button" aria-label="Adicionar medidas">+</button>
+        <div class="ds-topbar-info">
+          <h2 class="ds-title">Data Studio</h2>
+          <p class="ds-subtitle">Análise visual em etapas: período → medidas → séries</p>
+        </div>
+      </div>
+      <div class="ds-topbar-fields">
+        <label class="ds-field">
+          <span>Data inicial</span>
+          <input id="dsStartDateInput" type="date" />
+        </label>
+        <label class="ds-field">
+          <span>Data final</span>
+          <input id="dsEndDateInput" type="date" />
+        </label>
+        <label class="ds-field">
+          <span>Usina</span>
+          <select id="dsPlantSelect"></select>
+        </label>
+        <div class="ds-selection-pill">
+          <span>Selecionadas</span>
+          <strong id="dsSelectedCountTop">0</strong>
+        </div>
+      </div>
+    </div>
+
+    <!-- BODY: sidebar catálogo + área principal -->
+    <div class="ds-body-layout">
+
+      <!-- SIDEBAR: catálogo de medidas -->
+      <aside class="ds-sidebar" id="dsCatalogSection">
+        <div class="ds-sidebar-inner ds-modal-panel">
+
+          <div class="ds-sidebar-head">
+            <div class="ds-modal-header">
+              <div>
+                <h3>Medidas</h3>
+                <p>Clique para adicionar às séries.</p>
               </div>
+            </div>
 
-              <div class="ds-hero" id="dsHero">
-                <div class="ds-hero-main">
-                  <button id="dsOpenTagsBtn" class="ds-plus-button" type="button" aria-label="Adicionar medidas">+</button>
+            <div class="ds-search-row">
+              <input id="dsSearchInput" type="text" placeholder="Buscar medida ou dispositivo..." />
+              <i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i>
+            </div>
 
-                  <div class="ds-date-range">
-                  <label class="ds-field">
-                    <span>Data inicial</span>
-                    <input id="dsStartDateInput" type="date" />
-                  </label>
-                  <label class="ds-field">
-                    <span>Data final</span>
-                    <input id="dsEndDateInput" type="date" />
-                  </label>
-                  <label class="ds-field">
-                    <span>Usina</span>
-                    <select id="dsPlantSelect"></select>
-                  </label>
-                  </div>
-                </div>
-                <div class="ds-hero-meta">
-                  <div class="ds-selection-pill"><span>Selecionadas</span><strong id="dsSelectedCountTop">0</strong>/50</div>
-                </div>
+            <div class="ds-chip-filters">
+              <select id="dsDataKindSelect" class="ds-chip-select">
+                <option value="all">Todos tipos</option>
+                <option value="analog">Analógico</option>
+                <option value="discrete">Alarmes</option>
+              </select>
+              <select id="dsSourceSelect" class="ds-chip-select">
+                <option value="all">Todas origens</option>
+                <option value="historico">Histórico</option>
+                <option value="consolidado">Consolidado</option>
+              </select>
+              <select id="dsContextSelect" class="ds-chip-select">
+                <option value="all">Todos contextos</option>
+              </select>
+            </div>
+
+            <div class="ds-selection-meta">
+              Selecionadas: <strong id="dsSelectedCount">0</strong>
+            </div>
+            <div id="dsContextInfo" class="ds-context-info hidden"></div>
+          </div>
+
+          <!-- tabela existente — mantida para compatibilidade com app.js -->
+          <div class="ds-modal-table-wrap">
+            <table id="dsTagsTable" class="ds-table">
+              <thead>
+                <tr>
+                  <th></th>
+                  <th>Contexto</th>
+                  <th>Descrição</th>
+                  <th>Origem</th>
+                  <th>Tipo</th>
+                  <th>Unidade</th>
+                  <th>Plant</th>
+                  <th>Pathname</th>
+                </tr>
+              </thead>
+              <tbody id="dsTagsTbody"></tbody>
+            </table>
+          </div>
+
+          <div class="ds-sidebar-footer ds-modal-footer">
+            <div class="ds-modal-footer__count">
+              Selecionadas: <strong id="dsSelectedCountBottom">0</strong>
+            </div>
+            <div class="ds-modal-actions">
+              <button id="dsTagsClearBtn" class="btn-clear" type="button">Limpar</button>
+              <button id="dsTagsApplyBtn" class="btn-clear" type="button">Atualizar</button>
+              <button id="dsConfirmSelectionBtn" class="btn-apply" type="button">OK</button>
+            </div>
+          </div>
+
+        </div>
+      </aside>
+
+      <!-- ÁREA PRINCIPAL -->
+      <div class="ds-main-area">
+
+        <!-- chips de séries ativas -->
+        <div id="dsSelectedTagsList" class="ds-selected-tags"></div>
+
+        <!-- empty state -->
+        <div id="dsEmptyState" class="ds-empty-state">
+          <div class="ds-empty-icon"><i class="fa-solid fa-chart-simple"></i></div>
+          <h3>Nenhuma medida confirmada</h3>
+          <p>Clique no botão +, selecione medidas e confirme em OK para liberar a configuração.</p>
+        </div>
+
+        <!-- workspace: configuração + gráfico -->
+        <div id="dsWorkspace" class="ds-workspace hidden">
+
+          <!-- painel de configuração (bulk) -->
+          <div id="dsBulkPanel" class="ds-bulk-panel">
+            <div class="ds-panel-head">
+              <button class="ds-back-btn" type="button" id="dsBackToHeroBtn" aria-label="Voltar">
+                <i class="fa-solid fa-chevron-left"></i>
+              </button>
+              <div>
+                <h3>Configuração</h3>
+                <p>Ajuste modo, agregação e período consolidado.</p>
               </div>
-
-              <section id="dsCatalogSection" class="ds-catalog-section" aria-label="Catálogo de medidas">
-                <div class="ds-modal-panel">
-                  <div class="ds-modal-header">
-                    <div>
-                      <h3>Medidas</h3>
-                      <p>Filtre e selecione até 50 medidas para análise.</p>
-                    </div>
-                  </div>
-
-                  <div class="ds-search-row">
-                    <input id="dsSearchInput" type="text" placeholder="Buscar por nome do ponto, pathname ou descrição" />
-                    <i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i>
-                  </div>
-
-                  <div class="ds-chip-filters">
-                    <select id="dsDataKindSelect" class="ds-chip-select">
-                      <option value="all">Todos tipos</option>
-                      <option value="analog">Analógico</option>
-                      <option value="discrete">Discreto</option>
-                    </select>
-
-                    <select id="dsSourceSelect" class="ds-chip-select">
-                      <option value="all">Todas origens</option>
-                      <option value="historico">Histórico</option>
-                      <option value="consolidado">Consolidado</option>
-                    </select>
-
-                    <select id="dsContextSelect" class="ds-chip-select">
-                      <option value="all">Todos contextos</option>
-                    </select>
-                  </div>
-
-                  <div class="ds-selection-meta">Selecionadas no catálogo: <strong id="dsSelectedCount">0</strong>/50</div>
-                  <div id="dsContextInfo" class="ds-context-info hidden"></div>
-
-                  <div class="ds-modal-table-wrap">
-                    <table id="dsTagsTable" class="ds-table">
-                      <thead>
-                        <tr>
-                          <th></th>
-                          <th>Contexto</th>
-                          <th>Descrição</th>
-                          <th>Origem</th>
-                          <th>Tipo</th>
-                          <th>Unidade</th>
-                          <th>PLANT ID</th>
-                          <th>Pathname</th>
-                        </tr>
-                      </thead>
-                      <tbody id="dsTagsTbody"></tbody>
-                    </table>
-                  </div>
-
-                  <div class="ds-modal-footer">
-                    <div class="ds-modal-footer__count">Selecionadas: <strong id="dsSelectedCountBottom">0</strong>/50</div>
-                    <div class="ds-modal-actions">
-                      <button id="dsTagsClearBtn" class="btn-clear" type="button">Limpar seleção</button>
-                      <button id="dsTagsApplyBtn" class="btn-clear" type="button">Atualizar catálogo</button>
-                      <button id="dsConfirmSelectionBtn" class="btn-apply" type="button">OK</button>
-                    </div>
-                  </div>
-                </div>
-              </section>
-
-              <div id="dsEmptyState" class="ds-empty-state">
-                <div class="ds-empty-icon"><i class="fa-solid fa-chart-simple"></i></div>
-                <h3>Nenhuma medida confirmada</h3>
-                <p>Clique no botão +, selecione medidas e confirme em OK para liberar a configuração.</p>
+            </div>
+            <div class="ds-bulk-card">
+              <div class="ds-bulk-card__title">
+                <i class="fa-solid fa-sliders"></i><span>Aplicar em massa</span>
               </div>
-
-              <div id="dsSelectedTagsList" class="ds-selected-tags"></div>
-
-              <div id="dsWorkspace" class="ds-workspace hidden">
-                <div class="ds-main-grid">
-                <div id="dsBulkPanel" class="ds-bulk-panel">
-                  <div class="ds-panel-head">
-                    <button class="ds-back-btn" type="button" id="dsBackToHeroBtn" aria-label="Voltar"><i class="fa-solid fa-chevron-left"></i></button>
-                    <div>
-                      <h3>Configuração</h3>
-                      <p>Ajuste modo, agregação e período consolidado.</p>
-                    </div>
-                  </div>
-                  <div class="ds-bulk-card">
-                  <div class="ds-bulk-card__title"><i class="fa-solid fa-sliders"></i><span>Aplicar em massa</span></div>
-                  <div class="ds-bulk-grid">
-                    <label>
-                      <span>Modo</span>
-                      <select id="dsModeSelect">
-                        <option value="historico">Histórico</option>
-                        <option value="consolidado">Consolidado</option>
-                      </select>
-                    </label>
-
-                    <label>
-                      <span>Agregação</span>
-                      <select id="dsAggregationSelect">
-                        <option value="avg">Média</option>
-                        <option value="integral">Integral</option>
-                        <option value="median">Mediana</option>
-                        <option value="max">Máxima</option>
-                        <option value="sum">Soma</option>
-                        <option value="none">Sem agregação</option>
-                      </select>
-                    </label>
-
-                    <label>
-                      <span>Período consolidado</span>
-                      <select id="dsConsolidationSelect">
-                        <option value="5min">5 min</option>
-                        <option value="daily">Daily</option>
-                        <option value="weekly">Weekly</option>
-                        <option value="monthly">Monthly</option>
-                        <option value="yearly">Yearly</option>
-                        <option value="hdaily">HDaily</option>
-                        <option value="hweekly">HWeekly</option>
-                        <option value="hmonthly">HMonthly</option>
-                        <option value="hyearly">HYearly</option>
-                      </select>
-                    </label>
-                  </div>
-
-                  <div class="ds-bulk-actions">
-                    <button id="dsSaveSelectionBtn" class="btn-apply" type="button">Salvar seleção</button>
-                    <button id="dsLoadSeriesBtn" class="btn-clear" type="button">Carregar séries</button>
-                  </div>
-                  </div>
-                </div>
-
-                <div class="ds-chart-card">
-                  <div class="ds-chart-card__head">
-                    <div>
-                      <h3>Séries selecionadas</h3>
-                      <p>Visualização temporal das medidas escolhidas.</p>
-                    </div>
-                    <div class="ds-chart-toolbar">
-                      <button id="dsZoomInBtn" class="ds-zoom-btn" title="Zoom in">
-                        <i class="fa-solid fa-plus"></i>
-                      </button>
-                      <button id="dsZoomOutBtn" class="ds-zoom-btn" title="Zoom out">
-                        <i class="fa-solid fa-minus"></i>
-                      </button>
-                      <button id="dsZoomResetBtn" class="ds-zoom-btn ds-zoom-btn--reset" title="Resetar zoom">
-                        <i class="fa-solid fa-rotate-left"></i>
-                      </button>
-                      <button id="dsExportBtn" class="ds-export-btn" title="Exportar CSV" disabled>
-                        <i class="fa-solid fa-file-csv"></i>
-                      </button>
-                    </div>
-                  </div>
-                  <div class="ds-chart-wrap"><canvas id="dsChart"></canvas></div>
-                </div>
-                </div>
+              <div class="ds-bulk-grid">
+                <label>
+                  <span>Modo</span>
+                  <select id="dsModeSelect">
+                    <option value="historico">Histórico</option>
+                    <option value="consolidado">Consolidado</option>
+                  </select>
+                </label>
+                <label>
+                  <span>Agregação</span>
+                  <select id="dsAggregationSelect">
+                    <option value="avg">Média</option>
+                    <option value="integral">Integral</option>
+                    <option value="median">Mediana</option>
+                    <option value="max">Máxima</option>
+                    <option value="sum">Soma</option>
+                    <option value="none">Sem agregação</option>
+                  </select>
+                </label>
+                <label>
+                  <span>Período consolidado</span>
+                  <select id="dsConsolidationSelect">
+                    <option value="5min">5 min</option>
+                    <option value="daily">Daily</option>
+                    <option value="weekly">Weekly</option>
+                    <option value="monthly">Monthly</option>
+                    <option value="yearly">Yearly</option>
+                    <option value="hdaily">HDaily</option>
+                    <option value="hweekly">HWeekly</option>
+                    <option value="hmonthly">HMonthly</option>
+                    <option value="hyearly">HYearly</option>
+                  </select>
+                </label>
+              </div>
+              <div class="ds-bulk-actions">
+                <button id="dsSaveSelectionBtn" class="btn-apply" type="button">Salvar seleção</button>
+                <button id="dsLoadSeriesBtn" class="btn-clear" type="button">Carregar séries</button>
               </div>
             </div>
           </div>
+
+          <!-- gráfico -->
+          <div class="ds-chart-card">
+            <div class="ds-chart-card__head">
+              <div>
+                <h3>Séries selecionadas</h3>
+                <p>Visualização temporal das medidas escolhidas.</p>
+              </div>
+              <div class="ds-chart-toolbar">
+                <button id="dsZoomInBtn" class="ds-zoom-btn" title="Zoom in">
+                  <i class="fa-solid fa-plus"></i>
+                </button>
+                <button id="dsZoomOutBtn" class="ds-zoom-btn" title="Zoom out">
+                  <i class="fa-solid fa-minus"></i>
+                </button>
+                <button id="dsZoomResetBtn" class="ds-zoom-btn ds-zoom-btn--reset" title="Resetar zoom">
+                  <i class="fa-solid fa-rotate-left"></i>
+                </button>
+                <button id="dsExportBtn" class="ds-export-btn" title="Exportar CSV" disabled>
+                  <i class="fa-solid fa-file-csv"></i>
+                </button>
+                <!-- BOTÃO NOVO: fullscreen do gráfico -->
+                <button id="dsFullscreenBtn" class="ds-zoom-btn" title="Tela cheia">
+                  <i class="fa-solid fa-expand"></i>
+                </button>
+              </div>
+            </div>
+            <div class="ds-chart-wrap" id="dsChartWrap">
+              <canvas id="dsChart"></canvas>
+            </div>
+          </div>
+
+        </div><!-- /dsWorkspace -->
+      </div><!-- /ds-main-area -->
+    </div><!-- /ds-body-layout -->
+  </div><!-- /ds-shell -->
+</div>
 
           <!-- TELA DE DIAGRAMA (OCULTA DO MENU) -->
           <div id="diagramView" class="view-section hidden">
