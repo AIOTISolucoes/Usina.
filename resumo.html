@@ -162,6 +162,16 @@
                         <svg viewBox="0 0 20 20" fill="none"><rect x="2" y="2" width="7" height="7" rx="1.5" fill="currentColor"/><rect x="11" y="2" width="7" height="7" rx="1.5" fill="currentColor"/><rect x="2" y="11" width="7" height="7" rx="1.5" fill="currentColor"/><rect x="11" y="11" width="7" height="7" rx="1.5" fill="currentColor"/></svg>
                       </button>
                     </div>
+                    <button
+                      id="btnAddPlant"
+                      class="btn-add-plant hidden"
+                      type="button"
+                      title="Adicionar nova usina"
+                      aria-label="Adicionar nova usina"
+                    >
+                      <i class="fa-solid fa-plus" aria-hidden="true"></i>
+                      <span>Nova usina</span>
+                    </button>
                   </div>
                 </div>
 
@@ -537,6 +547,14 @@
             </div>
           </div>
 
+          <div class="ds-v2-chart-hint">
+            <span><i class="fa-solid fa-scroll"></i> Scroll para zoom</span>
+            <span class="ds-v2-hint-sep">·</span>
+            <span><i class="fa-solid fa-hand"></i> Clique e arraste para mover</span>
+            <span class="ds-v2-hint-sep">·</span>
+            <span><i class="fa-solid fa-expand"></i> Ícone de tela cheia no canto superior direito</span>
+          </div>
+
           <div class="ds-chart-wrap" id="dsChartWrap">
             <button id="dsFullscreenCloseBtn" class="ds-fullscreen-close" title="Voltar para tamanho normal" aria-label="Voltar para tamanho normal" type="button">
               <i class="fa-solid fa-compress"></i>
@@ -646,44 +664,156 @@
       </main>
     </div>
 
-    <div id="plantEditModal" class="plant-edit-modal hidden" aria-hidden="true">
+    <div id="plantCreateModal" class="plant-edit-modal hidden" aria-hidden="true">
       <div class="plant-edit-modal__backdrop"></div>
-      <div class="plant-edit-modal__box" role="dialog" aria-modal="true" aria-labelledby="plantEditModalTitle">
+      <div class="plant-edit-modal__box" role="dialog" aria-modal="true" aria-labelledby="plantCreateModalTitle">
         <div class="plant-edit-modal__header">
-          <h3 id="plantEditModalTitle">Editar usina</h3>
-          <button class="plant-edit-modal__close" type="button" onclick="closePlantEditModal()" aria-label="Fechar">
+          <h3 id="plantCreateModalTitle">Nova usina</h3>
+          <button class="plant-edit-modal__close" type="button"
+                  onclick="closePlantCreateModal()" aria-label="Fechar">
             <i class="fa-solid fa-xmark"></i>
           </button>
         </div>
 
         <div class="plant-edit-section">
-          <label for="plantEditNameInput">Nome da usina</label>
-          <div class="plant-edit-inline">
-            <input type="text" id="plantEditNameInput" placeholder="Nome da usina" />
-            <button type="button" onclick="savePlantName()" title="Salvar nome da usina" aria-label="Salvar nome da usina">
-              <i class="fa-solid fa-check"></i>
-            </button>
-          </div>
-          <div id="plantEditNameFeedback" class="plant-edit-feedback" aria-live="polite"></div>
+          <label for="plantCreateNameInput">Nome da usina *</label>
+          <input type="text" id="plantCreateNameInput" placeholder="Ex: Massapê 1" />
         </div>
-
-        <div class="plant-edit-section" id="plantEditRatedSection">
-          <label for="plantEditRatedInput">Rated Power (kWp)</label>
-          <div class="plant-edit-inline">
-            <input type="number" id="plantEditRatedInput" placeholder="Ex: 1500.0" min="0" step="0.1" />
-            <button type="button" onclick="savePlantRatedPower()" title="Salvar rated power" aria-label="Salvar rated power">
-              <i class="fa-solid fa-check"></i>
-            </button>
-          </div>
-          <div id="plantEditRatedFeedback" class="plant-edit-feedback" aria-live="polite"></div>
-        </div>
-
-        <hr class="plant-edit-divider" />
 
         <div class="plant-edit-section">
-          <label>Dispositivos</label>
-          <div id="plantEditDevicesList" class="plant-edit-devices-list" tabindex="-1" aria-live="polite"></div>
+          <label for="plantCreateDcInput">Rated Power DC (kWp)</label>
+          <input type="number" id="plantCreateDcInput" placeholder="Ex: 1500.0" min="0" step="0.1" />
         </div>
+
+        <div class="plant-edit-section">
+          <label for="plantCreateAcInput">Capacidade AC (kW)</label>
+          <input type="number" id="plantCreateAcInput" placeholder="Ex: 1230.0" min="0" step="0.1" />
+        </div>
+
+        <div class="plant-edit-section">
+          <label for="plantCreateLocationInput">Localização</label>
+          <input type="text" id="plantCreateLocationInput" placeholder="Ex: Massapê, CE" />
+        </div>
+
+        <div class="plant-edit-section" id="plantCreateCustomerSection" style="display:none">
+          <label for="plantCreateCustomerInput">Customer ID (superuser)</label>
+          <input type="number" id="plantCreateCustomerInput" placeholder="ID do cliente" min="1" step="1" />
+        </div>
+
+        <div id="plantCreateFeedback" class="plant-edit-feedback" aria-live="polite"></div>
+
+        <div class="plant-edit-section" style="margin-top:8px;">
+          <button
+            id="plantCreateSaveBtn"
+            type="button"
+            class="plant-create-save-btn"
+            onclick="createNewPlant()"
+          >
+            <i class="fa-solid fa-seedling"></i>
+            Criar usina
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <div id="plantEditModal" class="plant-edit-modal hidden" aria-hidden="true">
+      <div class="plant-edit-modal__backdrop"></div>
+      <div class="plant-edit-modal__box pem-box" role="dialog" aria-modal="true" aria-labelledby="plantEditModalTitle">
+
+        <!-- Header -->
+        <div class="plant-edit-modal__header">
+          <h3 id="plantEditModalTitle">Gerenciar usina</h3>
+          <button class="plant-edit-modal__close" type="button" onclick="closePlantEditModal()" aria-label="Fechar">
+            <i class="fa-solid fa-xmark"></i>
+          </button>
+        </div>
+
+        <!-- Tabs -->
+        <div class="pem-tabs">
+          <button class="pem-tab active" data-pem-tab="pem-info">
+            <i class="fa-solid fa-pen-to-square"></i> Informações
+          </button>
+          <button class="pem-tab" data-pem-tab="pem-devices">
+            <i class="fa-solid fa-microchip"></i> Dispositivos
+          </button>
+          <button class="pem-tab" data-pem-tab="pem-cabines">
+            <i class="fa-solid fa-box-open"></i> Cabines
+          </button>
+        </div>
+
+        <!-- Tab: Informações -->
+        <div id="pem-info" class="pem-tab-pane active">
+          <div class="plant-edit-section">
+            <label for="plantEditNameInput">Nome da usina</label>
+            <div class="plant-edit-inline">
+              <input type="text" id="plantEditNameInput" placeholder="Nome da usina" />
+              <button type="button" onclick="savePlantName()" title="Salvar nome" aria-label="Salvar nome">
+                <i class="fa-solid fa-check"></i>
+              </button>
+            </div>
+            <div id="plantEditNameFeedback" class="plant-edit-feedback" aria-live="polite"></div>
+          </div>
+          <div class="plant-edit-section">
+            <label for="plantEditRatedInput">Rated Power (kWp)</label>
+            <div class="plant-edit-inline">
+              <input type="number" id="plantEditRatedInput" placeholder="Ex: 1500.0" min="0" step="0.1" />
+              <button type="button" onclick="savePlantRatedPower()" title="Salvar rated power" aria-label="Salvar rated power">
+                <i class="fa-solid fa-check"></i>
+              </button>
+            </div>
+            <div id="plantEditRatedFeedback" class="plant-edit-feedback" aria-live="polite"></div>
+          </div>
+        </div>
+
+        <!-- Tab: Dispositivos -->
+        <div id="pem-devices" class="pem-tab-pane">
+
+          <!-- Adicionar device -->
+          <div class="plant-edit-section">
+            <label>Adicionar dispositivo</label>
+            <div class="pem-add-row">
+              <select id="pemDeviceTypeSelect" class="pem-ctrl">
+                <option value="">Tipo...</option>
+              </select>
+              <input id="pemDeviceNameInput" type="text" class="pem-ctrl" placeholder="Nome do dispositivo" />
+              <button type="button" class="pem-action-btn pem-action-btn--add" onclick="pemAddDevice()">
+                <i class="fa-solid fa-plus"></i> Adicionar
+              </button>
+            </div>
+            <div id="pemAddDeviceFb" class="plant-edit-feedback"></div>
+          </div>
+
+          <hr class="plant-edit-divider" />
+
+          <div class="plant-edit-section">
+            <label>Dispositivos cadastrados</label>
+            <div id="plantEditDevicesList" class="plant-edit-devices-list" aria-live="polite"></div>
+          </div>
+        </div>
+
+        <!-- Tab: Cabines -->
+        <div id="pem-cabines" class="pem-tab-pane">
+
+          <div class="plant-edit-section">
+            <label>Adicionar cabine</label>
+            <div class="pem-add-row">
+              <input id="pemCabineNameInput" type="text" class="pem-ctrl pem-ctrl--grow" placeholder="Ex: Cabine 01" />
+              <button type="button" class="pem-action-btn pem-action-btn--add" onclick="pemAddCabine()">
+                <i class="fa-solid fa-plus"></i> Adicionar
+              </button>
+            </div>
+            <div id="pemAddCabineFb" class="plant-edit-feedback"></div>
+          </div>
+
+          <hr class="plant-edit-divider" />
+
+          <div class="plant-edit-section">
+            <label>Cabines cadastradas</label>
+            <div id="pemCabinesList" class="plant-edit-devices-list" aria-live="polite"></div>
+          </div>
+
+        </div>
+
       </div>
     </div>
 
@@ -862,5 +992,34 @@
     </script>
 
     <script src="js/app.js"></script>
+
+    <!-- Portfolio: forçar card view no mobile após app.js inicializar -->
+    <script>
+    (function() {
+      function forceMobileCardView() {
+        if (window.innerWidth > 640) return;
+        if (typeof portfolioSetView === 'function') {
+          portfolioSetView('card');
+        } else {
+          // fallback: manipula diretamente
+          var cardView = document.getElementById('portfolioCardView');
+          var listView = document.getElementById('portfolioListView');
+          if (cardView) cardView.classList.remove('hidden');
+          if (listView) listView.classList.add('hidden');
+        }
+      }
+      window.addEventListener('load', forceMobileCardView);
+      window.addEventListener('resize', function() {
+        forceMobileCardView();
+      });
+    })();
+    </script>
+  <!-- Sprite SVG para o botão de comando de dispositivo -->
+  <svg class="device-svg-sprite" aria-hidden="true" focusable="false" width="0" height="0" style="position:absolute">
+    <symbol id="device-command-switch-glyph" viewBox="0 0 24 24">
+      <path d="M12 3.5v7.2" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>
+      <path d="M7.3 6.8a6.7 6.7 0 1 0 9.4 0" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>
+    </symbol>
+  </svg>
   </body>
   </html>
