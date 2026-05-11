@@ -24,6 +24,11 @@ function logout() {
 const API_BASE = "https://jgeg9i0js1.execute-api.us-east-1.amazonaws.com";
 const INVERTER_NO_COMM_AFTER_MS = 15 * 60 * 1000; // legado (chips usam status do mart)
 const DASHBOARD_REFRESH_INTERVAL_MS = 10000;
+const DS_SERIES_PALETTE = [
+  "#4da3ff", "#39e58c", "#ffd84d", "#ff8a65",
+  "#b39ddb", "#80cbc4", "#f06292", "#aed581",
+  "#ffb74d", "#4dd0e1", "#ce93d8", "#a5d6a7"
+];
 const EVENTS_REFRESH_INTERVAL_MS = 10000;
 
 function apiFetch(path, options = {}) {
@@ -2209,13 +2214,8 @@ function renderSelectedTagsList() {
     const chip = document.createElement("div");
     chip.className = "ds-selected-tag-chip";
 
-    const CHIP_COLORS = [
-      '#1d9e75','#378add','#d4537e','#ef9f27',
-      '#7f77dd','#5dcaa5','#e24b4a','#639922',
-      '#ba7517','#185fa5','#993556','#0f6e56'
-    ];
-    const colorIdx = DATASTUDIO_STATE.selectedTags.indexOf(tag) % CHIP_COLORS.length;
-    const chipColor = CHIP_COLORS[Math.max(0, colorIdx)];
+    const colorIdx = DATASTUDIO_STATE.selectedTags.indexOf(tag) % DS_SERIES_PALETTE.length;
+    const chipColor = DS_SERIES_PALETTE[Math.max(0, colorIdx)];
     chip.style.setProperty('--ds-chip-color', chipColor);
 
     const label = `${valueOrDash(tag?.context)} • ${valueOrDash(tag?.point_name || tag?.description || tag?.pathname)}`;
@@ -2986,7 +2986,7 @@ function renderDataStudioChart(seriesPayload) {
   const axisByUnit = new Map([["_default_", "y"]]);
 
   if (seriesList.length) {
-    const palette = ["#4da3ff", "#39e58c", "#ffd84d", "#ff8a65", "#b39ddb", "#80cbc4"];
+    const palette = DS_SERIES_PALETTE;
     seriesList.forEach((serie, idx) => {
       const points = Array.isArray(serie?.points)
         ? serie.points
@@ -4171,37 +4171,80 @@ async function _loadPlantEditDevices(plantId) {
     const res = await apiFetch(`/plants/${plantId}/devices/options`);
     const data = await res.json();
     const items = data?.items || [];
-    if (!items.length) { list.innerHTML = `<div style="color:var(--text-muted);font-size:0.82rem;">Nenhum dispositivo.</div>`; return; }
+    if (!items.length) {
+      list.innerHTML = `<div style="color:var(--text-muted);font-size:0.82rem;">Nenhum dispositivo.</div>`;
+      return;
+    }
+    const canCmd = _canSendCommand();
     list.innerHTML = items.map(d => `
       <div class="plant-edit-device-row" data-device-id="${d.device_id}">
         <div class="plant-edit-device-info">
-          <span class="plant-edit-device-type">${d.device_type||"—"}</span>
+          <span class="plant-edit-device-type">${d.device_type || "—"}</span>
           <span class="plant-edit-device-meta">#${d.device_id}</span>
         </div>
         <div class="plant-edit-inline">
-          <input class="plant-edit-device-name" type="text" value="${(d.device_name||"").replace(/"/g,'&quot;')}" placeholder="Nome do dispositivo"/>
-          <button class="plant-edit-device-save" type="button" title="Salvar"><i class="fa-solid fa-check"></i></button>
+          <input class="plant-edit-device-name" type="text"
+            value="${(d.device_name || "").replace(/"/g, '&quot;')}"
+            placeholder="Nome do dispositivo" />
+          <button class="plant-edit-device-save" type="button" title="Salvar nome">
+            <i class="fa-solid fa-check"></i>
+          </button>
+          ${canCmd ? _pemRenderCommandControl(d.device_type || "", d.device_id) : ""}
+          <button class="pem-del-device-btn" type="button" title="Excluir dispositivo"
+            data-device-id="${d.device_id}">
+            <i class="fa-solid fa-trash"></i>
+          </button>
         </div>
-        <div class="plant-edit-device-feedback"></div>
+        <div class="plant-edit-device-feedback" id="pem-devfb-${d.device_id}"></div>
       </div>`).join("");
+
+    _pemWireCommandButtons(list);
+
     list.querySelectorAll(".plant-edit-device-row").forEach(row => {
       const did = row.dataset.deviceId;
       const inp = row.querySelector(".plant-edit-device-name");
-      const btn = row.querySelector(".plant-edit-device-save");
-      const fb  = row.querySelector(".plant-edit-device-feedback");
-      btn.addEventListener("click", async () => {
+      const saveBtn = row.querySelector(".plant-edit-device-save");
+      const delBtn  = row.querySelector(".pem-del-device-btn");
+      const fb      = row.querySelector(".plant-edit-device-feedback");
+
+      // Salvar nome
+      saveBtn?.addEventListener("click", async () => {
         const n = inp.value.trim();
-        if (!n) { fb.textContent="Nome vazio."; fb.className="plant-edit-device-feedback err"; return; }
-        btn.disabled=true; fb.textContent="Salvando…"; fb.className="plant-edit-device-feedback";
+        if (!n) { fb.textContent = "Nome vazio."; fb.className = "plant-edit-device-feedback err"; return; }
+        saveBtn.disabled = true;
+        fb.textContent = "Salvando…"; fb.className = "plant-edit-device-feedback";
         try {
-          const r = await apiFetch(`/plants/${_PLANT_EDIT_ID}/devices/${did}/name`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify({display_name:n})});
-          if(!r.ok) throw new Error((await r.json())?.error||`HTTP ${r.status}`);
-          fb.textContent="✓ Salvo!"; fb.className="plant-edit-device-feedback ok";
-        } catch(e){ fb.textContent=e.message||"Erro."; fb.className="plant-edit-device-feedback err"; }
-        finally{ btn.disabled=false; }
+          const r = await apiFetch(`/plants/${_PLANT_EDIT_ID}/devices/${did}/name`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ display_name: n })
+          });
+          if (!r.ok) throw new Error((await r.json())?.error || `HTTP ${r.status}`);
+          fb.textContent = "✓ Salvo!"; fb.className = "plant-edit-device-feedback ok";
+        } catch (e) {
+          fb.textContent = e.message || "Erro."; fb.className = "plant-edit-device-feedback err";
+        } finally { saveBtn.disabled = false; }
+      });
+
+      // Excluir device
+      delBtn?.addEventListener("click", async () => {
+        if (!confirm(`Excluir dispositivo #${did}? Esta ação desativa o dispositivo.`)) return;
+        delBtn.disabled = true;
+        fb.textContent = "Excluindo…"; fb.className = "plant-edit-device-feedback";
+        try {
+          const r = await apiFetch(`/plants/${_PLANT_EDIT_ID}/devices/${did}`, { method: "DELETE" });
+          if (!r.ok) throw new Error((await r.json())?.error || `HTTP ${r.status}`);
+          fb.textContent = "✓ Removido!"; fb.className = "plant-edit-device-feedback ok";
+          setTimeout(() => row.remove(), 900);
+        } catch (e) {
+          fb.textContent = e.message || "Erro."; fb.className = "plant-edit-device-feedback err";
+          delBtn.disabled = false;
+        }
       });
     });
-  } catch(e){ list.innerHTML=`<div style="color:var(--text-muted);font-size:0.82rem;">Erro ao carregar.</div>`; }
+  } catch (e) {
+    list.innerHTML = `<div style="color:var(--text-muted);font-size:0.82rem;">Erro ao carregar.</div>`;
+  }
 }
 
 async function savePlantName() {
@@ -4232,8 +4275,519 @@ async function savePlantRatedPower() {
   } catch(e){ fb.textContent=e.message||"Erro."; fb.className="plant-edit-feedback err"; }
 }
 
+// =============================================================================
+// DEVICE COMMAND INFRASTRUCTURE — PEM context (resumo.html)
+// (Versão adaptada de plant.js; usa _PLANT_EDIT_ID em vez de PLANT_ID)
+// =============================================================================
+
+const _PEM_CMD_STATE = new Map();
+
+function _pemCmdKey(deviceType, deviceId) {
+  return `${String(deviceType || "")}:${String(deviceId ?? "")}`;
+}
+function _pemCmdGetState(deviceType, deviceId, fallback = "off") {
+  return _PEM_CMD_STATE.get(_pemCmdKey(deviceType, deviceId)) || fallback;
+}
+function _pemCmdSetState(deviceType, deviceId, state) {
+  if (state !== "on" && state !== "off") return;
+  _PEM_CMD_STATE.set(_pemCmdKey(deviceType, deviceId), state);
+}
+function _pemCmdApplyVisual(deviceType, deviceId, state) {
+  const key = _pemCmdKey(deviceType, deviceId);
+  document.querySelectorAll(`.device-command-control[data-device-key="${key}"]`).forEach(el => {
+    el.classList.remove("is-on", "is-off", "is-reset-flash");
+    el.classList.add(state === "on" ? "is-on" : "is-off");
+  });
+}
+
+function _pemRenderCommandControl(deviceType, deviceId) {
+  const safeType = String(deviceType || "");
+  const safeId   = String(deviceId ?? "");
+  const state    = _pemCmdGetState(safeType, safeId, "off");
+  const key      = _pemCmdKey(safeType, safeId);
+  return `
+    <div class="device-command-control ${state === "on" ? "is-on" : "is-off"}"
+         data-device-key="${key}" data-device-type="${safeType}" data-device-id="${safeId}">
+      <button type="button" class="device-command-trigger"
+              data-device-key="${key}" data-device-type="${safeType}" data-device-id="${safeId}"
+              aria-label="Comandos do dispositivo">
+        <span class="device-command-switch" aria-hidden="true">
+          <svg class="device-command-switch-track" viewBox="0 0 72 40" preserveAspectRatio="none" focusable="false" aria-hidden="true">
+            <rect class="device-command-switch-track__outer" x="2" y="4" width="68" height="32" rx="16"></rect>
+            <rect class="device-command-switch-track__inner" x="4.5" y="6.5" width="63" height="27" rx="13.5"></rect>
+            <path class="device-command-switch-track__pulse" d="M14 21h10l4-6 6 12 5-8h18"></path>
+          </svg>
+          <span class="device-command-switch-thumb">
+            <svg class="device-command-switch-glyph" viewBox="0 0 24 24" focusable="false" aria-hidden="true">
+              <use href="#device-command-switch-glyph"></use>
+            </svg>
+          </span>
+        </span>
+      </button>
+    </div>`;
+}
+
+function _pemWireCommandButtons(rootEl) {
+  if (!rootEl) return;
+  rootEl.querySelectorAll(".device-command-trigger").forEach(btn => {
+    if (btn.dataset.wiredPemCmd === "true") return;
+    btn.dataset.wiredPemCmd = "true";
+    btn.addEventListener("click", e => {
+      e.preventDefault();
+      e.stopPropagation();
+      _pemOpenConsole({ deviceType: btn.dataset.deviceType || "", deviceId: btn.dataset.deviceId || "" });
+    });
+  });
+}
+
+function _pemEnsureAuthModal() {
+  if (document.getElementById("deviceCommandAuthModal")) return;
+  const wrap = document.createElement("div");
+  wrap.innerHTML = `
+    <div id="deviceCommandAuthModal" class="device-command-modal hidden">
+      <div class="device-command-modal-card">
+        <h3>Autenticação</h3>
+        <p id="deviceCommandAuthLabel">Confirme usuário e senha</p>
+        <input id="deviceCommandUser" type="text" placeholder="Usuário" autocomplete="username" />
+        <input id="deviceCommandPass" type="password" placeholder="Senha" autocomplete="current-password" />
+        <div class="device-command-modal-actions">
+          <button id="deviceCommandCancelBtn" type="button">Cancelar</button>
+          <button id="deviceCommandConfirmBtn" type="button">Confirmar</button>
+        </div>
+      </div>
+    </div>`;
+  document.body.appendChild(wrap);
+}
+
+function _pemEnsureConsole() {
+  if (document.getElementById("cmdConsoleOverlay")) return;
+  const el = document.createElement("div");
+  el.innerHTML = `
+    <div id="cmdConsoleOverlay" class="cmd-console-overlay hidden" role="dialog" aria-modal="true" aria-label="Console de Comandos">
+      <div class="cmd-console">
+        <div class="cmd-console__header">
+          <div class="cmd-console__title-group">
+            <div class="cmd-console__icon"><i class="fa-solid fa-terminal"></i></div>
+            <div>
+              <div class="cmd-console__label">Console de Comandos</div>
+              <div class="cmd-console__device-name" id="cmdConsoleDeviceName">—</div>
+            </div>
+          </div>
+          <button class="cmd-console__close" id="cmdConsoleClose" aria-label="Fechar console">
+            <i class="fa-solid fa-xmark"></i>
+          </button>
+        </div>
+        <div class="cmd-console__state-row">
+          <span class="cmd-console__state-dot is-unknown" id="cmdConsoleStateDot"></span>
+          <span class="cmd-console__state-text" id="cmdConsoleStateText">Estado desconhecido</span>
+        </div>
+        <div class="cmd-console__cmds">
+          <button class="cmd-console__cmd cmd-console__cmd--on" id="cmdConsoleBtnOn">
+            <i class="fa-solid fa-power-off"></i>
+            <span class="cmd-console__cmd-label">ON</span>
+            <span class="cmd-console__cmd-desc">Ligar equipamento</span>
+          </button>
+          <button class="cmd-console__cmd cmd-console__cmd--off" id="cmdConsoleBtnOff">
+            <i class="fa-solid fa-stop"></i>
+            <span class="cmd-console__cmd-label">OFF</span>
+            <span class="cmd-console__cmd-desc">Desligar equipamento</span>
+          </button>
+          <button class="cmd-console__cmd cmd-console__cmd--reset" id="cmdConsoleBtnReset">
+            <i class="fa-solid fa-rotate"></i>
+            <span class="cmd-console__cmd-label">RESET</span>
+            <span class="cmd-console__cmd-desc">Reiniciar equipamento</span>
+          </button>
+        </div>
+        <div class="cmd-console__power-section">
+          <div class="cmd-console__power-label"><i class="fa-solid fa-sliders"></i> Setar Potência Ativa</div>
+          <div class="cmd-console__power-row">
+            <input id="cmdConsolePowerInput" class="cmd-console__power-input" type="number" min="0" step="0.1" placeholder="kW" aria-label="Potência em kW" />
+            <span class="cmd-console__power-unit">kW</span>
+            <button class="cmd-console__power-btn" id="cmdConsoleBtnSetPower">
+              <i class="fa-solid fa-paper-plane"></i> Setar
+            </button>
+          </div>
+        </div>
+        <div class="cmd-console__feedback hidden" id="cmdConsoleFeedback">
+          <div class="cmd-console__feedback-inner">
+            <span class="cmd-console__feedback-icon" id="cmdConsoleFeedbackIcon"></span>
+            <span class="cmd-console__feedback-text" id="cmdConsoleFeedbackText"></span>
+          </div>
+        </div>
+        <div class="cmd-console__footer">
+          <i class="fa-solid fa-lock"></i>
+          Todos os comandos requerem autenticação antes de serem executados.
+        </div>
+      </div>
+    </div>`;
+  document.body.appendChild(el);
+  document.getElementById("cmdConsoleOverlay").addEventListener("click", e => {
+    if (e.target === e.currentTarget) _pemCloseConsole();
+  });
+  document.getElementById("cmdConsoleClose").addEventListener("click", _pemCloseConsole);
+}
+
+function _pemOpenConsole({ deviceType, deviceId }) {
+  _pemEnsureConsole();
+  _pemEnsureAuthModal();
+  const overlay    = document.getElementById("cmdConsoleOverlay");
+  const nameEl     = document.getElementById("cmdConsoleDeviceName");
+  const dotEl      = document.getElementById("cmdConsoleStateDot");
+  const textEl     = document.getElementById("cmdConsoleStateText");
+  const feedbackEl = document.getElementById("cmdConsoleFeedback");
+  if (!overlay) return;
+
+  nameEl.textContent = `${String(deviceType || "").toUpperCase()} — ID ${deviceId}`;
+  const state = _pemCmdGetState(deviceType, deviceId, "off");
+  dotEl.className = "cmd-console__state-dot " + (state === "on" ? "is-on" : "is-off");
+  textEl.textContent = state === "on" ? "ESTADO ATUAL: LIGADO" : "ESTADO ATUAL: DESLIGADO";
+  if (feedbackEl) feedbackEl.classList.add("hidden");
+
+  // Reclona botões para limpar handlers anteriores
+  ["cmdConsoleBtnOn","cmdConsoleBtnOff","cmdConsoleBtnReset","cmdConsoleBtnSetPower"].forEach(id => {
+    const btn = document.getElementById(id);
+    if (btn) { const c = btn.cloneNode(true); btn.parentNode.replaceChild(c, btn); }
+  });
+  const pwrInput = document.getElementById("cmdConsolePowerInput");
+  if (pwrInput) pwrInput.value = "";
+
+  const dispatch = (action, value) => {
+    _pemCloseConsole();
+    _pemAuthFlow({ deviceType, deviceId, action, value });
+  };
+  document.getElementById("cmdConsoleBtnOn").addEventListener("click",    () => dispatch("on"));
+  document.getElementById("cmdConsoleBtnOff").addEventListener("click",   () => dispatch("off"));
+  document.getElementById("cmdConsoleBtnReset").addEventListener("click", () => dispatch("reset"));
+  document.getElementById("cmdConsoleBtnSetPower").addEventListener("click", () => {
+    const input = document.getElementById("cmdConsolePowerInput");
+    const val = input ? parseFloat(input.value) : NaN;
+    if (isNaN(val) || val < 0) { if (input) input.focus(); return; }
+    dispatch("set_power", val);
+  });
+
+  overlay.classList.remove("hidden");
+  document.body.style.overflow = "hidden";
+}
+
+function _pemCloseConsole() {
+  const overlay = document.getElementById("cmdConsoleOverlay");
+  if (overlay) overlay.classList.add("hidden");
+  document.body.style.overflow = "";
+}
+
+function _pemAuthFlow({ deviceType, deviceId, action, value }) {
+  _pemEnsureAuthModal();
+  const auth       = document.getElementById("deviceCommandAuthModal");
+  const authLabel  = document.getElementById("deviceCommandAuthLabel");
+  const cancelBtn  = document.getElementById("deviceCommandCancelBtn");
+  const confirmBtn = document.getElementById("deviceCommandConfirmBtn");
+  const userInput  = document.getElementById("deviceCommandUser");
+  const passInput  = document.getElementById("deviceCommandPass");
+  if (!auth || !confirmBtn || !cancelBtn) return;
+
+  userInput.value = ""; passInput.value = "";
+  authLabel.textContent = `${String(deviceType).toUpperCase()} ${deviceId} • ${action === "set_power" ? `SET POWER → ${value} kW` : action.toUpperCase()}`;
+  auth.classList.remove("hidden");
+
+  const closeAuth = () => auth.classList.add("hidden");
+  cancelBtn.onclick = closeAuth;
+
+  function showFeedback({ success, message }) {
+    _pemEnsureConsole();
+    const overlay2   = document.getElementById("cmdConsoleOverlay");
+    const feedbackEl = document.getElementById("cmdConsoleFeedback");
+    const iconEl     = document.getElementById("cmdConsoleFeedbackIcon");
+    const textEl2    = document.getElementById("cmdConsoleFeedbackText");
+    const dotEl      = document.getElementById("cmdConsoleStateDot");
+    const stateTextEl= document.getElementById("cmdConsoleStateText");
+    const nameEl2    = document.getElementById("cmdConsoleDeviceName");
+
+    if (overlay2) { overlay2.classList.remove("hidden"); document.body.style.overflow = "hidden"; }
+    if (nameEl2) nameEl2.textContent = `${String(deviceType).toUpperCase()} — ID ${deviceId}`;
+    if (success && (action === "on" || action === "off")) {
+      _pemCmdSetState(deviceType, deviceId, action);
+      _pemCmdApplyVisual(deviceType, deviceId, action);
+      if (dotEl) dotEl.className = "cmd-console__state-dot " + (action === "on" ? "is-on" : "is-off");
+      if (stateTextEl) stateTextEl.textContent = `ESTADO ATUAL: ${action === "on" ? "LIGADO" : "DESLIGADO"}`;
+    }
+    if (feedbackEl && iconEl && textEl2) {
+      feedbackEl.classList.remove("hidden", "is-success", "is-error");
+      feedbackEl.classList.add(success ? "is-success" : "is-error");
+      iconEl.innerHTML = success ? `<i class="fa-solid fa-circle-check"></i>` : `<i class="fa-solid fa-circle-xmark"></i>`;
+      textEl2.textContent = message;
+    }
+  }
+
+  confirmBtn.onclick = async () => {
+    const username = userInput.value.trim();
+    const password = passInput.value;
+    if (!username || !password) { authLabel.textContent = "Preencha usuário e senha."; return; }
+    confirmBtn.disabled = true; confirmBtn.textContent = "Aguarde...";
+    try {
+      if (!_PLANT_EDIT_ID) throw new Error("plant_id não encontrado");
+      const r = await apiFetch(`/plants/${_PLANT_EDIT_ID}/devices/${deviceId}/command`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action, username, password, requested_by: username,
+          ...(action === "set_power" && value != null ? { value } : {})
+        })
+      });
+      let data = {};
+      try { data = await r.json(); } catch (_) {}
+      closeAuth();
+      if (r.ok && data.ok) {
+        showFeedback({ success: true, message: action === "set_power" ? `Potência setada para ${value} kW com sucesso.` : `Comando ${action.toUpperCase()} enviado com sucesso.` });
+      } else {
+        showFeedback({ success: false, message: data.error || (r.status === 401 ? "Credenciais inválidas." : `Falha. (${r.status})`) });
+      }
+    } catch (err) {
+      closeAuth();
+      showFeedback({ success: false, message: `Erro: ${err.message}` });
+    } finally {
+      confirmBtn.disabled = false; confirmBtn.textContent = "Confirmar";
+    }
+  };
+}
+
+// =============================================================================
+// PLANT EDIT MODAL — TABS + CRUD DEVICES + CABINES
+// =============================================================================
+
+// Tab switching no modal de edição
+function _pemInitTabs() {
+  document.querySelectorAll(".pem-tab").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const target = btn.dataset.pemTab;
+      document.querySelectorAll(".pem-tab").forEach(b => b.classList.remove("active"));
+      document.querySelectorAll(".pem-tab-pane").forEach(p => p.classList.remove("active"));
+      btn.classList.add("active");
+      document.getElementById(target)?.classList.add("active");
+    });
+  });
+}
+
+// Override openPlantEditModal para resetar abas e carregar dados extras
+const _pemOrigOpen = openPlantEditModal;
+openPlantEditModal = async function(plantId, plantName, ratedPower) {
+  // Reset abas para Informações
+  document.querySelectorAll(".pem-tab").forEach((b, i) => b.classList.toggle("active", i === 0));
+  document.querySelectorAll(".pem-tab-pane").forEach((p, i) => p.classList.toggle("active", i === 0));
+  // Limpar feedbacks
+  ["pemAddDeviceFb", "pemAddCabineFb"].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) { el.textContent = ""; el.className = "plant-edit-feedback"; }
+  });
+  // Chama o original
+  _pemOrigOpen(plantId, plantName, ratedPower);
+  // Carrega device types e cabines em paralelo
+  await Promise.all([
+    _pemLoadDeviceTypes(plantId),
+    _pemLoadCabines(plantId)
+  ]);
+};
+
+async function _pemLoadDeviceTypes(plantId) {
+  const sel = document.getElementById("pemDeviceTypeSelect");
+  if (!sel) return;
+  try {
+    const r = await apiFetch(`/plants/${plantId}/device-types`);
+    if (!r.ok) return;
+    const data = await r.json();
+    const items = data?.items || [];
+    sel.innerHTML = `<option value="">Tipo...</option>` +
+      items.map(t => `<option value="${t.id}">${t.name}</option>`).join("");
+  } catch (e) { console.warn("[pem] device-types:", e?.message); }
+}
+
+async function _pemLoadCabines(plantId) {
+  const list = document.getElementById("pemCabinesList");
+  if (!list) return;
+  list.innerHTML = `<div style="color:var(--text-muted);font-size:0.82rem;padding:4px 0;">Carregando…</div>`;
+  try {
+    const r = await apiFetch(`/plants/${plantId}/cabines`);
+    if (!r.ok) { list.innerHTML = `<div style="color:var(--text-muted);font-size:0.82rem;">Erro ao carregar.</div>`; return; }
+    const data = await r.json();
+    const items = data?.items || [];
+    if (!items.length) {
+      list.innerHTML = `<div style="color:var(--text-muted);font-size:0.82rem;">Nenhuma cabine cadastrada.</div>`;
+      return;
+    }
+    list.innerHTML = items.map(c => `
+      <div class="plant-edit-device-row pem-cabine-row" data-cabine-id="${c.device_id}">
+        <div class="plant-edit-device-info">
+          <span class="plant-edit-device-type">
+            <i class="fa-solid fa-box-open" style="color:var(--accent-green);font-size:10px;margin-right:4px;"></i>
+            ${c.device_name}
+          </span>
+          <span class="plant-edit-device-meta">#${c.device_id} · ${c.device_type}</span>
+        </div>
+        <button class="pem-del-device-btn" type="button" title="Excluir cabine" data-cabine-id="${c.device_id}">
+          <i class="fa-solid fa-trash"></i>
+        </button>
+        <div class="plant-edit-device-feedback" id="pem-cabfb-${c.device_id}"></div>
+      </div>`).join("");
+
+    list.querySelectorAll(".pem-cabine-row").forEach(row => {
+      const cid = row.dataset.cabineId;
+      const delBtn = row.querySelector(".pem-del-device-btn");
+      const fb     = document.getElementById(`pem-cabfb-${cid}`);
+      delBtn?.addEventListener("click", async () => {
+        if (!confirm(`Excluir cabine #${cid}?`)) return;
+        delBtn.disabled = true;
+        if (fb) { fb.textContent = "Excluindo…"; fb.className = "plant-edit-device-feedback"; }
+        try {
+          const r = await apiFetch(`/plants/${_PLANT_EDIT_ID}/cabines/${cid}`, { method: "DELETE" });
+          if (!r.ok) throw new Error((await r.json())?.error || `HTTP ${r.status}`);
+          if (fb) { fb.textContent = "✓ Removida!"; fb.className = "plant-edit-device-feedback ok"; }
+          setTimeout(() => row.remove(), 900);
+        } catch (e) {
+          if (fb) { fb.textContent = e.message || "Erro."; fb.className = "plant-edit-device-feedback err"; }
+          delBtn.disabled = false;
+        }
+      });
+    });
+  } catch (e) {
+    list.innerHTML = `<div style="color:var(--text-muted);font-size:0.82rem;">Erro ao carregar cabines.</div>`;
+  }
+}
+
+async function pemAddDevice() {
+  if (!_PLANT_EDIT_ID) return;
+  const typeId = document.getElementById("pemDeviceTypeSelect")?.value;
+  const name   = document.getElementById("pemDeviceNameInput")?.value?.trim();
+  const fb     = document.getElementById("pemAddDeviceFb");
+  if (!typeId)  { fb.textContent = "Selecione o tipo."; fb.className = "plant-edit-feedback err"; return; }
+  if (!name)    { fb.textContent = "Informe o nome.";  fb.className = "plant-edit-feedback err"; return; }
+  fb.textContent = "Adicionando…"; fb.className = "plant-edit-feedback";
+  try {
+    const r = await apiFetch(`/plants/${_PLANT_EDIT_ID}/devices`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ device_type_id: parseInt(typeId), name, display_name: name })
+    });
+    if (!r.ok) throw new Error((await r.json())?.error || `HTTP ${r.status}`);
+    fb.textContent = "✓ Dispositivo adicionado!"; fb.className = "plant-edit-feedback ok";
+    document.getElementById("pemDeviceNameInput").value = "";
+    await _loadPlantEditDevices(_PLANT_EDIT_ID);
+  } catch (e) { fb.textContent = e.message || "Erro."; fb.className = "plant-edit-feedback err"; }
+}
+
+async function pemAddCabine() {
+  if (!_PLANT_EDIT_ID) return;
+  const name = document.getElementById("pemCabineNameInput")?.value?.trim();
+  const fb   = document.getElementById("pemAddCabineFb");
+  if (!name) { fb.textContent = "Informe o nome da cabine."; fb.className = "plant-edit-feedback err"; return; }
+  fb.textContent = "Adicionando…"; fb.className = "plant-edit-feedback";
+  try {
+    const r = await apiFetch(`/plants/${_PLANT_EDIT_ID}/cabines`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ display_name: name })
+    });
+    if (!r.ok) throw new Error((await r.json())?.error || `HTTP ${r.status}`);
+    fb.textContent = "✓ Cabine adicionada!"; fb.className = "plant-edit-feedback ok";
+    document.getElementById("pemCabineNameInput").value = "";
+    await _pemLoadCabines(_PLANT_EDIT_ID);
+  } catch (e) { fb.textContent = e.message || "Erro."; fb.className = "plant-edit-feedback err"; }
+}
+
 document.addEventListener("DOMContentLoaded",()=>{
   document.querySelector(".plant-edit-modal__backdrop")?.addEventListener("click", closePlantEditModal);
+  _pemInitTabs();
+
+  // Botão "+" — só aparece para superuser / admin_customer
+  const _btnAdd = document.getElementById("btnAddPlant");
+  if (_btnAdd) {
+    const _usr = JSON.parse(localStorage.getItem("user") || "{}");
+    if (_usr.is_superuser === true || _usr.role_key === "admin_customer") {
+      _btnAdd.classList.remove("hidden");
+      _btnAdd.addEventListener("click", openPlantCreateModal);
+    }
+    // Fechar modal de criação com backdrop
+    document.getElementById("plantCreateModal")
+      ?.querySelector(".plant-edit-modal__backdrop")
+      ?.addEventListener("click", closePlantCreateModal);
+  }
 });
+
+// ─────────────────────────────────────────────────
+// CRIAR USINA
+// ─────────────────────────────────────────────────
+function openPlantCreateModal() {
+  const modal = document.getElementById("plantCreateModal");
+  if (!modal) return;
+  ["plantCreateNameInput","plantCreateDcInput","plantCreateAcInput",
+   "plantCreateLocationInput","plantCreateCustomerInput"].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.value = "";
+  });
+  const fb = document.getElementById("plantCreateFeedback");
+  if (fb) { fb.textContent = ""; fb.className = "plant-edit-feedback"; }
+
+  const _u = JSON.parse(localStorage.getItem("user") || "{}");
+  const customerSection = document.getElementById("plantCreateCustomerSection");
+  if (customerSection) customerSection.style.display = _u.is_superuser ? "" : "none";
+
+  modal.classList.remove("hidden");
+  modal.setAttribute("aria-hidden", "false");
+  document.body.classList.add("plant-edit-modal-open");
+  document.getElementById("plantCreateNameInput")?.focus();
+}
+
+function closePlantCreateModal() {
+  const modal = document.getElementById("plantCreateModal");
+  if (modal) { modal.classList.add("hidden"); modal.setAttribute("aria-hidden","true"); }
+  document.body.classList.remove("plant-edit-modal-open");
+}
+
+async function createNewPlant() {
+  const nameEl   = document.getElementById("plantCreateNameInput");
+  const dcEl     = document.getElementById("plantCreateDcInput");
+  const acEl     = document.getElementById("plantCreateAcInput");
+  const locEl    = document.getElementById("plantCreateLocationInput");
+  const custEl   = document.getElementById("plantCreateCustomerInput");
+  const fb       = document.getElementById("plantCreateFeedback");
+  const saveBtn  = document.getElementById("plantCreateSaveBtn");
+
+  const name = nameEl?.value?.trim();
+  if (!name) {
+    if (fb) { fb.textContent = "Nome da usina é obrigatório."; fb.className = "plant-edit-feedback err"; }
+    nameEl?.focus();
+    return;
+  }
+
+  const payload = { plant_name: name };
+  if (dcEl?.value)   payload.capacity_dc = parseFloat(dcEl.value);
+  if (acEl?.value)   payload.capacity_ac = parseFloat(acEl.value);
+  if (locEl?.value)  payload.location    = locEl.value.trim();
+  if (custEl?.value) payload.customer_id = parseInt(custEl.value, 10);
+
+  if (fb)      { fb.textContent = "Criando…"; fb.className = "plant-edit-feedback"; }
+  if (saveBtn) saveBtn.disabled = true;
+
+  try {
+    const res = await apiFetch("/plants", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
+
+    if (fb) {
+      fb.textContent = `✓ Usina "${data.plant_name}" criada (ID ${data.plant_id}).`;
+      fb.className = "plant-edit-feedback ok";
+    }
+    setTimeout(async () => {
+      closePlantCreateModal();
+      try { await loadPortfolio(); } catch(_) {}
+    }, 1200);
+  } catch(e) {
+    if (fb) { fb.textContent = e.message || "Erro ao criar usina."; fb.className = "plant-edit-feedback err"; }
+  } finally {
+    if (saveBtn) saveBtn.disabled = false;
+  }
+}
 
 // wirePortfolioControls is now called synchronously inside the main DOMContentLoaded listener (above).
