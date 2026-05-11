@@ -42,17 +42,19 @@ function apiFetch(path, options = {}) {
   });
 }
 
-function withCurrentUserQuery(path) {
-  const user = JSON.parse(localStorage.getItem("user") || "{}");
-  const params = new URLSearchParams();
-  if (user.id) params.set("user_id", String(user.id));
-  if (user.username) params.set("username", String(user.username));
-  if (user.customer_id) params.set("customer_id", String(user.customer_id));
-  if (user.is_superuser === true) params.set("is_superuser", "true");
-
-  const query = params.toString();
-  if (!query) return path;
-  return `${path}${path.includes("?") ? "&" : "?"}${query}`;
+// =============================================================================
+// HELPERS DE PERMISSÃO (lê role_key do localStorage — salvo no login)
+// =============================================================================
+function _getUser() {
+  try { return JSON.parse(localStorage.getItem("user") || "{}"); } catch { return {}; }
+}
+function _canEditPlantUI() {
+  const u = _getUser();
+  return u.is_superuser === true || u.role_key === "admin_customer";
+}
+function _canAckAlarmUI() {
+  const u = _getUser();
+  return u.is_superuser === true || u.role_key === "admin_customer" || u.role_key === "operator";
 }
 
 // =============================================================================
@@ -99,8 +101,10 @@ let DATASTUDIO_STATE = {
   selectedDataKind: "all", // all | analog | discrete
   selectedSource: "all", // all | historico | consolidado
   selectedContext: "all", // all | PLANT | inverter | relay | meter etc
+  selectedCategory: "all",
   searchText: "",
 
+  catalogTags: [],
   availableTags: [],
   selectedTags: [],
 
@@ -117,6 +121,7 @@ let DATASTUDIO_STATE = {
 };
 
 let DATASTUDIO_CHART = null;
+let DATASTUDIO_TAGS_ABORT_CONTROLLER = null;
 
 // Abort controller pra evitar race condition
 let eventsAbortController = null;
@@ -138,15 +143,6 @@ let EVENTS_ROUNDS = 5;
 // =============================================================================
 function valueOrDash(v) {
   return v === null || v === undefined || v === "" ? "—" : v;
-}
-
-function escapeHtml(value) {
-  return String(value ?? "")
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#039;");
 }
 
 function severityColor(sev) {
@@ -569,418 +565,6 @@ async function fetchPlantDeviceOptions(plantId) {
     return Array.isArray(parsed?.items) ? parsed.items : (Array.isArray(parsed) ? parsed : []);
   }
   return Array.isArray(data?.items) ? data.items : (Array.isArray(data) ? data : []);
-}
-
-const PLANT_EDIT_STATE = {
-  plantId: null,
-  plant: null,
-  devices: []
-};
-
-let _plantEditModalWired = false;
-
-function plantEditPencilSvg() {
-  return `
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-      <path d="M12 20h9"></path>
-      <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"></path>
-    </svg>
-  `;
-}
-
-function getPlantId(plant) {
-  return plant?.power_plant_id ?? plant?.plant_id ?? plant?.id ?? null;
-}
-
-function getPlantDisplayName(plant) {
-  return plant?.power_plant_name ?? plant?.plant_name ?? plant?.name ?? "";
-}
-
-function getPlantRatedPowerValue(plant) {
-  return plant?.capacity_dc ?? plant?.rated_power_kw ?? plant?.rated_power_kwp ?? "";
-}
-
-function normalizeApiPayload(data) {
-  if (data && Object.prototype.hasOwnProperty.call(data, "body")) {
-    if (typeof data.body === "string") {
-      try {
-        return JSON.parse(data.body);
-      } catch (_err) {
-        return { message: data.body };
-      }
-    }
-    return data.body;
-  }
-  return data;
-}
-
-async function readApiPayload(res) {
-  const text = await res.text();
-  let data = {};
-  if (text) {
-    try {
-      data = JSON.parse(text);
-    } catch (_err) {
-      data = { message: text };
-    }
-  }
-  return normalizeApiPayload(data);
-}
-
-function setPlantEditFeedback(id, message = "", type = "") {
-  const el = document.getElementById(id);
-  if (!el) return;
-  el.textContent = message;
-  el.classList.remove("ok", "err");
-  if (type) el.classList.add(type);
-}
-
-function getPlantEditSaveButton(inputId) {
-  const input = document.getElementById(inputId);
-  return input?.closest(".plant-edit-inline")?.querySelector("button") || null;
-}
-
-function updatePlantEditModalTitle() {
-  const title = document.getElementById("plantEditModalTitle");
-  const name = getPlantDisplayName(PLANT_EDIT_STATE.plant);
-  if (title) title.textContent = name ? `Editar usina - ${name}` : "Editar usina";
-}
-
-function wirePlantEditModal() {
-  if (_plantEditModalWired) return;
-  _plantEditModalWired = true;
-
-  document.querySelector("#plantEditModal .plant-edit-modal__backdrop")
-    ?.addEventListener("click", closePlantEditModal);
-
-  document.addEventListener("keydown", (event) => {
-    const modal = document.getElementById("plantEditModal");
-    if (event.key === "Escape" && modal && !modal.classList.contains("hidden")) {
-      closePlantEditModal();
-    }
-  });
-}
-
-function renderPlantEditDevices(devices, { loading = false, error = "" } = {}) {
-  const list = document.getElementById("plantEditDevicesList");
-  if (!list) return;
-  list.innerHTML = "";
-
-  if (loading) {
-    const empty = document.createElement("div");
-    empty.className = "plant-edit-empty";
-    empty.textContent = "Carregando dispositivos...";
-    list.appendChild(empty);
-    return;
-  }
-
-  if (error) {
-    const empty = document.createElement("div");
-    empty.className = "plant-edit-empty plant-edit-empty--error";
-    empty.textContent = error;
-    list.appendChild(empty);
-    return;
-  }
-
-  const rows = Array.isArray(devices) ? devices : [];
-  if (!rows.length) {
-    const empty = document.createElement("div");
-    empty.className = "plant-edit-empty";
-    empty.textContent = "Nenhum dispositivo encontrado.";
-    list.appendChild(empty);
-    return;
-  }
-
-  rows.forEach((device) => {
-    const deviceId = device?.device_id ?? device?.id;
-    if (deviceId == null) return;
-
-    const row = document.createElement("div");
-    row.className = "plant-edit-device-row";
-    row.dataset.deviceId = String(deviceId);
-
-    const info = document.createElement("div");
-    info.className = "plant-edit-device-info";
-
-    const type = document.createElement("div");
-    type.className = "plant-edit-device-type";
-    type.textContent = device?.device_type || "Dispositivo";
-
-    const meta = document.createElement("div");
-    meta.className = "plant-edit-device-meta";
-    meta.textContent = device?.original_name ? `Original: ${device.original_name}` : `ID ${deviceId}`;
-
-    info.appendChild(type);
-    info.appendChild(meta);
-
-    const input = document.createElement("input");
-    input.className = "plant-edit-device-name";
-    input.type = "text";
-    input.value = device?.display_name || device?.device_name || device?.label || "";
-    input.placeholder = "Nome do dispositivo";
-
-    const button = document.createElement("button");
-    button.className = "plant-edit-device-save";
-    button.type = "button";
-    button.title = "Salvar nome do dispositivo";
-    button.setAttribute("aria-label", "Salvar nome do dispositivo");
-    button.innerHTML = '<i class="fa-solid fa-check"></i>';
-
-    const feedback = document.createElement("div");
-    feedback.className = "plant-edit-device-feedback";
-
-    const save = () => savePlantDeviceName(deviceId, input, feedback, button);
-    button.addEventListener("click", save);
-    input.addEventListener("keydown", (event) => {
-      if (event.key !== "Enter") return;
-      event.preventDefault();
-      save();
-    });
-
-    row.appendChild(info);
-    row.appendChild(input);
-    row.appendChild(button);
-    row.appendChild(feedback);
-    list.appendChild(row);
-  });
-}
-
-async function patchPlantEdit(payload) {
-  const plantId = PLANT_EDIT_STATE.plantId;
-  if (plantId == null) throw new Error("Usina invalida.");
-
-  const res = await apiFetch(withCurrentUserQuery(`/plants/${encodeURIComponent(plantId)}/name`), {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload)
-  });
-
-  const data = await readApiPayload(res);
-  if (!res.ok) {
-    throw new Error(data?.error || data?.message || `Erro ao salvar (${res.status})`);
-  }
-  return data;
-}
-
-function syncEditedPlantInCache(update) {
-  const plantId = Number(update?.plant_id ?? PLANT_EDIT_STATE.plantId);
-  if (!Number.isFinite(plantId)) return;
-
-  lastValidPlants = lastValidPlants.map((plant) => {
-    if (Number(getPlantId(plant)) !== plantId) return plant;
-
-    const next = { ...plant };
-    if (update?.power_plant_name) {
-      next.power_plant_name = update.power_plant_name;
-      next.plant_name = update.power_plant_name;
-      next.name = update.power_plant_name;
-    }
-    if (Object.prototype.hasOwnProperty.call(update || {}, "display_name")) {
-      next.display_name = update.display_name;
-    }
-    if (update?.capacity_dc !== null && update?.capacity_dc !== undefined) {
-      const rated = Number(update.capacity_dc);
-      if (Number.isFinite(rated)) {
-        next.capacity_dc = rated;
-        next.rated_power_kw = rated;
-        next.rated_power_kwp = rated;
-      }
-    }
-    return next;
-  });
-
-  const edited = lastValidPlants.find((plant) => Number(getPlantId(plant)) === plantId);
-  if (edited) PLANT_EDIT_STATE.plant = edited;
-  updatePlantEditModalTitle();
-  rerenderPortfolioAfterPlantEdit();
-}
-
-function rerenderPortfolioAfterPlantEdit() {
-  const filtered = typeof portfolioFilterPlants === "function"
-    ? portfolioFilterPlants(lastValidPlants)
-    : lastValidPlants;
-
-  updateSummaryUI(lastValidPlants);
-  renderPortfolioTable(filtered);
-
-  if (typeof _portfolioCurrentView !== "undefined" && _portfolioCurrentView === "card") {
-    renderPortfolioCards(filtered);
-  } else {
-    const grid = document.getElementById("portfolioCardView");
-    if (grid) grid.innerHTML = "";
-    if (typeof _portfolioMiniCharts !== "undefined") {
-      _portfolioMiniCharts.forEach((chart) => { try { chart.destroy(); } catch (_err) {} });
-      _portfolioMiniCharts.clear();
-    }
-  }
-
-  if (typeof populateDataStudioPlantSelect === "function") populateDataStudioPlantSelect(lastValidPlants);
-  if (typeof populateEventsPlantSelect === "function") populateEventsPlantSelect(lastValidPlants);
-}
-
-async function openPlantEditModal(plant) {
-  const plantId = getPlantId(plant);
-  if (plantId == null) return;
-
-  wirePlantEditModal();
-  PLANT_EDIT_STATE.plantId = plantId;
-  PLANT_EDIT_STATE.plant = plant;
-  PLANT_EDIT_STATE.devices = [];
-
-  const modal = document.getElementById("plantEditModal");
-  const nameInput = document.getElementById("plantEditNameInput");
-  const ratedInput = document.getElementById("plantEditRatedInput");
-
-  if (nameInput) nameInput.value = getPlantDisplayName(plant) || "";
-  if (ratedInput) {
-    const rated = getPlantRatedPowerValue(plant);
-    ratedInput.value = rated === null || rated === undefined || rated === "" ? "" : String(rated);
-  }
-
-  setPlantEditFeedback("plantEditNameFeedback");
-  setPlantEditFeedback("plantEditRatedFeedback");
-  updatePlantEditModalTitle();
-  renderPlantEditDevices([], { loading: true });
-
-  modal?.classList.remove("hidden");
-  modal?.setAttribute("aria-hidden", "false");
-  document.body.classList.add("plant-edit-modal-open");
-  setTimeout(() => nameInput?.focus(), 0);
-
-  try {
-    const devices = await fetchPlantDeviceOptions(plantId);
-    if (PLANT_EDIT_STATE.plantId !== plantId) return;
-    PLANT_EDIT_STATE.devices = devices;
-    renderPlantEditDevices(devices);
-  } catch (err) {
-    if (PLANT_EDIT_STATE.plantId !== plantId) return;
-    console.error("[plant edit] erro ao carregar dispositivos:", err);
-    renderPlantEditDevices([], { error: "Nao foi possivel carregar os dispositivos." });
-  }
-}
-
-function closePlantEditModal() {
-  const modal = document.getElementById("plantEditModal");
-  modal?.classList.add("hidden");
-  modal?.setAttribute("aria-hidden", "true");
-  document.body.classList.remove("plant-edit-modal-open");
-  PLANT_EDIT_STATE.plantId = null;
-  PLANT_EDIT_STATE.plant = null;
-  PLANT_EDIT_STATE.devices = [];
-}
-
-async function savePlantName() {
-  const input = document.getElementById("plantEditNameInput");
-  const button = getPlantEditSaveButton("plantEditNameInput");
-  const plantName = String(input?.value || "").trim();
-
-  if (!plantName) {
-    setPlantEditFeedback("plantEditNameFeedback", "Informe o nome da usina.", "err");
-    return;
-  }
-
-  try {
-    if (button) button.disabled = true;
-    setPlantEditFeedback("plantEditNameFeedback", "Salvando...");
-    const data = await patchPlantEdit({ plant_name: plantName });
-    syncEditedPlantInCache(data);
-    if (input) input.value = data?.power_plant_name || plantName;
-    setPlantEditFeedback("plantEditNameFeedback", "Nome salvo.", "ok");
-  } catch (err) {
-    console.error("[plant edit] erro ao salvar nome:", err);
-    setPlantEditFeedback("plantEditNameFeedback", err?.message || "Erro ao salvar nome.", "err");
-  } finally {
-    if (button) button.disabled = false;
-  }
-}
-
-async function savePlantRatedPower() {
-  const input = document.getElementById("plantEditRatedInput");
-  const button = getPlantEditSaveButton("plantEditRatedInput");
-  const raw = String(input?.value || "").trim().replace(",", ".");
-  const rated = Number(raw);
-
-  if (!raw || !Number.isFinite(rated) || rated < 0) {
-    setPlantEditFeedback("plantEditRatedFeedback", "Informe um valor numerico valido.", "err");
-    return;
-  }
-
-  try {
-    if (button) button.disabled = true;
-    setPlantEditFeedback("plantEditRatedFeedback", "Salvando...");
-    const data = await patchPlantEdit({ capacity_dc: rated });
-    syncEditedPlantInCache(data);
-    if (input) input.value = String(data?.capacity_dc ?? rated);
-    setPlantEditFeedback("plantEditRatedFeedback", "Rated Power salvo.", "ok");
-  } catch (err) {
-    console.error("[plant edit] erro ao salvar rated power:", err);
-    setPlantEditFeedback("plantEditRatedFeedback", err?.message || "Erro ao salvar rated power.", "err");
-  } finally {
-    if (button) button.disabled = false;
-  }
-}
-
-async function savePlantDeviceName(deviceId, input, feedback, button) {
-  const plantId = PLANT_EDIT_STATE.plantId;
-  const displayName = String(input?.value || "").trim();
-
-  feedback?.classList.remove("ok", "err");
-  if (!plantId || deviceId == null) {
-    if (feedback) {
-      feedback.textContent = "Usina invalida.";
-      feedback.classList.add("err");
-    }
-    return;
-  }
-
-  if (!displayName) {
-    if (feedback) {
-      feedback.textContent = "Informe um nome.";
-      feedback.classList.add("err");
-    }
-    return;
-  }
-
-  try {
-    if (button) button.disabled = true;
-    if (feedback) feedback.textContent = "Salvando...";
-
-    const res = await apiFetch(withCurrentUserQuery(`/plants/${encodeURIComponent(plantId)}/devices/${encodeURIComponent(deviceId)}/name`), {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ display_name: displayName })
-    });
-
-    const data = await readApiPayload(res);
-    if (!res.ok) {
-      throw new Error(data?.error || data?.message || `Erro ao salvar (${res.status})`);
-    }
-
-    PLANT_EDIT_STATE.devices = PLANT_EDIT_STATE.devices.map((device) => {
-      const currentId = device?.device_id ?? device?.id;
-      if (Number(currentId) !== Number(deviceId)) return device;
-      return {
-        ...device,
-        display_name: data?.display_name || displayName,
-        device_name: data?.device_name || displayName,
-        label: data?.label || displayName
-      };
-    });
-
-    if (input) input.value = data?.device_name || displayName;
-    if (feedback) {
-      feedback.textContent = "Salvo.";
-      feedback.classList.add("ok");
-    }
-  } catch (err) {
-    console.error("[plant edit] erro ao salvar dispositivo:", err);
-    if (feedback) {
-      feedback.textContent = err?.message || "Erro ao salvar.";
-      feedback.classList.add("err");
-    }
-  } finally {
-    if (button) button.disabled = false;
-  }
 }
 
 
@@ -2184,7 +1768,7 @@ function updateSummaryUI(plants) {
 
   validPlants.forEach(p => {
     totalActivePower += Number(p?.active_power_kw ?? 0) || 0;
-    totalRatedPower += Number(p?.capacity_dc ?? p?.rated_power_kw ?? p?.rated_power_kwp ?? 0) || 0;
+    totalRatedPower += Number(p?.rated_power_kw ?? p?.rated_power_kwp ?? 0) || 0;
   });
 
   const loadPct = totalRatedPower > 0 ? (totalActivePower / totalRatedPower) * 100 : 0;
@@ -2265,22 +1849,13 @@ function renderPortfolioTable(plants) {
   if (!tbody) return;
 
   const validPlants = sortPortfolioPlants(plants);
+  if (validPlants.length === 0) return;
+
   tbody.innerHTML = "";
-  if (validPlants.length === 0) {
-    tbody.innerHTML = `
-      <tr>
-        <td colspan="10" style="text-align:center; opacity:.75; padding:28px;">
-          Nenhuma usina encontrada
-        </td>
-      </tr>
-    `;
-    return;
-  }
 
   validPlants.forEach(plant => {
     const plantId = plant.power_plant_id ?? plant.plant_id ?? plant.id;
     const plantName = plant.power_plant_name ?? plant.plant_name ?? plant.name;
-    const safePlantName = escapeHtml(valueOrDash(plantName));
     const openPlantPage = () => {
       if (plantId == null) return;
       window.location.href = `plant.html?plant_id=${encodeURIComponent(plantId)}`;
@@ -2314,7 +1889,7 @@ function renderPortfolioTable(plants) {
           </span>
         </button>
       </td>
-      <td class="metric-neutral">${Number(plant.capacity_dc ?? plant.rated_power_kw ?? plant.rated_power_kwp ?? 0).toFixed(1)} kWp</td>
+      <td class="metric-neutral">${Number(plant.rated_power_kw ?? 0).toFixed(1)} kWp</td>
       <td class="metric-active${Number(plant.active_power_kw ?? 0) === 0 ? ' metric-zero' : ''}">${Number(plant.active_power_kw ?? 0).toFixed(1)} kW</td>
       <td class="metric-active">${Number(plant.energy_today_kwh ?? 0).toFixed(1)} kWh</td>
       <td>${plant.irradiance_wm2 != null ? Number(plant.irradiance_wm2).toFixed(0) + " W/m²" : "—"}</td>
@@ -2323,22 +1898,11 @@ function renderPortfolioTable(plants) {
       <td>${plant.pr_daily_pct != null ? Number(plant.pr_daily_pct).toFixed(1) + "%" : "—"}</td>
       <td>${plant.pr_accumulated_pct != null ? Number(plant.pr_accumulated_pct).toFixed(1) + "%" : "—"}</td>
       <td style="text-align:center;">
-        <span class="portfolio-actions">
-          <button class="plant-action-btn plant-action-btn--edit" title="Editar usina ${safePlantName}" aria-label="Editar usina ${safePlantName}" data-plant-id="${plantId}">
-            ${plantEditPencilSvg()}
-          </button>
-          <button class="plant-link-btn" title="Abrir usina" data-plant-id="${plantId}">
-            <i class="fa-solid fa-arrow-up-right-from-square"></i>
-          </button>
-        </span>
+        <button class="plant-link-btn" title="Abrir usina" data-plant-id="${plantId}">
+          <i class="fa-solid fa-arrow-up-right-from-square"></i>
+        </button>
       </td>
     `;
-
-    tr.querySelector(".plant-action-btn--edit").addEventListener("click", (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      openPlantEditModal(plant);
-    });
 
     tr.querySelector(".plant-link-btn").addEventListener("click", (e) => {
       e.stopPropagation();
@@ -2356,11 +1920,25 @@ function renderPortfolioTable(plants) {
     });
 
     tr.addEventListener("keydown", (e) => {
-      if (e.target.closest("button")) return;
       if (e.key !== "Enter" && e.key !== " ") return;
       e.preventDefault();
       openPlantPage();
     });
+
+    const _u2 = JSON.parse(localStorage.getItem("user") || "{}");
+    if (_u2.is_superuser === true || _u2.role_key === "admin_customer") {
+      const _editTd = document.createElement("td");
+      _editTd.style.textAlign = "center";
+      _editTd.innerHTML = `
+        <button class="plant-action-btn plant-list-edit-btn" title="Editar usina" style="cursor:pointer;">
+          <svg viewBox="0 0 20 20" fill="currentColor" style="width:14px;height:14px;color:#39e58c;"><path d="M13.586 3.586a2 2 0 112.828 2.828l-.793.793-2.828-2.828.793-.793zM11.379 5.793L3 14.172V17h2.828l8.38-8.379-2.83-2.828z"/></svg>
+        </button>`;
+      _editTd.querySelector("button").addEventListener("click", (e) => {
+        e.stopPropagation();
+        openPlantEditModal(plantId, plantName, Number(plant.rated_power_kw ?? 0));
+      });
+      tr.appendChild(_editTd);
+    }
 
     tbody.appendChild(tr);
   });
@@ -2428,16 +2006,109 @@ function dsContextMatches(tagContext, selectedContext) {
          selectedNorm.includes(tagNorm);
 }
 
+function dsNormalizeSearchText(value) {
+  return dsSafeTrim(value)
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function dsTagMatchesSearch(tag, query) {
+  const needle = dsNormalizeSearchText(query);
+  if (!needle) return true;
+
+  const haystack = [
+    tag?.description,
+    tag?.point_name,
+    tag?.pathname,
+    tag?.path_name,
+    tag?.context,
+    tag?.device_type,
+    tag?.unit
+  ].map(dsNormalizeSearchText).join(" ");
+
+  return haystack.includes(needle);
+}
+
 function dsTagGroup(tag) {
   const pathname = String(tag?.pathname || tag?.path_name || "");
   const deviceType = String(tag?.device_type || "").toLowerCase();
 
+  if (String(tag?.data_kind || "").toLowerCase() === "discrete") return "alarm";
   if (pathname.startsWith("PLANT.")) return "plant";
   if (pathname.startsWith("WEATHER_") || deviceType.includes("weather")) return "weather";
   if (pathname.startsWith("METER_") || deviceType.includes("meter")) return "meter";
   if (pathname.startsWith("RELAY_") || deviceType.includes("relay")) return "relay";
   if (pathname.startsWith("INV_") || deviceType.includes("inverter")) return "inverter";
   return "outro";
+}
+
+function dsCategoryMatches(tag, category) {
+  const cat = dsSafeTrim(category || "all");
+  if (!cat || cat === "all") return true;
+
+  const group = dsTagGroup(tag);
+  const map = {
+    planta: "plant",
+    inversor: "inverter",
+    weather: "weather",
+    relay: "relay",
+    meter: "meter",
+    alarm: "alarm"
+  };
+
+  return group === (map[cat] || cat);
+}
+
+function getDataStudioActiveCategory() {
+  const active = document.querySelector(".ds-v2-pill.active");
+  return dsSafeTrim(active?.dataset?.cat || DATASTUDIO_STATE.selectedCategory || "all") || "all";
+}
+
+function setDataStudioActiveCategory(category) {
+  const nextCategory = dsSafeTrim(category || "all") || "all";
+  DATASTUDIO_STATE.selectedCategory = nextCategory;
+
+  document.querySelectorAll(".ds-v2-pill").forEach((pill) => {
+    pill.classList.toggle("active", (pill.dataset.cat || "all") === nextCategory);
+  });
+}
+
+function updateDataStudioFoundCount(count, text) {
+  const { foundCount } = getDataStudioUIElements();
+  if (!foundCount) return;
+
+  if (text) {
+    foundCount.textContent = text;
+    return;
+  }
+
+  const n = Number(count) || 0;
+  const plural = n === 1 ? "" : "s";
+  foundCount.textContent = `${n} medida${plural} encontrada${plural}`;
+}
+
+function applyDataStudioTagFilters() {
+  const catalog = Array.isArray(DATASTUDIO_STATE.catalogTags) ? DATASTUDIO_STATE.catalogTags : [];
+  const selectedContext = dsSafeTrim(DATASTUDIO_STATE.selectedContext) || "all";
+  const selectedCategory = getDataStudioActiveCategory();
+  const searchText = dsSafeTrim(DATASTUDIO_STATE.searchText);
+
+  DATASTUDIO_STATE.selectedCategory = selectedCategory;
+
+  const filteredTags = catalog.filter((tag) => {
+    return dsContextMatches(tag?.context, selectedContext) &&
+           dsCategoryMatches(tag, selectedCategory) &&
+           dsTagMatchesSearch(tag, searchText);
+  });
+
+  DATASTUDIO_STATE.availableTags = filteredTags;
+  updateDataStudioContextInfo();
+  updateDataStudioFoundCount(filteredTags.length);
+  renderDataStudioTagsTable(filteredTags);
+  return filteredTags;
 }
 
 function dsSortTags(tags) {
@@ -2447,6 +2118,7 @@ function dsSortTags(tags) {
     meter: 2,
     relay: 3,
     inverter: 4,
+    alarm: 5,
     outro: 9
   };
 
@@ -2480,9 +2152,12 @@ function getDataStudioUIElements() {
     zoomInBtn: document.getElementById("dsZoomInBtn"),
     zoomOutBtn: document.getElementById("dsZoomOutBtn"),
     zoomResetBtn: document.getElementById("dsZoomResetBtn"),
+    fullscreenBtn: document.getElementById("dsFullscreenBtn"),
+    fullscreenCloseBtn: document.getElementById("dsFullscreenCloseBtn"),
 
     catalogSection: document.getElementById("dsCatalogSection"),
     contextInfo: document.getElementById("dsContextInfo"),
+    foundCount: document.querySelector(".ds-v2-found-count"),
 
     dataKindSelect: document.getElementById("dsDataKindSelect"),
     sourceSelect: document.getElementById("dsSourceSelect"),
@@ -2504,6 +2179,7 @@ function getDataStudioUIElements() {
     saveSelectionBtn: document.getElementById("dsSaveSelectionBtn"),
     loadSeriesBtn: document.getElementById("dsLoadSeriesBtn"),
 
+    chartWrap: document.getElementById("dsChartWrap"),
     chartCanvas: document.getElementById("dsChart")
   };
 }
@@ -2655,6 +2331,7 @@ function renderDataStudioTagsTable(tags) {
 
   const rows = Array.isArray(tags) ? tags : [];
   tagsTableBody.innerHTML = "";
+  updateDataStudioFoundCount(rows.length);
 
   if (!rows.length) {
     const tr = document.createElement("tr");
@@ -2672,7 +2349,7 @@ function renderDataStudioTagsTable(tags) {
     tr.classList.add("ds-table-row-clickable");
     const checked = isTagSelected(tag) ? "checked" : "";
 
-    const isAlarm = (tag?.data_kind === 'discrete') || (tag?.description || '').startsWith('âš ');
+    const isAlarm = (tag?.data_kind === 'discrete') || (tag?.description || '').startsWith('âš ');
     const isPlant = (tag?.context || '').toUpperCase().startsWith('PLANT') ||
                     (tag?.pathname || '').startsWith('PLANT.');
     const isWeather = (tag?.device_type || '').toLowerCase().includes('weather') ||
@@ -2769,6 +2446,7 @@ function renderDataStudioTagsTable(tags) {
 function setDataStudioLoadingTags(isLoading) {
   DATASTUDIO_STATE.loadingTags = Boolean(isLoading);
   const { openTagsBtn, tagsApplyBtn, tagsClearBtn } = getDataStudioUIElements();
+  if (DATASTUDIO_STATE.loadingTags) updateDataStudioFoundCount(null, "Buscando medidas...");
   if (openTagsBtn) {
     openTagsBtn.disabled = DATASTUDIO_STATE.loadingTags;
     openTagsBtn.textContent = DATASTUDIO_STATE.loadingTags
@@ -2969,6 +2647,79 @@ function resetDataStudioChartZoom() {
   }
 }
 
+function resizeDataStudioChartSoon() {
+  if (!DATASTUDIO_CHART || typeof DATASTUDIO_CHART.resize !== "function") return;
+
+  requestAnimationFrame(() => {
+    try {
+      DATASTUDIO_CHART.resize();
+    } catch (err) {
+      console.warn("[DataStudio] erro ao redimensionar grafico:", err);
+    }
+  });
+}
+
+function setDataStudioChartFullscreen(expanded) {
+  const { chartWrap, fullscreenBtn } = getDataStudioUIElements();
+  if (!chartWrap) return;
+
+  const isExpanded = Boolean(expanded);
+  chartWrap.classList.toggle("ds-chart-fullscreen", isExpanded);
+  document.body.classList.toggle("ds-chart-modal-open", isExpanded);
+
+  if (fullscreenBtn) {
+    fullscreenBtn.classList.toggle("is-active", isExpanded);
+    fullscreenBtn.setAttribute("aria-pressed", isExpanded ? "true" : "false");
+    fullscreenBtn.title = isExpanded ? "Voltar para tamanho normal" : "Tela cheia do grafico";
+    fullscreenBtn.setAttribute("aria-label", fullscreenBtn.title);
+    fullscreenBtn.innerHTML = isExpanded
+      ? '<i class="fa-solid fa-compress"></i>'
+      : '<i class="fa-solid fa-expand"></i>';
+  }
+
+  resizeDataStudioChartSoon();
+  window.setTimeout(resizeDataStudioChartSoon, 180);
+}
+
+function toggleDataStudioChartFullscreen() {
+  const { chartWrap } = getDataStudioUIElements();
+  setDataStudioChartFullscreen(!chartWrap?.classList.contains("ds-chart-fullscreen"));
+}
+
+function wireDataStudioChartPanCursorOnce() {
+  const { chartCanvas, chartWrap } = getDataStudioUIElements();
+  if (!chartCanvas || !chartWrap) return;
+  if (chartCanvas.dataset.dsPanCursorWired === "true") return;
+  chartCanvas.dataset.dsPanCursorWired = "true";
+
+  const stopPanning = () => {
+    chartWrap.classList.remove("is-panning");
+  };
+
+  chartCanvas.addEventListener("pointerdown", (event) => {
+    if (event.button != null && event.button !== 0) return;
+    chartWrap.classList.add("is-panning");
+    try { chartCanvas.setPointerCapture(event.pointerId); } catch (err) {}
+  });
+
+  ["pointerup", "pointercancel", "pointerleave", "lostpointercapture"].forEach((eventName) => {
+    chartCanvas.addEventListener(eventName, stopPanning);
+  });
+
+  window.addEventListener("pointerup", stopPanning);
+}
+
+function wireDataStudioChartFullscreenKeysOnce() {
+  if (window.__dsChartFullscreenKeysWired) return;
+  window.__dsChartFullscreenKeysWired = true;
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      setDataStudioChartFullscreen(false);
+    }
+  });
+}
+
 function isMobileViewport() {
   return window.innerWidth <= 768;
 }
@@ -3021,6 +2772,7 @@ function openDataStudioCatalogInline({ resetFilters = false } = {}) {
     DATASTUDIO_STATE.selectedDataKind = "all";
     DATASTUDIO_STATE.selectedSource = "all";
     DATASTUDIO_STATE.selectedContext = "all";
+    DATASTUDIO_STATE.selectedCategory = "all";
     DATASTUDIO_STATE.searchText = "";
 
     const { dataKindSelect, sourceSelect, contextSelect, searchInput } = getDataStudioUIElements();
@@ -3028,6 +2780,7 @@ function openDataStudioCatalogInline({ resetFilters = false } = {}) {
     if (sourceSelect) sourceSelect.value = "all";
     if (contextSelect) contextSelect.value = "all";
     if (searchInput) searchInput.value = "";
+    setDataStudioActiveCategory("all");
   }
 
   DATASTUDIO_STATE.catalogOpen = true;
@@ -3071,6 +2824,8 @@ async function fetchDataStudioTags() {
   const source = dsSafeTrim(sourceSelect?.value || DATASTUDIO_STATE.selectedSource);
   const context = dsSafeTrim(contextSelect?.value || DATASTUDIO_STATE.selectedContext);
   const q = dsSafeTrim(searchInput?.value || DATASTUDIO_STATE.searchText);
+  const requestSeq = (DATASTUDIO_STATE.tagsRequestSeq || 0) + 1;
+  DATASTUDIO_STATE.tagsRequestSeq = requestSeq;
 
   DATASTUDIO_STATE.selectedPlantId = plantId || null;
   DATASTUDIO_STATE.selectedDataKind = dataKind || "all";
@@ -3082,8 +2837,7 @@ async function fetchDataStudioTags() {
   if (plantId) params.set("plant_id", plantId);
   if (dataKind && dataKind !== "all") params.set("data_kind", dataKind);
   if (source && source !== "all") params.set("source", source);
-  if (q) params.set("q", q);
-  params.set("limit", "3000");
+  params.set("limit", "5000");
 
   const normalizeTagsResponse = (parsed) => {
     if (Array.isArray(parsed)) return parsed;
@@ -3092,14 +2846,25 @@ async function fetchDataStudioTags() {
     return [];
   };
 
+  if (DATASTUDIO_TAGS_ABORT_CONTROLLER) {
+    try { DATASTUDIO_TAGS_ABORT_CONTROLLER.abort(); } catch (err) {}
+  }
+
+  DATASTUDIO_TAGS_ABORT_CONTROLLER =
+    typeof AbortController !== "undefined" ? new AbortController() : null;
+
   setDataStudioLoadingTags(true);
 
   try {
     const qs = params.toString();
-    const res = await apiFetch(`/datastudio/tags${qs ? `?${qs}` : ""}`);
+    const fetchOptions = DATASTUDIO_TAGS_ABORT_CONTROLLER
+      ? { signal: DATASTUDIO_TAGS_ABORT_CONTROLLER.signal }
+      : {};
+    const res = await apiFetch(`/datastudio/tags${qs ? `?${qs}` : ""}`, fetchOptions);
     if (!res.ok) throw new Error(`Falha ao buscar medidas (${res.status})`);
     const data = await res.json();
     const parsed = dsNormalizeApiBody(data);
+    if (requestSeq !== DATASTUDIO_STATE.tagsRequestSeq) return;
 
     const allTags = normalizeTagsResponse(parsed);
     console.log("[DataStudio] TAGS RECEBIDAS:", allTags.length);
@@ -3110,25 +2875,25 @@ async function fetchDataStudioTags() {
     }, {})).map(([grupo, count]) => ({ grupo, count })));
 
     const sortedTags = dsSortTags(allTags);
+    DATASTUDIO_STATE.catalogTags = sortedTags;
     populateDataStudioContextSelect(sortedTags);
 
     const contextAfterPopulate = dsSafeTrim(contextSelect?.value || DATASTUDIO_STATE.selectedContext || "all");
     DATASTUDIO_STATE.selectedContext = contextAfterPopulate || "all";
-
-    const filteredTags = (contextAfterPopulate && contextAfterPopulate !== "all")
-      ? sortedTags.filter((tag) => dsContextMatches(tag?.context, contextAfterPopulate))
-      : sortedTags;
-
-    DATASTUDIO_STATE.availableTags = filteredTags;
-    updateDataStudioContextInfo();
-    renderDataStudioTagsTable(filteredTags);
+    applyDataStudioTagFilters();
   } catch (err) {
+    if (err?.name === "AbortError") return;
+    if (requestSeq !== DATASTUDIO_STATE.tagsRequestSeq) return;
     console.error("[DataStudio] erro ao buscar tags:", err);
+    DATASTUDIO_STATE.catalogTags = [];
     DATASTUDIO_STATE.availableTags = [];
     updateDataStudioContextInfo();
     renderDataStudioTagsTable([]);
   } finally {
-    setDataStudioLoadingTags(false);
+    if (requestSeq === DATASTUDIO_STATE.tagsRequestSeq) {
+      DATASTUDIO_TAGS_ABORT_CONTROLLER = null;
+      setDataStudioLoadingTags(false);
+    }
   }
 }
 
@@ -3334,11 +3099,26 @@ function renderDataStudioChart(seriesPayload) {
           },
           pan: {
             enabled: true,
-            mode: "xy"
+            mode: "xy",
+            threshold: 2,
+            onPanStart: () => {
+              const { chartWrap } = getDataStudioUIElements();
+              chartWrap?.classList.add("is-panning");
+              return true;
+            },
+            onPanComplete: () => {
+              const { chartWrap } = getDataStudioUIElements();
+              chartWrap?.classList.remove("is-panning");
+            },
+            onPanRejected: () => {
+              const { chartWrap } = getDataStudioUIElements();
+              chartWrap?.classList.remove("is-panning");
+            }
           },
           zoom: {
             wheel: {
-              enabled: true
+              enabled: true,
+              speed: 0.08
             },
             pinch: {
               enabled: true
@@ -3436,6 +3216,13 @@ function markDataStudioSeriesDirty() {
   updateDataStudioExportButton();
 }
 
+function scheduleDataStudioTagsFetch(delay = 220) {
+  window.clearTimeout(DATASTUDIO_STATE.tagsSearchTimer);
+  DATASTUDIO_STATE.tagsSearchTimer = window.setTimeout(() => {
+    fetchDataStudioTags();
+  }, delay);
+}
+
 function formatDateInputValue(dateObj) {
   const y = dateObj.getFullYear();
   const m = String(dateObj.getMonth() + 1).padStart(2, "0");
@@ -3530,10 +3317,12 @@ function wireDataStudioOnce() {
     DATASTUDIO_STATE.selectedPlantId = nextPlantId;
 
     DATASTUDIO_STATE.selectedTags = [];
+    DATASTUDIO_STATE.catalogTags = [];
     DATASTUDIO_STATE.availableTags = [];
     DATASTUDIO_STATE.selectionId = null;
     DATASTUDIO_STATE.chartData = null;
     DATASTUDIO_STATE.selectedContext = "all";
+    DATASTUDIO_STATE.selectedCategory = "all";
     DATASTUDIO_STATE.searchText = "";
 
     if (ui.contextSelect) {
@@ -3546,30 +3335,49 @@ function wireDataStudioOnce() {
     }
 
     if (ui.searchInput) ui.searchInput.value = "";
+    setDataStudioActiveCategory("all");
 
     renderDataStudioTagsTable([]);
     renderDataStudioChart(null);
     updateSelectedTagsCounter();
     updateDataStudioExportButton();
+    DATASTUDIO_STATE.catalogOpen = Boolean(nextPlantId);
+    DATASTUDIO_STATE.forceHeroState = false;
+    DATASTUDIO_STATE.catalogConfirmed = false;
     updateDataStudioStageUI();
+    if (nextPlantId) fetchDataStudioTags();
   });
 
   ui.dataKindSelect?.addEventListener("change", (e) => {
     DATASTUDIO_STATE.selectedDataKind = dsSafeTrim(e.target.value) || "all";
+    fetchDataStudioTags();
   });
 
   ui.sourceSelect?.addEventListener("change", (e) => {
     DATASTUDIO_STATE.selectedSource = dsSafeTrim(e.target.value) || "all";
+    fetchDataStudioTags();
   });
 
   ui.contextSelect?.addEventListener("change", (e) => {
     DATASTUDIO_STATE.selectedContext = dsSafeTrim(e.target.value) || "all";
-    updateDataStudioContextInfo();
-    fetchDataStudioTags();
+    if (DATASTUDIO_STATE.catalogTags.length) applyDataStudioTagFilters();
+    else fetchDataStudioTags();
   });
 
   ui.searchInput?.addEventListener("input", (e) => {
     DATASTUDIO_STATE.searchText = dsSafeTrim(e.target.value);
+    if (DATASTUDIO_STATE.catalogTags.length) {
+      applyDataStudioTagFilters();
+    } else {
+      scheduleDataStudioTagsFetch();
+    }
+  });
+
+  document.querySelectorAll(".ds-v2-pill").forEach((pill) => {
+    pill.addEventListener("click", () => {
+      setDataStudioActiveCategory(dsSafeTrim(pill.dataset.cat || "all") || "all");
+      if (DATASTUDIO_STATE.catalogTags.length) applyDataStudioTagFilters();
+    });
   });
 
   ui.modeSelect?.addEventListener("change", (e) => {
@@ -3616,6 +3424,8 @@ function wireDataStudioOnce() {
   ui.zoomInBtn?.addEventListener("click", () => zoomDataStudioChart(1.2));
   ui.zoomOutBtn?.addEventListener("click", () => zoomDataStudioChart(0.8));
   ui.zoomResetBtn?.addEventListener("click", resetDataStudioChartZoom);
+  ui.fullscreenBtn?.addEventListener("click", toggleDataStudioChartFullscreen);
+  ui.fullscreenCloseBtn?.addEventListener("click", () => setDataStudioChartFullscreen(false));
   ui.backToHeroBtn?.addEventListener("click", () => {
     DATASTUDIO_STATE.forceHeroState = true;
     DATASTUDIO_STATE.catalogConfirmed = false;
@@ -3628,6 +3438,8 @@ function wireDataStudioOnce() {
   });
 
   wireDataStudioChartOutsideTapOnce();
+  wireDataStudioChartPanCursorOnce();
+  wireDataStudioChartFullscreenKeysOnce();
 
   syncDataStudioAggregationUI();
   updateSelectedTagsCounter();
@@ -3839,7 +3651,6 @@ async function refreshDashboard() {
 
 document.addEventListener("DOMContentLoaded", async () => {
   wireDataStudioOnce();
-  wirePlantEditModal();
 
   // Preenche nome do usuário logado
   try {
@@ -3981,7 +3792,7 @@ function renderPortfolioCards(plants) {
 
     const plantState = getPortfolioPlantVisualState(plant);
     const activePower = plantState.activePower;
-    const ratedPower = Number(plant.capacity_dc ?? plant.rated_power_kw ?? plant.rated_power_kwp ?? 0);
+    const ratedPower = Number(plant.rated_power_kw ?? plant.rated_power_kwp ?? 0);
     const energyToday = plantState.energyToday;
     const pr = plant.pr_daily_pct != null ? Number(plant.pr_daily_pct).toFixed(1) + "%" : "\u2014";
     const irr = plant.irradiance_wm2 != null ? Number(plant.irradiance_wm2).toFixed(0) + " W/m\u00B2" : "\u2014";
@@ -4012,9 +3823,6 @@ function renderPortfolioCards(plants) {
     card.dataset.plantName = plantName;
 
     card.innerHTML = `
-      <button class="plant-card__edit-btn" type="button" title="Editar usina ${escapeHtml(plantName)}" aria-label="Editar usina ${escapeHtml(plantName)}">
-        ${plantEditPencilSvg()}
-      </button>
       <div class="plant-card__top">
         <div class="${iconClass}"><i class="fa-solid fa-seedling"></i></div>
         <div class="plant-card__name">${plantName}</div>
@@ -4059,21 +3867,35 @@ function renderPortfolioCards(plants) {
         <div class="${statusDotClass}"></div>
         <span class="plant-card__status-text">${statusText}</span>
       </div>
+      <button
+        class="plant-card__edit-btn"
+        title="Editar usina"
+        data-edit-plant-id="${plantId}"
+        aria-label="Editar usina"
+        style="display:none;"
+      >
+        <svg viewBox="0 0 20 20" fill="currentColor"><path d="M13.586 3.586a2 2 0 112.828 2.828l-.793.793-2.828-2.828.793-.793zM11.379 5.793L3 14.172V17h2.828l8.38-8.379-2.83-2.828z"/></svg>
+      </button>
     `;
 
     const openPlant = () => {
       if (plantId != null) window.location.href = `plant.html?plant_id=${encodeURIComponent(plantId)}`;
     };
-    card.querySelector(".plant-card__edit-btn")?.addEventListener("click", (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      openPlantEditModal(plant);
-    });
     card.addEventListener("click", openPlant);
     card.addEventListener("keydown", e => {
-      if (e.target.closest("button")) return;
       if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openPlant(); }
     });
+
+    const _u = JSON.parse(localStorage.getItem("user") || "{}");
+    const _canEdit = _u.is_superuser === true || _u.role_key === "admin_customer";
+    const _editBtn = card.querySelector(".plant-card__edit-btn");
+    if (_editBtn && _canEdit) {
+      _editBtn.style.display = "";
+      _editBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        openPlantEditModal(plantId, plantName, ratedPower);
+      });
+    }
 
     grid.appendChild(card);
     chartTargets.push({ canvasId, plantId });
@@ -4314,5 +4136,104 @@ function _renderMiniChartOnCanvas(canvas, plantId, body) {
 
   _portfolioMiniCharts.set(plantId, chart);
 }
+
+// =============================================================================
+// MODAL EDITAR USINA
+// =============================================================================
+let _PLANT_EDIT_ID = null;
+
+function openPlantEditModal(plantId, plantName, ratedPower) {
+  _PLANT_EDIT_ID = plantId;
+  const nameInput = document.getElementById("plantEditNameInput");
+  const ratedInput = document.getElementById("plantEditRatedInput");
+  if (nameInput) nameInput.value = plantName || "";
+  if (ratedInput) ratedInput.value = ratedPower != null ? Number(ratedPower).toFixed(1) : "";
+  ["plantEditNameFeedback","plantEditRatedFeedback"].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) { el.textContent = ""; el.className = "plant-edit-feedback"; }
+  });
+  _loadPlantEditDevices(plantId);
+  const modal = document.getElementById("plantEditModal");
+  if (modal) { modal.classList.remove("hidden"); modal.setAttribute("aria-hidden","false"); document.body.classList.add("plant-edit-modal-open"); }
+}
+
+function closePlantEditModal() {
+  const modal = document.getElementById("plantEditModal");
+  if (modal) { modal.classList.add("hidden"); modal.setAttribute("aria-hidden","true"); document.body.classList.remove("plant-edit-modal-open"); }
+  _PLANT_EDIT_ID = null;
+}
+
+async function _loadPlantEditDevices(plantId) {
+  const list = document.getElementById("plantEditDevicesList");
+  if (!list) return;
+  list.innerHTML = `<div style="color:var(--text-muted);font-size:0.82rem;padding:8px 0;">Carregando…</div>`;
+  try {
+    const res = await apiFetch(`/plants/${plantId}/devices/options`);
+    const data = await res.json();
+    const items = data?.items || [];
+    if (!items.length) { list.innerHTML = `<div style="color:var(--text-muted);font-size:0.82rem;">Nenhum dispositivo.</div>`; return; }
+    list.innerHTML = items.map(d => `
+      <div class="plant-edit-device-row" data-device-id="${d.device_id}">
+        <div class="plant-edit-device-info">
+          <span class="plant-edit-device-type">${d.device_type||"—"}</span>
+          <span class="plant-edit-device-meta">#${d.device_id}</span>
+        </div>
+        <div class="plant-edit-inline">
+          <input class="plant-edit-device-name" type="text" value="${(d.device_name||"").replace(/"/g,'&quot;')}" placeholder="Nome do dispositivo"/>
+          <button class="plant-edit-device-save" type="button" title="Salvar"><i class="fa-solid fa-check"></i></button>
+        </div>
+        <div class="plant-edit-device-feedback"></div>
+      </div>`).join("");
+    list.querySelectorAll(".plant-edit-device-row").forEach(row => {
+      const did = row.dataset.deviceId;
+      const inp = row.querySelector(".plant-edit-device-name");
+      const btn = row.querySelector(".plant-edit-device-save");
+      const fb  = row.querySelector(".plant-edit-device-feedback");
+      btn.addEventListener("click", async () => {
+        const n = inp.value.trim();
+        if (!n) { fb.textContent="Nome vazio."; fb.className="plant-edit-device-feedback err"; return; }
+        btn.disabled=true; fb.textContent="Salvando…"; fb.className="plant-edit-device-feedback";
+        try {
+          const r = await apiFetch(`/plants/${_PLANT_EDIT_ID}/devices/${did}/name`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify({display_name:n})});
+          if(!r.ok) throw new Error((await r.json())?.error||`HTTP ${r.status}`);
+          fb.textContent="✓ Salvo!"; fb.className="plant-edit-device-feedback ok";
+        } catch(e){ fb.textContent=e.message||"Erro."; fb.className="plant-edit-device-feedback err"; }
+        finally{ btn.disabled=false; }
+      });
+    });
+  } catch(e){ list.innerHTML=`<div style="color:var(--text-muted);font-size:0.82rem;">Erro ao carregar.</div>`; }
+}
+
+async function savePlantName() {
+  if (!_PLANT_EDIT_ID) return;
+  const inp = document.getElementById("plantEditNameInput");
+  const fb  = document.getElementById("plantEditNameFeedback");
+  const n   = inp?.value?.trim();
+  if (!n) { fb.textContent="Nome vazio."; fb.className="plant-edit-feedback err"; return; }
+  fb.textContent="Salvando…"; fb.className="plant-edit-feedback";
+  try {
+    const r = await apiFetch(`/plants/${_PLANT_EDIT_ID}/name`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify({plant_name:n})});
+    if(!r.ok) throw new Error((await r.json())?.error||`HTTP ${r.status}`);
+    fb.textContent="✓ Salvo!"; fb.className="plant-edit-feedback ok";
+  } catch(e){ fb.textContent=e.message||"Erro."; fb.className="plant-edit-feedback err"; }
+}
+
+async function savePlantRatedPower() {
+  if (!_PLANT_EDIT_ID) return;
+  const inp = document.getElementById("plantEditRatedInput");
+  const fb  = document.getElementById("plantEditRatedFeedback");
+  const val = parseFloat(inp?.value);
+  if (isNaN(val)||val<0) { fb.textContent="Valor inválido."; fb.className="plant-edit-feedback err"; return; }
+  fb.textContent="Salvando…"; fb.className="plant-edit-feedback";
+  try {
+    const r = await apiFetch(`/plants/${_PLANT_EDIT_ID}/name`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify({capacity_dc:val})});
+    if(!r.ok) throw new Error((await r.json())?.error||`HTTP ${r.status}`);
+    fb.textContent="✓ Salvo!"; fb.className="plant-edit-feedback ok";
+  } catch(e){ fb.textContent=e.message||"Erro."; fb.className="plant-edit-feedback err"; }
+}
+
+document.addEventListener("DOMContentLoaded",()=>{
+  document.querySelector(".plant-edit-modal__backdrop")?.addEventListener("click", closePlantEditModal);
+});
 
 // wirePortfolioControls is now called synchronously inside the main DOMContentLoaded listener (above).
