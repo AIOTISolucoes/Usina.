@@ -1958,6 +1958,15 @@ function dsSafeTrim(v) {
   return String(v).trim();
 }
 
+function dsAbbrevContext(ctx) {
+  if (!ctx) return ctx;
+  return ctx
+    .replace(/Eletrocentro\s*/gi, 'Eletr.')
+    .replace(/Cabine\s*/gi,       'Cab.')
+    .replace(/Inversor\s*/gi,     'Inv.')
+    .replace(/Inverter\s*/gi,     'Inv.');
+}
+
 function dsIsoStartOfDay(dateYYYYMMDD) {
   if (!dateYYYYMMDD) return null;
   const [y, m, d] = String(dateYYYYMMDD).split("-").map(Number);
@@ -2218,10 +2227,11 @@ function renderSelectedTagsList() {
     const chipColor = DS_SERIES_PALETTE[Math.max(0, colorIdx)];
     chip.style.setProperty('--ds-chip-color', chipColor);
 
-    const label = `${valueOrDash(tag?.context)} • ${valueOrDash(tag?.point_name || tag?.description || tag?.pathname)}`;
+    const labelFull  = `${valueOrDash(tag?.context)} • ${valueOrDash(tag?.point_name || tag?.description || tag?.pathname)}`;
+    const labelShort = `${valueOrDash(dsAbbrevContext(tag?.context))} • ${valueOrDash(tag?.point_name || tag?.description || tag?.pathname)}`;
     chip.innerHTML = `
       <span class="ds-selected-tag-chip__dot"></span>
-      <span class="ds-selected-tag-chip__text" title="${label}">${label}</span>
+      <span class="ds-selected-tag-chip__text" title="${labelFull}">${labelShort}</span>
       <button type="button" class="ds-selected-tag-chip__remove" aria-label="Remover medida">×</button>
     `;
 
@@ -2380,10 +2390,10 @@ function renderDataStudioTagsTable(tags) {
 
     tr.innerHTML = `
       <td><input type="checkbox" data-ds-pathname="${pathname.replaceAll('"','&quot;')}" ${checked}></td>
-      <td>
+      <td style="min-width:90px;max-width:130px;white-space:normal;word-break:break-word;line-height:1.3;font-size:11px;">
         <div class="ds-tag-context-cell">
           <span class="ds-tag-icon ds-tag-icon--${iconClass}">${iconSvg}</span>
-          ${valueOrDash(tag?.context)}
+          <span title="${(tag?.context||'').replace(/"/g,'&quot;')}">${valueOrDash(dsAbbrevContext(tag?.context))}</span>
         </div>
       </td>
       <td style="white-space:normal;line-height:1.35;font-size:11px;">${descHtml}</td>
