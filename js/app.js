@@ -61,6 +61,10 @@ function _canAckAlarmUI() {
   const u = _getUser();
   return u.is_superuser === true || u.role_key === "admin_customer" || u.role_key === "operator";
 }
+function _canSendCommand() {
+  const u = _getUser();
+  return u.is_superuser === true || ["superuser","operator","admin_customer"].includes(u.role_key);
+}
 
 // =============================================================================
 // CONFIGURAÇÃO GLOBAL E ESTADO
@@ -4152,17 +4156,30 @@ function _renderMiniChartOnCanvas(canvas, plantId, body) {
 // =============================================================================
 let _PLANT_EDIT_ID = null;
 
+// ─── Gerenciar Usina Modal ───────────────────────────────────────────────────
+
+function switchPlantEditTab(tab) {
+  document.querySelectorAll(".pem-tab").forEach(b => b.classList.toggle("active", b.dataset.tab === tab));
+  document.querySelectorAll(".pem-tab-panel").forEach(p => p.classList.add("hidden"));
+  const panel = document.getElementById(
+    tab === "info" ? "pemTabInfo" : tab === "devices" ? "pemTabDevices" : "pemTabCabins"
+  );
+  if (panel) panel.classList.remove("hidden");
+  if (tab === "devices" && _PLANT_EDIT_ID) _pemLoadDevices(_PLANT_EDIT_ID);
+  if (tab === "cabins"  && _PLANT_EDIT_ID) _pemLoadCabins(_PLANT_EDIT_ID);
+}
+
 function openPlantEditModal(plantId, plantName, ratedPower) {
   _PLANT_EDIT_ID = plantId;
-  const nameInput = document.getElementById("plantEditNameInput");
+  const nameInput  = document.getElementById("plantEditNameInput");
   const ratedInput = document.getElementById("plantEditRatedInput");
-  if (nameInput) nameInput.value = plantName || "";
+  if (nameInput)  nameInput.value  = plantName  || "";
   if (ratedInput) ratedInput.value = ratedPower != null ? Number(ratedPower).toFixed(1) : "";
-  ["plantEditNameFeedback","plantEditRatedFeedback"].forEach(id => {
+  ["plantEditNameFeedback","plantEditRatedFeedback","pemAddDeviceFeedback","pemAddCabinFeedback"].forEach(id => {
     const el = document.getElementById(id);
     if (el) { el.textContent = ""; el.className = "plant-edit-feedback"; }
   });
-  _loadPlantEditDevices(plantId);
+  switchPlantEditTab("info");
   const modal = document.getElementById("plantEditModal");
   if (modal) { modal.classList.remove("hidden"); modal.setAttribute("aria-hidden","false"); document.body.classList.add("plant-edit-modal-open"); }
 }
@@ -4173,16 +4190,33 @@ function closePlantEditModal() {
   _PLANT_EDIT_ID = null;
 }
 
-async function _loadPlantEditDevices(plantId) {
-  const list = document.getElementById("plantEditDevicesList");
+async function _pemLoadDevices(plantId) {
+  const list = document.getElementById("pemDevicesList");
   if (!list) return;
-  list.innerHTML = `<div style="color:var(--text-muted);font-size:0.82rem;padding:8px 0;">Carregando…</div>`;
+  list.innerHTML = `<div class="plant-edit-empty">Carregando…</div>`;
+
+  // Popular device-types no select (uma vez)
+  const selEl = document.getElementById("pemDeviceTypeSelect");
+  if (selEl && selEl.options.length <= 1) {
+    try {
+      const dtRes  = await apiFetch(`/plants/${plantId}/device-types`);
+      const dtData = await dtRes.json();
+      (dtData?.items || []).forEach(dt => {
+        const opt = document.createElement("option");
+        opt.value       = dt.id;
+        opt.textContent = dt.name;
+        selEl.appendChild(opt);
+      });
+    } catch(_) {}
+  }
+
+  // Listar dispositivos
   try {
-    const res = await apiFetch(`/plants/${plantId}/devices/options`);
-    const data = await res.json();
+    const res   = await apiFetch(`/plants/${plantId}/devices/options`);
+    const data  = await res.json();
     const items = data?.items || [];
     if (!items.length) {
-      list.innerHTML = `<div style="color:var(--text-muted);font-size:0.82rem;">Nenhum dispositivo.</div>`;
+      list.innerHTML = `<div class="plant-edit-empty">Nenhum dispositivo cadastrado.</div>`;
       return;
     }
     const canCmd = _canSendCommand();
@@ -4195,7 +4229,7 @@ async function _loadPlantEditDevices(plantId) {
         <div class="plant-edit-inline">
           <input class="plant-edit-device-name" type="text"
             value="${(d.device_name || "").replace(/"/g, '&quot;')}"
-            placeholder="Nome do dispositivo" />
+            placeholder="Nome do dispositivo"/>
           <button class="plant-edit-device-save" type="button" title="Salvar nome">
             <i class="fa-solid fa-check"></i>
           </button>
@@ -4205,24 +4239,24 @@ async function _loadPlantEditDevices(plantId) {
             <i class="fa-solid fa-trash"></i>
           </button>
         </div>
-        <div class="plant-edit-device-feedback" id="pem-devfb-${d.device_id}"></div>
+        <div class="plant-edit-device-feedback"></div>
       </div>`).join("");
 
     _pemWireCommandButtons(list);
 
     list.querySelectorAll(".plant-edit-device-row").forEach(row => {
-      const did = row.dataset.deviceId;
-      const inp = row.querySelector(".plant-edit-device-name");
+      const did     = row.dataset.deviceId;
+      const inp     = row.querySelector(".plant-edit-device-name");
       const saveBtn = row.querySelector(".plant-edit-device-save");
       const delBtn  = row.querySelector(".pem-del-device-btn");
       const fb      = row.querySelector(".plant-edit-device-feedback");
 
-      // Salvar nome
-      saveBtn?.addEventListener("click", async () => {
+      saveBtn.addEventListener("click", async () => {
         const n = inp.value.trim();
         if (!n) { fb.textContent = "Nome vazio."; fb.className = "plant-edit-device-feedback err"; return; }
         saveBtn.disabled = true;
-        fb.textContent = "Salvando…"; fb.className = "plant-edit-device-feedback";
+        fb.textContent = "Salvando…";
+        fb.className = "plant-edit-device-feedback";
         try {
           const r = await apiFetch(`/plants/${_PLANT_EDIT_ID}/devices/${did}/name`, {
             method: "PATCH",
@@ -4230,13 +4264,16 @@ async function _loadPlantEditDevices(plantId) {
             body: JSON.stringify({ display_name: n })
           });
           if (!r.ok) throw new Error((await r.json())?.error || `HTTP ${r.status}`);
-          fb.textContent = "✓ Salvo!"; fb.className = "plant-edit-device-feedback ok";
-        } catch (e) {
-          fb.textContent = e.message || "Erro."; fb.className = "plant-edit-device-feedback err";
-        } finally { saveBtn.disabled = false; }
+          fb.textContent = "✓ Salvo!";
+          fb.className = "plant-edit-device-feedback ok";
+        } catch(e) {
+          fb.textContent = e.message || "Erro.";
+          fb.className = "plant-edit-device-feedback err";
+        } finally {
+          saveBtn.disabled = false;
+        }
       });
 
-      // Excluir device
       delBtn?.addEventListener("click", async () => {
         if (!confirm(`Excluir dispositivo #${did}? Esta ação desativa o dispositivo.`)) return;
         delBtn.disabled = true;
@@ -4246,15 +4283,84 @@ async function _loadPlantEditDevices(plantId) {
           if (!r.ok) throw new Error((await r.json())?.error || `HTTP ${r.status}`);
           fb.textContent = "✓ Removido!"; fb.className = "plant-edit-device-feedback ok";
           setTimeout(() => row.remove(), 900);
-        } catch (e) {
+        } catch(e) {
           fb.textContent = e.message || "Erro."; fb.className = "plant-edit-device-feedback err";
           delBtn.disabled = false;
         }
       });
     });
-  } catch (e) {
-    list.innerHTML = `<div style="color:var(--text-muted);font-size:0.82rem;">Erro ao carregar.</div>`;
+  } catch(e) {
+    console.error("[_pemLoadDevices] devices/options error:", e);
+    list.innerHTML = `<div class="plant-edit-empty plant-edit-empty--error">
+      Erro ao carregar dispositivos: ${e?.message || e}
+    </div>`;
   }
+}
+
+async function _pemLoadCabins(plantId) {
+  const list = document.getElementById("pemCabinsList");
+  if (!list) return;
+  list.innerHTML = `<div class="plant-edit-empty">Carregando…</div>`;
+  try {
+    const res  = await apiFetch(`/plants/${plantId}/cabin-groups`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    const items = data?.items || [];
+    if (!items.length) { list.innerHTML = `<div class="plant-edit-empty">Nenhuma cabine.</div>`; return; }
+    list.innerHTML = items.map(c => `
+      <div class="plant-edit-device-row">
+        <div class="plant-edit-device-info">
+          <span class="plant-edit-device-type">${c.name}</span>
+          <span class="plant-edit-device-meta">${c.inverter_count} inv.</span>
+        </div>
+      </div>`).join("");
+  } catch(e) {
+    console.error("[_pemLoadCabins]", e);
+    list.innerHTML = `<div class="plant-edit-empty plant-edit-empty--error">Erro ao carregar cabines.</div>`;
+  }
+}
+
+async function pemAddDevice() {
+  if (!_PLANT_EDIT_ID) return;
+  const selEl  = document.getElementById("pemDeviceTypeSelect");
+  const nameEl = document.getElementById("pemDeviceNameInput");
+  const fb     = document.getElementById("pemAddDeviceFeedback");
+  const dtId   = selEl?.value;
+  const name   = nameEl?.value?.trim();
+  if (!dtId) { fb.textContent = "Selecione o tipo."; fb.className = "plant-edit-feedback err"; return; }
+  if (!name) { fb.textContent = "Nome obrigatório."; fb.className = "plant-edit-feedback err"; return; }
+  fb.textContent = "Adicionando…"; fb.className = "plant-edit-feedback";
+  try {
+    const r = await apiFetch(`/plants/${_PLANT_EDIT_ID}/devices`, {
+      method: "POST", headers: {"Content-Type":"application/json"},
+      body: JSON.stringify({device_type_id: parseInt(dtId), name, display_name: name})
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d?.error || `HTTP ${r.status}`);
+    fb.textContent = `✓ Dispositivo #${d.device_id} adicionado.`; fb.className = "plant-edit-feedback ok";
+    if (nameEl) nameEl.value = "";
+    _pemLoadDevices(_PLANT_EDIT_ID);
+  } catch(e) { fb.textContent = e.message || "Erro."; fb.className = "plant-edit-feedback err"; }
+}
+
+async function pemAddCabin() {
+  if (!_PLANT_EDIT_ID) return;
+  const nameEl = document.getElementById("pemCabinNameInput");
+  const fb     = document.getElementById("pemAddCabinFeedback");
+  const name   = nameEl?.value?.trim();
+  if (!name) { fb.textContent = "Nome obrigatório."; fb.className = "plant-edit-feedback err"; return; }
+  fb.textContent = "Adicionando…"; fb.className = "plant-edit-feedback";
+  try {
+    const r = await apiFetch(`/plants/${_PLANT_EDIT_ID}/cabin-groups`, {
+      method: "POST", headers: {"Content-Type":"application/json"},
+      body: JSON.stringify({name, code: name})
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d?.error || `HTTP ${r.status}`);
+    fb.textContent = `✓ Cabine "${d.name}" criada.`; fb.className = "plant-edit-feedback ok";
+    if (nameEl) nameEl.value = "";
+    _pemLoadCabins(_PLANT_EDIT_ID);
+  } catch(e) { fb.textContent = e.message || "Erro."; fb.className = "plant-edit-feedback err"; }
 }
 
 async function savePlantName() {
@@ -4262,13 +4368,16 @@ async function savePlantName() {
   const inp = document.getElementById("plantEditNameInput");
   const fb  = document.getElementById("plantEditNameFeedback");
   const n   = inp?.value?.trim();
-  if (!n) { fb.textContent="Nome vazio."; fb.className="plant-edit-feedback err"; return; }
-  fb.textContent="Salvando…"; fb.className="plant-edit-feedback";
+  if (!n) { fb.textContent = "Nome vazio."; fb.className = "plant-edit-feedback err"; return; }
+  fb.textContent = "Salvando…"; fb.className = "plant-edit-feedback";
   try {
-    const r = await apiFetch(`/plants/${_PLANT_EDIT_ID}/name`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify({plant_name:n})});
-    if(!r.ok) throw new Error((await r.json())?.error||`HTTP ${r.status}`);
-    fb.textContent="✓ Salvo!"; fb.className="plant-edit-feedback ok";
-  } catch(e){ fb.textContent=e.message||"Erro."; fb.className="plant-edit-feedback err"; }
+    const r = await apiFetch(`/plants/${_PLANT_EDIT_ID}/name`, {
+      method: "PATCH", headers: {"Content-Type":"application/json"},
+      body: JSON.stringify({plant_name: n})
+    });
+    if (!r.ok) throw new Error((await r.json())?.error || `HTTP ${r.status}`);
+    fb.textContent = "✓ Salvo!"; fb.className = "plant-edit-feedback ok";
+  } catch(e) { fb.textContent = e.message || "Erro."; fb.className = "plant-edit-feedback err"; }
 }
 
 async function savePlantRatedPower() {
@@ -4276,13 +4385,16 @@ async function savePlantRatedPower() {
   const inp = document.getElementById("plantEditRatedInput");
   const fb  = document.getElementById("plantEditRatedFeedback");
   const val = parseFloat(inp?.value);
-  if (isNaN(val)||val<0) { fb.textContent="Valor inválido."; fb.className="plant-edit-feedback err"; return; }
-  fb.textContent="Salvando…"; fb.className="plant-edit-feedback";
+  if (isNaN(val) || val < 0) { fb.textContent = "Valor inválido."; fb.className = "plant-edit-feedback err"; return; }
+  fb.textContent = "Salvando…"; fb.className = "plant-edit-feedback";
   try {
-    const r = await apiFetch(`/plants/${_PLANT_EDIT_ID}/name`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify({capacity_dc:val})});
-    if(!r.ok) throw new Error((await r.json())?.error||`HTTP ${r.status}`);
-    fb.textContent="✓ Salvo!"; fb.className="plant-edit-feedback ok";
-  } catch(e){ fb.textContent=e.message||"Erro."; fb.className="plant-edit-feedback err"; }
+    const r = await apiFetch(`/plants/${_PLANT_EDIT_ID}/name`, {
+      method: "PATCH", headers: {"Content-Type":"application/json"},
+      body: JSON.stringify({capacity_dc: val})
+    });
+    if (!r.ok) throw new Error((await r.json())?.error || `HTTP ${r.status}`);
+    fb.textContent = "✓ Salvo!"; fb.className = "plant-edit-feedback ok";
+  } catch(e) { fb.textContent = e.message || "Erro."; fb.className = "plant-edit-feedback err"; }
 }
 
 // =============================================================================
@@ -4560,151 +4672,8 @@ function _pemAuthFlow({ deviceType, deviceId, action, value }) {
   };
 }
 
-// =============================================================================
-// PLANT EDIT MODAL — TABS + CRUD DEVICES + CABINES
-// =============================================================================
-
-// Tab switching no modal de edição
-function _pemInitTabs() {
-  document.querySelectorAll(".pem-tab").forEach(btn => {
-    btn.addEventListener("click", () => {
-      const target = btn.dataset.pemTab;
-      document.querySelectorAll(".pem-tab").forEach(b => b.classList.remove("active"));
-      document.querySelectorAll(".pem-tab-pane").forEach(p => p.classList.remove("active"));
-      btn.classList.add("active");
-      document.getElementById(target)?.classList.add("active");
-    });
-  });
-}
-
-// Override openPlantEditModal para resetar abas e carregar dados extras
-const _pemOrigOpen = openPlantEditModal;
-openPlantEditModal = async function(plantId, plantName, ratedPower) {
-  // Reset abas para Informações
-  document.querySelectorAll(".pem-tab").forEach((b, i) => b.classList.toggle("active", i === 0));
-  document.querySelectorAll(".pem-tab-pane").forEach((p, i) => p.classList.toggle("active", i === 0));
-  // Limpar feedbacks
-  ["pemAddDeviceFb", "pemAddCabineFb"].forEach(id => {
-    const el = document.getElementById(id);
-    if (el) { el.textContent = ""; el.className = "plant-edit-feedback"; }
-  });
-  // Chama o original
-  _pemOrigOpen(plantId, plantName, ratedPower);
-  // Carrega device types e cabines em paralelo
-  await Promise.all([
-    _pemLoadDeviceTypes(plantId),
-    _pemLoadCabines(plantId)
-  ]);
-};
-
-async function _pemLoadDeviceTypes(plantId) {
-  const sel = document.getElementById("pemDeviceTypeSelect");
-  if (!sel) return;
-  try {
-    const r = await apiFetch(`/plants/${plantId}/device-types`);
-    if (!r.ok) return;
-    const data = await r.json();
-    const items = data?.items || [];
-    sel.innerHTML = `<option value="">Tipo...</option>` +
-      items.map(t => `<option value="${t.id}">${t.name}</option>`).join("");
-  } catch (e) { console.warn("[pem] device-types:", e?.message); }
-}
-
-async function _pemLoadCabines(plantId) {
-  const list = document.getElementById("pemCabinesList");
-  if (!list) return;
-  list.innerHTML = `<div style="color:var(--text-muted);font-size:0.82rem;padding:4px 0;">Carregando…</div>`;
-  try {
-    const r = await apiFetch(`/plants/${plantId}/cabines`);
-    if (!r.ok) { list.innerHTML = `<div style="color:var(--text-muted);font-size:0.82rem;">Erro ao carregar.</div>`; return; }
-    const data = await r.json();
-    const items = data?.items || [];
-    if (!items.length) {
-      list.innerHTML = `<div style="color:var(--text-muted);font-size:0.82rem;">Nenhuma cabine cadastrada.</div>`;
-      return;
-    }
-    list.innerHTML = items.map(c => `
-      <div class="plant-edit-device-row pem-cabine-row" data-cabine-id="${c.device_id}">
-        <div class="plant-edit-device-info">
-          <span class="plant-edit-device-type">
-            <i class="fa-solid fa-box-open" style="color:var(--accent-green);font-size:10px;margin-right:4px;"></i>
-            ${c.device_name}
-          </span>
-          <span class="plant-edit-device-meta">#${c.device_id} · ${c.device_type}</span>
-        </div>
-        <button class="pem-del-device-btn" type="button" title="Excluir cabine" data-cabine-id="${c.device_id}">
-          <i class="fa-solid fa-trash"></i>
-        </button>
-        <div class="plant-edit-device-feedback" id="pem-cabfb-${c.device_id}"></div>
-      </div>`).join("");
-
-    list.querySelectorAll(".pem-cabine-row").forEach(row => {
-      const cid = row.dataset.cabineId;
-      const delBtn = row.querySelector(".pem-del-device-btn");
-      const fb     = document.getElementById(`pem-cabfb-${cid}`);
-      delBtn?.addEventListener("click", async () => {
-        if (!confirm(`Excluir cabine #${cid}?`)) return;
-        delBtn.disabled = true;
-        if (fb) { fb.textContent = "Excluindo…"; fb.className = "plant-edit-device-feedback"; }
-        try {
-          const r = await apiFetch(`/plants/${_PLANT_EDIT_ID}/cabines/${cid}`, { method: "DELETE" });
-          if (!r.ok) throw new Error((await r.json())?.error || `HTTP ${r.status}`);
-          if (fb) { fb.textContent = "✓ Removida!"; fb.className = "plant-edit-device-feedback ok"; }
-          setTimeout(() => row.remove(), 900);
-        } catch (e) {
-          if (fb) { fb.textContent = e.message || "Erro."; fb.className = "plant-edit-device-feedback err"; }
-          delBtn.disabled = false;
-        }
-      });
-    });
-  } catch (e) {
-    list.innerHTML = `<div style="color:var(--text-muted);font-size:0.82rem;">Erro ao carregar cabines.</div>`;
-  }
-}
-
-async function pemAddDevice() {
-  if (!_PLANT_EDIT_ID) return;
-  const typeId = document.getElementById("pemDeviceTypeSelect")?.value;
-  const name   = document.getElementById("pemDeviceNameInput")?.value?.trim();
-  const fb     = document.getElementById("pemAddDeviceFb");
-  if (!typeId)  { fb.textContent = "Selecione o tipo."; fb.className = "plant-edit-feedback err"; return; }
-  if (!name)    { fb.textContent = "Informe o nome.";  fb.className = "plant-edit-feedback err"; return; }
-  fb.textContent = "Adicionando…"; fb.className = "plant-edit-feedback";
-  try {
-    const r = await apiFetch(`/plants/${_PLANT_EDIT_ID}/devices`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ device_type_id: parseInt(typeId), name, display_name: name })
-    });
-    if (!r.ok) throw new Error((await r.json())?.error || `HTTP ${r.status}`);
-    fb.textContent = "✓ Dispositivo adicionado!"; fb.className = "plant-edit-feedback ok";
-    document.getElementById("pemDeviceNameInput").value = "";
-    await _loadPlantEditDevices(_PLANT_EDIT_ID);
-  } catch (e) { fb.textContent = e.message || "Erro."; fb.className = "plant-edit-feedback err"; }
-}
-
-async function pemAddCabine() {
-  if (!_PLANT_EDIT_ID) return;
-  const name = document.getElementById("pemCabineNameInput")?.value?.trim();
-  const fb   = document.getElementById("pemAddCabineFb");
-  if (!name) { fb.textContent = "Informe o nome da cabine."; fb.className = "plant-edit-feedback err"; return; }
-  fb.textContent = "Adicionando…"; fb.className = "plant-edit-feedback";
-  try {
-    const r = await apiFetch(`/plants/${_PLANT_EDIT_ID}/cabines`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ display_name: name })
-    });
-    if (!r.ok) throw new Error((await r.json())?.error || `HTTP ${r.status}`);
-    fb.textContent = "✓ Cabine adicionada!"; fb.className = "plant-edit-feedback ok";
-    document.getElementById("pemCabineNameInput").value = "";
-    await _pemLoadCabines(_PLANT_EDIT_ID);
-  } catch (e) { fb.textContent = e.message || "Erro."; fb.className = "plant-edit-feedback err"; }
-}
-
 document.addEventListener("DOMContentLoaded",()=>{
   document.querySelector(".plant-edit-modal__backdrop")?.addEventListener("click", closePlantEditModal);
-  _pemInitTabs();
 
   // Botão "+" — só aparece para superuser / admin_customer
   const _btnAdd = document.getElementById("btnAddPlant");
