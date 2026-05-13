@@ -39,16 +39,9 @@
           <button id="btnDataStudio" class="sidebar-btn" title="Data Studio">
             <i class="fa-solid fa-flask-vial"></i>
           </button>
-          <!-- Botão OS desabilitado temporariamente — não disponível para clientes ainda
-          <button id="btnOS" class="sidebar-btn sidebar-btn--os" type="button" title="Ordens de Serviço" aria-label="Ordens de Serviço">
-            <svg class="sidebar-btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <rect x="3" y="3" width="7" height="8" rx="1.5"></rect>
-              <rect x="14" y="3" width="7" height="5" rx="1.5"></rect>
-              <rect x="14" y="12" width="7" height="9" rx="1.5"></rect>
-              <rect x="3" y="15" width="7" height="6" rx="1.5"></rect>
-            </svg>
+          <button id="btnOS" class="sidebar-btn" type="button" title="Ordens de Serviço" aria-label="Ordens de Serviço">
+            <i class="fa-solid fa-screwdriver-wrench"></i>
           </button>
-          -->
         </nav>
 
         <div class="sidebar-bottom">
@@ -718,9 +711,7 @@
 
     <div id="plantEditModal" class="plant-edit-modal hidden" aria-hidden="true">
       <div class="plant-edit-modal__backdrop"></div>
-      <div class="plant-edit-modal__box pem-box" role="dialog" aria-modal="true" aria-labelledby="plantEditModalTitle">
-
-        <!-- Header -->
+      <div class="plant-edit-modal__box" role="dialog" aria-modal="true" aria-labelledby="plantEditModalTitle">
         <div class="plant-edit-modal__header">
           <h3 id="plantEditModalTitle">Gerenciar usina</h3>
           <button class="plant-edit-modal__close" type="button" onclick="closePlantEditModal()" aria-label="Fechar">
@@ -728,36 +719,36 @@
           </button>
         </div>
 
-        <!-- Tabs -->
+        <!-- Abas -->
         <div class="pem-tabs">
-          <button class="pem-tab active" data-pem-tab="pem-info">
-            <i class="fa-solid fa-pen-to-square"></i> Informações
+          <button class="pem-tab active" data-tab="info" onclick="switchPlantEditTab('info')">
+            <i class="fa-solid fa-circle-info"></i> Informações
           </button>
-          <button class="pem-tab" data-pem-tab="pem-devices">
+          <button class="pem-tab" data-tab="devices" onclick="switchPlantEditTab('devices')">
             <i class="fa-solid fa-microchip"></i> Dispositivos
           </button>
-          <button class="pem-tab" data-pem-tab="pem-cabines">
-            <i class="fa-solid fa-box-open"></i> Cabines
+          <button class="pem-tab" data-tab="cabins" onclick="switchPlantEditTab('cabins')">
+            <i class="fa-solid fa-table-cells"></i> Cabines
           </button>
         </div>
 
         <!-- Tab: Informações -->
-        <div id="pem-info" class="pem-tab-pane active">
+        <div class="pem-tab-panel" id="pemTabInfo">
           <div class="plant-edit-section">
             <label for="plantEditNameInput">Nome da usina</label>
             <div class="plant-edit-inline">
               <input type="text" id="plantEditNameInput" placeholder="Nome da usina" />
-              <button type="button" onclick="savePlantName()" title="Salvar nome" aria-label="Salvar nome">
+              <button type="button" onclick="savePlantName()" title="Salvar nome">
                 <i class="fa-solid fa-check"></i>
               </button>
             </div>
             <div id="plantEditNameFeedback" class="plant-edit-feedback" aria-live="polite"></div>
           </div>
-          <div class="plant-edit-section">
+          <div class="plant-edit-section" id="plantEditRatedSection">
             <label for="plantEditRatedInput">Rated Power (kWp)</label>
             <div class="plant-edit-inline">
               <input type="number" id="plantEditRatedInput" placeholder="Ex: 1500.0" min="0" step="0.1" />
-              <button type="button" onclick="savePlantRatedPower()" title="Salvar rated power" aria-label="Salvar rated power">
+              <button type="button" onclick="savePlantRatedPower()" title="Salvar rated power">
                 <i class="fa-solid fa-check"></i>
               </button>
             </div>
@@ -766,52 +757,46 @@
         </div>
 
         <!-- Tab: Dispositivos -->
-        <div id="pem-devices" class="pem-tab-pane">
-
-          <!-- Adicionar device -->
+        <div class="pem-tab-panel hidden" id="pemTabDevices">
           <div class="plant-edit-section">
             <label>Adicionar dispositivo</label>
             <div class="pem-add-row">
               <select id="pemDeviceTypeSelect" class="pem-ctrl">
                 <option value="">Tipo...</option>
               </select>
-              <input id="pemDeviceNameInput" type="text" class="pem-ctrl" placeholder="Nome do dispositivo" />
+              <input type="text" id="pemDeviceNameInput" class="pem-ctrl" placeholder="Nome do dispositivo" />
               <button type="button" class="pem-action-btn pem-action-btn--add" onclick="pemAddDevice()">
                 <i class="fa-solid fa-plus"></i> Adicionar
               </button>
             </div>
-            <div id="pemAddDeviceFb" class="plant-edit-feedback"></div>
+            <div id="pemAddDeviceFeedback" class="plant-edit-feedback" aria-live="polite"></div>
           </div>
-
-          <hr class="plant-edit-divider" />
-
           <div class="plant-edit-section">
             <label>Dispositivos cadastrados</label>
-            <div id="plantEditDevicesList" class="plant-edit-devices-list" aria-live="polite"></div>
+            <div id="pemDevicesList" class="plant-edit-devices-list" tabindex="-1" aria-live="polite">
+              <div class="plant-edit-empty">Carregando…</div>
+            </div>
           </div>
         </div>
 
         <!-- Tab: Cabines -->
-        <div id="pem-cabines" class="pem-tab-pane">
-
+        <div class="pem-tab-panel hidden" id="pemTabCabins">
           <div class="plant-edit-section">
             <label>Adicionar cabine</label>
             <div class="pem-add-row">
-              <input id="pemCabineNameInput" type="text" class="pem-ctrl pem-ctrl--grow" placeholder="Ex: Cabine 01" />
-              <button type="button" class="pem-action-btn pem-action-btn--add" onclick="pemAddCabine()">
+              <input type="text" id="pemCabinNameInput" class="pem-ctrl pem-ctrl--grow" placeholder="Ex: Cabine 01" />
+              <button type="button" class="pem-action-btn pem-action-btn--add" onclick="pemAddCabin()">
                 <i class="fa-solid fa-plus"></i> Adicionar
               </button>
             </div>
-            <div id="pemAddCabineFb" class="plant-edit-feedback"></div>
+            <div id="pemAddCabinFeedback" class="plant-edit-feedback" aria-live="polite"></div>
           </div>
-
-          <hr class="plant-edit-divider" />
-
           <div class="plant-edit-section">
             <label>Cabines cadastradas</label>
-            <div id="pemCabinesList" class="plant-edit-devices-list" aria-live="polite"></div>
+            <div id="pemCabinsList" class="plant-edit-devices-list" tabindex="-1" aria-live="polite">
+              <div class="plant-edit-empty">Carregando…</div>
+            </div>
           </div>
-
         </div>
 
       </div>
@@ -1013,6 +998,16 @@
         forceMobileCardView();
       });
     })();
+    // Controle de visibilidade do botão OS
+    const _u = JSON.parse(localStorage.getItem("user") || "{}")
+    const _perms = _u.permissions || {}
+    const _canSeeOS = _u.is_superuser === true || _perms.os_open === true || _perms.os_view === true
+    const _btnOS = document.getElementById("btnOS")
+    if (_btnOS) _btnOS.style.display = _canSeeOS ? "" : "none"
+
+    document.getElementById("btnOS")?.addEventListener("click", () => {
+      window.location.href = "os.html"
+    })
     </script>
   <!-- Sprite SVG para o botão de comando de dispositivo -->
   <svg class="device-svg-sprite" aria-hidden="true" focusable="false" width="0" height="0" style="position:absolute">
