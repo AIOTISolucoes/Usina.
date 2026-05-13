@@ -4251,6 +4251,8 @@ body.plant-edit-modal-open {
 
 .pem-tab-pane { display: none; }
 .pem-tab-pane.active { display: block; }
+.pem-tab-panel { min-height: 120px; }
+.pem-tab-panel.hidden { display: none; }
 
 /* Linha de adição */
 .pem-add-row {
@@ -4551,4 +4553,12 @@ body.plant-edit-modal-open {
   .cmd-console__cmd i { font-size: 18px; }
   .cmd-console__cmd-label { font-size: 12px; }
   .cmd-console__cmd-desc { display: none; }
+}
+
+
+/* ── OS nav button active state ── */
+.sidebar-btn[aria-label="Ordens de Serviço"].active {
+  color: var(--accent-green);
+  background: rgba(57, 229, 140, 0.09);
+  border-color: rgba(57, 229, 140, 0.40);
 }
