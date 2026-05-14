@@ -61,10 +61,6 @@ function _canAckAlarmUI() {
   const u = _getUser();
   return u.is_superuser === true || u.role_key === "admin_customer" || u.role_key === "operator";
 }
-function _canSendCommand() {
-  const u = _getUser();
-  return u.is_superuser === true || ["superuser","operator","admin_customer"].includes(u.role_key);
-}
 
 // =============================================================================
 // CONFIGURAÇÃO GLOBAL E ESTADO
@@ -3001,17 +2997,39 @@ function renderDataStudioChart(seriesPayload) {
 
   if (seriesList.length) {
     const palette = DS_SERIES_PALETTE;
+
+    // 1. Coletar todos os timestamps únicos de TODAS as séries e ordenar
+    const allTsSet = new Set();
+    seriesList.forEach((serie) => {
+      const points = Array.isArray(serie?.points)
+        ? serie.points
+        : (Array.isArray(serie?.data) ? serie.data : []);
+      points.forEach((pt) => {
+        const ts = pt?.ts || pt?.timestamp || pt?.x;
+        if (ts) allTsSet.add(String(ts));
+      });
+    });
+    const allTsSorted = Array.from(allTsSet).sort();
+    allTsSorted.forEach((ts) => {
+      labels.push(new Date(ts).toLocaleString("pt-BR"));
+    });
+
+    // 2. Para cada série, mapear valores pelo timestamp (não por índice)
     seriesList.forEach((serie, idx) => {
       const points = Array.isArray(serie?.points)
         ? serie.points
         : (Array.isArray(serie?.data) ? serie.data : []);
 
-      if (!labels.length) {
-        points.forEach((pt) => {
-          const ts = pt?.ts || pt?.timestamp || pt?.x;
-          labels.push(ts ? new Date(ts).toLocaleString("pt-BR") : "");
-        });
-      }
+      // Mapa ts_string -> value para alinhamento correto
+      const valueByTs = new Map();
+      points.forEach((pt) => {
+        const ts = pt?.ts || pt?.timestamp || pt?.x;
+        if (ts != null) {
+          let v = pt?.value ?? pt?.y ?? null;
+          try { v = v != null ? Number(v) : null; } catch { v = null; }
+          valueByTs.set(String(ts), v);
+        }
+      });
 
       const unitKey = dsSafeTrim(serie?.unit || "") || "_default_";
       if (!axisByUnit.has(unitKey)) {
@@ -3028,7 +3046,7 @@ function renderDataStudioChart(seriesPayload) {
 
       datasets.push({
         label: serie?.label || serie?.pathname || `Série ${idx + 1}`,
-        data: points.map((pt) => Number(pt?.value ?? pt?.y ?? null)),
+        data: allTsSorted.map((ts) => valueByTs.has(ts) ? valueByTs.get(ts) : null),
         borderColor: palette[idx % palette.length],
         backgroundColor: palette[idx % palette.length],
         borderWidth: 2,
@@ -3037,7 +3055,8 @@ function renderDataStudioChart(seriesPayload) {
         pointHoverRadius: 6,
         pointHitRadius: 16,
         fill: false,
-        yAxisID: axisByUnit.get(unitKey) || "y"
+        yAxisID: axisByUnit.get(unitKey) || "y",
+        spanGaps: true
       });
     });
   } else {
@@ -4194,31 +4213,26 @@ async function _pemLoadDevices(plantId) {
   const list = document.getElementById("pemDevicesList");
   if (!list) return;
   list.innerHTML = `<div class="plant-edit-empty">Carregando…</div>`;
-
-  // Popular device-types no select (uma vez)
-  const selEl = document.getElementById("pemDeviceTypeSelect");
-  if (selEl && selEl.options.length <= 1) {
-    try {
-      const dtRes  = await apiFetch(`/plants/${plantId}/device-types`);
-      const dtData = await dtRes.json();
-      (dtData?.items || []).forEach(dt => {
-        const opt = document.createElement("option");
-        opt.value       = dt.id;
-        opt.textContent = dt.name;
-        selEl.appendChild(opt);
-      });
-    } catch(_) {}
-  }
-
-  // Listar dispositivos
   try {
+    // Carregar device types para o select (uma vez)
+    const selEl = document.getElementById("pemDeviceTypeSelect");
+    if (selEl && selEl.options.length <= 1) {
+      try {
+        const dtRes  = await apiFetch(`/plants/${plantId}/device-types`);
+        const dtData = await dtRes.json();
+        (dtData?.items || []).forEach(dt => {
+          const opt = document.createElement("option");
+          opt.value       = dt.id;
+          opt.textContent = dt.name;
+          selEl.appendChild(opt);
+        });
+      } catch(_) {}
+    }
+    // Carregar dispositivos
     const res   = await apiFetch(`/plants/${plantId}/devices/options`);
     const data  = await res.json();
     const items = data?.items || [];
-    if (!items.length) {
-      list.innerHTML = `<div class="plant-edit-empty">Nenhum dispositivo cadastrado.</div>`;
-      return;
-    }
+    if (!items.length) { list.innerHTML = `<div class="plant-edit-empty">Nenhum dispositivo.</div>`; return; }
     const canCmd = _canSendCommand();
     list.innerHTML = items.map(d => `
       <div class="plant-edit-device-row" data-device-id="${d.device_id}">
@@ -4228,7 +4242,7 @@ async function _pemLoadDevices(plantId) {
         </div>
         <div class="plant-edit-inline">
           <input class="plant-edit-device-name" type="text"
-            value="${(d.device_name || "").replace(/"/g, '&quot;')}"
+            value="${(d.device_name || "").replace(/"/g,'&quot;')}"
             placeholder="Nome do dispositivo"/>
           <button class="plant-edit-device-save" type="button" title="Salvar nome">
             <i class="fa-solid fa-check"></i>
@@ -4239,61 +4253,43 @@ async function _pemLoadDevices(plantId) {
             <i class="fa-solid fa-trash"></i>
           </button>
         </div>
-        <div class="plant-edit-device-feedback"></div>
+        <div class="plant-edit-device-feedback" id="pem-devfb-${d.device_id}"></div>
       </div>`).join("");
-
     _pemWireCommandButtons(list);
-
     list.querySelectorAll(".plant-edit-device-row").forEach(row => {
       const did     = row.dataset.deviceId;
       const inp     = row.querySelector(".plant-edit-device-name");
       const saveBtn = row.querySelector(".plant-edit-device-save");
       const delBtn  = row.querySelector(".pem-del-device-btn");
       const fb      = row.querySelector(".plant-edit-device-feedback");
-
-      saveBtn.addEventListener("click", async () => {
+      saveBtn?.addEventListener("click", async () => {
         const n = inp.value.trim();
         if (!n) { fb.textContent = "Nome vazio."; fb.className = "plant-edit-device-feedback err"; return; }
-        saveBtn.disabled = true;
-        fb.textContent = "Salvando…";
-        fb.className = "plant-edit-device-feedback";
+        saveBtn.disabled = true; fb.textContent = "Salvando…"; fb.className = "plant-edit-device-feedback";
         try {
           const r = await apiFetch(`/plants/${_PLANT_EDIT_ID}/devices/${did}/name`, {
-            method: "PATCH",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ display_name: n })
+            method: "PATCH", headers: {"Content-Type":"application/json"},
+            body: JSON.stringify({display_name: n})
           });
           if (!r.ok) throw new Error((await r.json())?.error || `HTTP ${r.status}`);
-          fb.textContent = "✓ Salvo!";
-          fb.className = "plant-edit-device-feedback ok";
-        } catch(e) {
-          fb.textContent = e.message || "Erro.";
-          fb.className = "plant-edit-device-feedback err";
-        } finally {
-          saveBtn.disabled = false;
-        }
+          fb.textContent = "✓ Salvo!"; fb.className = "plant-edit-device-feedback ok";
+        } catch(e) { fb.textContent = e.message || "Erro."; fb.className = "plant-edit-device-feedback err"; }
+        finally    { saveBtn.disabled = false; }
       });
-
       delBtn?.addEventListener("click", async () => {
         if (!confirm(`Excluir dispositivo #${did}? Esta ação desativa o dispositivo.`)) return;
-        delBtn.disabled = true;
-        fb.textContent = "Excluindo…"; fb.className = "plant-edit-device-feedback";
+        delBtn.disabled = true; fb.textContent = "Excluindo…"; fb.className = "plant-edit-device-feedback";
         try {
           const r = await apiFetch(`/plants/${_PLANT_EDIT_ID}/devices/${did}`, { method: "DELETE" });
           if (!r.ok) throw new Error((await r.json())?.error || `HTTP ${r.status}`);
           fb.textContent = "✓ Removido!"; fb.className = "plant-edit-device-feedback ok";
           setTimeout(() => row.remove(), 900);
-        } catch(e) {
-          fb.textContent = e.message || "Erro."; fb.className = "plant-edit-device-feedback err";
-          delBtn.disabled = false;
-        }
+        } catch(e) { fb.textContent = e.message || "Erro."; fb.className = "plant-edit-device-feedback err"; delBtn.disabled = false; }
       });
     });
   } catch(e) {
-    console.error("[_pemLoadDevices] devices/options error:", e);
-    list.innerHTML = `<div class="plant-edit-empty plant-edit-empty--error">
-      Erro ao carregar dispositivos: ${e?.message || e}
-    </div>`;
+    console.error("[_pemLoadDevices]", e);
+    list.innerHTML = `<div class="plant-edit-empty plant-edit-empty--error">Erro ao carregar.</div>`;
   }
 }
 
