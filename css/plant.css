@@ -4844,6 +4844,7 @@ body.plant-enter #relaySection{
   align-items: center;
 }
 
+/* --- botão unifilar ocultado temporariamente ---
 .inv-view-btn {
   display: inline-flex;
   align-items: center;
@@ -4871,6 +4872,9 @@ body.plant-enter #relaySection{
   color: rgba(57,229,140,.96);
   border-color: rgba(57,229,140,.42);
 }
+--- fim ocultado --- */
+
+#invBtnMap { display: none !important; }
 
 .cabine-map-view {
   flex-direction: column;
