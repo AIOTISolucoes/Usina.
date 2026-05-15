@@ -36,7 +36,7 @@
 }
 
 /* ✅ mantém espaço do scrollbar estável (evita shift/corte quando muda de view) */
-html { scrollbar-gutter: stable; }
+html { scrollbar-gutter: stable; overflow-x: hidden; }
 
 .sidebar {
   background: linear-gradient(180deg, #071209 0%, #050e07 100%);
@@ -1397,7 +1397,7 @@ tbody tr:hover td {
     right: 0;
     bottom: 0;
     top: auto;
-    height: 64px;
+    height: calc(64px + env(safe-area-inset-bottom, 0px));
     z-index: 400;
 
     border-right: none;
@@ -1408,6 +1408,7 @@ tbody tr:hover td {
     align-items: center;
     gap: 8px;
     padding: 8px 10px;
+    padding-bottom: max(8px, env(safe-area-inset-bottom, 0px));
   }
 
   .sidebar-logo{
@@ -1433,7 +1434,7 @@ tbody tr:hover td {
   .main{
     height: auto;
     min-height: 100dvh;
-    padding-bottom: 74px; /* espaço da barra inferior */
+    padding-bottom: max(74px, calc(64px + env(safe-area-inset-bottom, 0px) + 10px));
   }
 
   .topbar{
@@ -1452,7 +1453,15 @@ tbody tr:hover td {
   }
 
   .topbar-left{ justify-content: flex-start; }
-  .topbar-center{ justify-content: center; }
+  .topbar-center{
+    position: static;
+    left: auto;
+    transform: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+  }
   .topbar-right{
     justify-content: flex-end;
     gap: 6px;
@@ -4119,6 +4128,15 @@ body.plant-edit-modal-open {
   .ds-v2-insights { width: 100%; padding: 12px 0 0; border-left: none; border-top: 1px solid rgba(57,229,140,0.08); }
 }
 
+@media (max-width: 640px) {
+  .ds-v2-catalog { max-height: 160px; }
+  .ds-v2-series-panel { max-height: 120px; }
+  .ds-v2-topbar { flex-wrap: wrap; gap: 6px; padding: 8px 10px; }
+  .ds-v2-topbar-title { font-size: 13px; }
+  .ds-v2-topbar-actions { flex-wrap: wrap; gap: 6px; width: 100%; }
+  .ds-v2-topbar-actions > * { flex: 1 1 auto; min-width: 110px; }
+}
+
 /* ── Botão Nova Usina ───────────────────────────── */
 .btn-add-plant {
   display: inline-flex;
@@ -4561,4 +4579,152 @@ body.plant-edit-modal-open {
   color: var(--accent-green);
   background: rgba(57, 229, 140, 0.09);
   border-color: rgba(57, 229, 140, 0.40);
+}
+
+/* ══════════════════════════════════════════════════════════
+   NUCLEAR MOBILE FIX — última palavra, !important em tudo
+   Resolve: dashboard "SHBOARD" cortado + conteúdo invisível
+   ══════════════════════════════════════════════════════════ */
+@media (max-width: 768px) {
+
+  /* ── Layout: single column, sem sidebar lateral ── */
+  .layout {
+    display: grid !important;
+    grid-template-columns: 1fr !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    min-height: 100dvh !important;
+    overflow-x: hidden !important;
+  }
+
+  /* ── Sidebar: bottom bar ── */
+  .sidebar {
+    position: fixed !important;
+    top: auto !important;
+    bottom: 0 !important;
+    left: 0 !important;
+    right: 0 !important;
+    width: 100% !important;
+    height: auto !important;
+    min-height: 56px !important;
+    z-index: 400 !important;
+    flex-direction: row !important;
+    border-right: none !important;
+    border-top: 1px solid rgba(57, 229, 140, 0.14) !important;
+    padding-bottom: max(8px, env(safe-area-inset-bottom, 0px)) !important;
+  }
+
+  .sidebar-nav {
+    flex-direction: row !important;
+    justify-content: center !important;
+    gap: 10px !important;
+  }
+
+  .sidebar-bottom {
+    flex-direction: row !important;
+    margin-top: 0 !important;
+  }
+
+  /* ── Main: ocupa tudo, com padding pro bottom-bar ── */
+  .main {
+    width: 100% !important;
+    min-width: 0 !important;
+    height: auto !important;
+    min-height: 100dvh !important;
+    padding-bottom: max(74px, calc(64px + env(safe-area-inset-bottom, 0px) + 10px)) !important;
+  }
+
+  /* ── Topbar: grid 3 colunas, NÃO flex ── */
+  .topbar {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) !important;
+    align-items: center !important;
+    padding: 8px 10px !important;
+    gap: 8px !important;
+  }
+
+  /* ── Topbar items: reset TUDO que possa vir de style.css ── */
+  .topbar-left,
+  .topbar-right {
+    width: auto !important;
+    min-width: 0 !important;
+    flex: none !important;
+  }
+
+  .topbar-left {
+    justify-content: flex-start !important;
+    text-align: left !important;
+  }
+
+  .topbar-right {
+    justify-content: flex-end !important;
+    text-align: right !important;
+    gap: 6px !important;
+  }
+
+  /* ── TOPBAR CENTER — O FIX DEFINITIVO ── */
+  .topbar-center {
+    position: static !important;
+    left: auto !important;
+    right: auto !important;
+    top: auto !important;
+    bottom: auto !important;
+    transform: none !important;
+    -webkit-transform: none !important;
+    -ms-transform: none !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    width: auto !important;
+    min-width: 0 !important;
+    flex: none !important;
+    pointer-events: none !important;
+    text-align: center !important;
+  }
+
+  /* ── Portfolio: forçar cards visíveis ── */
+  #portfolioCardView {
+    display: grid !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+    grid-template-columns: 1fr !important;
+    gap: 12px !important;
+  }
+
+  #portfolioListView,
+  .portfolio-table-wrapper {
+    display: none !important;
+  }
+
+  .portfolio-view-toggle {
+    display: none !important;
+  }
+
+  .portfolio-cards-grid {
+    grid-template-columns: 1fr !important;
+    gap: 12px !important;
+    padding: 10px 12px 16px !important;
+  }
+
+  .status-pill,
+  .user-pill {
+    max-width: 100% !important;
+    font-size: 9px !important;
+    padding: 4px 8px !important;
+  }
+
+  .status-pill span:last-child,
+  .user-pill span {
+    min-width: 0 !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    white-space: nowrap !important;
+  }
+
+  .plant-name {
+    font-size: clamp(13px, 4vw, 18px) !important;
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+  }
 }
