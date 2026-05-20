@@ -2913,6 +2913,10 @@ async function exportDataStudioSelection() {
     if (user.customer_id) headers["X-Customer-Id"] = user.customer_id;
     if (user.is_superuser === true) headers["X-Is-Superuser"] = "true";
 
+    // Fetch CSV from each plant and merge into a single file
+    const csvParts = [];
+    let globalHeader = null;
+
     for (const [plantId, selId] of selectionEntries) {
       const url = `${API_BASE}/datastudio/export?selection_id=${encodeURIComponent(selId)}`;
       const res = await fetch(url, { headers });
@@ -2922,22 +2926,45 @@ async function exportDataStudioSelection() {
         throw new Error(`Falha ao exportar (${res.status}) ${txt}`);
       }
 
-      const blob = await res.blob();
-      const plantName = dsGetPlantNameById(plantId);
-      let filename = plantName ? `${plantName}_export_${selId}.csv` : `datastudio_export_${selId}.csv`;
-      const contentDisposition = res.headers.get("Content-Disposition");
-      const cdMatch = contentDisposition && contentDisposition.match(/filename="([^"]+)"/i);
-      if (cdMatch && cdMatch[1]) filename = cdMatch[1];
+      const csvText = await res.text();
+      const lines = csvText.split(/\r?\n/).filter(l => l.trim() !== "");
 
-      const blobUrl = window.URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = blobUrl;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      window.URL.revokeObjectURL(blobUrl);
+      if (!lines.length) continue;
+
+      if (globalHeader === null) {
+        // First plant: keep header + add "Usina" column
+        globalHeader = "Usina," + lines[0];
+        csvParts.push(globalHeader);
+        const plantName = dsGetPlantNameById(plantId) || `Usina ${plantId}`;
+        const safeName = plantName.replace(/"/g, '""');
+        for (let i = 1; i < lines.length; i++) {
+          csvParts.push(`"${safeName}",${lines[i]}`);
+        }
+      } else {
+        // Subsequent plants: skip header, add data rows with plant name
+        const plantName = dsGetPlantNameById(plantId) || `Usina ${plantId}`;
+        const safeName = plantName.replace(/"/g, '""');
+        for (let i = 1; i < lines.length; i++) {
+          csvParts.push(`"${safeName}",${lines[i]}`);
+        }
+      }
     }
+
+    if (!csvParts.length) {
+      window.alert("Nenhum dado para exportar.");
+      return;
+    }
+
+    const mergedCsv = csvParts.join("\n");
+    const blob = new Blob([mergedCsv], { type: "text/csv;charset=utf-8" });
+    const blobUrl = window.URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = blobUrl;
+    a.download = `datastudio_export_${new Date().toISOString().slice(0,10)}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.URL.revokeObjectURL(blobUrl);
   } catch (err) {
     console.error("[DataStudio] erro ao exportar CSV:", err);
     window.alert(`Não foi possível exportar o CSV: ${err.message || err}`);
@@ -3019,9 +3046,7 @@ function _renderSinglePlantChart(canvas, seriesPayload, plantIdx) {
   const labels = [];
   const datasets = [];
 
-  const seriesList = Array.isArray(seriesPayload?.series)
-    ? seriesPayload.series
-    : (Array.isArray(seriesPayload?.items) ? seriesPayload.items : []);
+  const seriesList = _extractSeriesList(seriesPayload);
 
   const scales = {
     x: { ticks: { color: "#9fb0bf" }, grid: { color: "rgba(255,255,255,.08)" } },
@@ -3120,10 +3145,18 @@ function _renderSinglePlantChart(canvas, seriesPayload, plantIdx) {
   });
 }
 
+function _extractSeriesList(payload) {
+  if (Array.isArray(payload?.series)) return payload.series;
+  if (Array.isArray(payload?.items)) return payload.items;
+  if (Array.isArray(payload?.data)) return payload.data;
+  if (Array.isArray(payload)) return payload;
+  return [];
+}
+
 function _fillDsStatsForPlant(payload, plantId) {
   const tbody = document.getElementById(`dsStatsTbody_${plantId}`);
   if (!tbody) return;
-  const series = payload?.series || payload?.items || [];
+  const series = _extractSeriesList(payload);
   if (!series.length) {
     tbody.innerHTML = '<tr><td colspan="6" style="opacity:.5;text-align:center">Sem dados</td></tr>';
     return;
