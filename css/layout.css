@@ -5065,3 +5065,49 @@ body.plant-edit-modal-open {
     text-overflow: ellipsis !important;
   }
 }
+
+/* ── Comm Status — card offline ── */
+.plant-card--offline {
+  border-color: #6b7280 !important;
+  opacity: 0.75;
+}
+.plant-card--offline .plant-card__power {
+  color: #9ca3af;
+}
+
+/* ── Badge de comunicação ── */
+.badge--offline,
+.badge--partial {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 999px;
+  margin-top: 4px;
+}
+.badge--offline {
+  background: #374151;
+  color: #d1d5db;
+}
+.badge--partial {
+  background: #78350f;
+  color: #fde68a;
+}
+
+/* Dot indicador antes do texto */
+.badge--offline::before {
+  content: '';
+  display: inline-block;
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: #6b7280;
+}
+.badge--partial::before {
+  content: '';
+  display: inline-block;
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: #fbbf24;
+}
