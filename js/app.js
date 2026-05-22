@@ -1853,6 +1853,19 @@ function sortPortfolioPlants(plants) {
   return validPlants;
 }
 
+function getPlantCardStatus(plant) {
+  if (plant.comm_status === 'offline' || plant.plant_status_color === 'gray') {
+    return { colorClass: 'plant-card--offline', badge: 'Sem comunicação', badgeClass: 'badge--offline' };
+  }
+  if (plant.comm_status === 'partial') {
+    const rpt = Number(plant.inverter_reporting ?? 0);
+    const stale = Number(plant.inverter_stale ?? 0);
+    const txt = `Comunicação parcial (${rpt}/${rpt + stale})`;
+    return { colorClass: 'plant-card--warning', badge: txt, badgeClass: 'badge--partial' };
+  }
+  return { colorClass: '', badge: null, badgeClass: null };
+}
+
 function renderPortfolioTable(plants) {
   const tbody = document.getElementById("portfolioTbody");
   if (!tbody) return;
@@ -1877,7 +1890,9 @@ function renderPortfolioTable(plants) {
 
     // Linha cinza se planta sem dados ou status 28
     const plantState = getPortfolioPlantVisualState(plant);
-    if (plantState.isOffline) tr.classList.add("portfolio-row--offline");
+    const commStatus = getPlantCardStatus(plant);
+    const isCommOffline = commStatus.colorClass === 'plant-card--offline';
+    if (plantState.isOffline || isCommOffline) tr.classList.add("portfolio-row--offline");
 
     const alarmSeverity =
       normalizeAlarmSeverity(lastAlarmSeverityByPlant.get(plantId)) ||
@@ -1887,6 +1902,13 @@ function renderPortfolioTable(plants) {
       ? `plant-icon plant-icon--${alarmSeverity}`
       : "plant-icon plant-icon--ok";
 
+    const commBadgeHtml = commStatus.badge
+      ? `<span class="${commStatus.badgeClass}" style="margin-left:8px">${commStatus.badge}</span>`
+      : '';
+    const activePowerTd = isCommOffline
+      ? '<td class="metric-active metric-zero">—</td>'
+      : `<td class="metric-active${Number(plant.active_power_kw ?? 0) === 0 ? ' metric-zero' : ''}">${Number(plant.active_power_kw ?? 0).toFixed(1)} kW</td>`;
+
     tr.innerHTML = `
       <td>
         <button class="plant-cell-btn" title="Abrir usina ${valueOrDash(plantName)}">
@@ -1895,11 +1917,12 @@ function renderPortfolioTable(plants) {
               <i class="fa-solid fa-seedling"></i>
             </span>
             <span class="plant-name-text">${valueOrDash(plantName)}</span>
+            ${commBadgeHtml}
           </span>
         </button>
       </td>
       <td class="metric-neutral">${Number(plant.rated_power_kw ?? 0).toFixed(1)} kWp</td>
-      <td class="metric-active${Number(plant.active_power_kw ?? 0) === 0 ? ' metric-zero' : ''}">${Number(plant.active_power_kw ?? 0).toFixed(1)} kW</td>
+      ${activePowerTd}
       <td class="metric-active">${Number(plant.energy_today_kwh ?? 0).toFixed(1)} kWh</td>
       <td>${plant.irradiance_wm2 != null ? Number(plant.irradiance_wm2).toFixed(0) + " W/m²" : "—"}</td>
       <td>${plant.inverter_availability_pct != null ? Number(plant.inverter_availability_pct).toFixed(1) + "%" : "—"}</td>
@@ -4075,6 +4098,9 @@ function updatePortfolioCardAlarms() {
       || normalizeAlarmSeverity(lastAlarmSeverityByPlant.get(pname))
       || normalizeAlarmSeverity(lastAlarmSeverityByPlant.get(Number(pid)))
       || null;
+    // comm_status takes visual priority — skip alarm override for comm offline/partial
+    const commSt = card.dataset.commStatus;
+    if (commSt === 'offline' || commSt === 'partial') return;
     const isOff = card.classList.contains("plant-card--offline");
     card.className = `plant-card${isOff ? " plant-card--offline" : ""}${sev ? ` alarm-${sev}` : ""}`;
     const icon = card.querySelector(".plant-card__icon");
@@ -4104,6 +4130,8 @@ function renderPortfolioCards(plants) {
       || normalizeAlarmSeverity(lastAlarmSeverityByPlant.get(plantName)) || null;
 
     const plantState = getPortfolioPlantVisualState(plant);
+    const commStatus = getPlantCardStatus(plant);
+    const isCommOffline = commStatus.colorClass === 'plant-card--offline';
     const activePower = plantState.activePower;
     const ratedPower = Number(plant.rated_power_kw ?? plant.rated_power_kwp ?? 0);
     const energyToday = plantState.energyToday;
@@ -4111,22 +4139,38 @@ function renderPortfolioCards(plants) {
     const irr = plant.irradiance_wm2 != null ? Number(plant.irradiance_wm2).toFixed(0) + " W/m\u00B2" : "\u2014";
     const invAvail = plant.inverter_availability_pct != null ? Number(plant.inverter_availability_pct).toFixed(1) + "%" : "\u2014";
 
-    const isOffline = plantState.isOffline;
+    const isOffline = plantState.isOffline || isCommOffline;
     const isGenerating = plantState.kind === "generating";
     let statusDotClass = "plant-card__status-dot";
     let statusText;
-    if (plantState.kind === "offline") {
+    if (isCommOffline) {
+      statusDotClass += " offline";
+      statusText = "Sem comunicação";
+    }
+    else if (plantState.kind === "offline") {
       statusDotClass += " offline";
       statusText = "Sem dados";
     }
     else if (isGenerating){ statusDotClass += " generating"; statusText = "Em gera\u00E7\u00E3o"; }
     else                  { statusDotClass += " standby";   statusText = "Aguardando"; }
 
-    const offlineClass = isOffline ? " plant-card--offline" : "";
-    const alarmSuffix  = alarmSeverity ? ` alarm-${alarmSeverity}` : "";
-    const iconClass    = alarmSeverity ? `plant-card__icon alarm-${alarmSeverity}` : "plant-card__icon";
-    const cardClass    = `plant-card${offlineClass}${alarmSuffix}`;
+    // comm_status takes visual priority over alarm severity
+    let cardClass, iconClass;
+    if (commStatus.badge) {
+      cardClass = `plant-card ${commStatus.colorClass}`;
+      iconClass = "plant-card__icon";
+    } else {
+      const offlineClass = isOffline ? " plant-card--offline" : "";
+      const alarmSuffix  = alarmSeverity ? ` alarm-${alarmSeverity}` : "";
+      iconClass = alarmSeverity ? `plant-card__icon alarm-${alarmSeverity}` : "plant-card__icon";
+      cardClass = `plant-card${offlineClass}${alarmSuffix}`;
+    }
     const canvasId = "mini-chart-" + plantId;
+
+    const commBadgeHtml = commStatus.badge
+      ? `<span class="${commStatus.badgeClass}">${commStatus.badge}</span>`
+      : '';
+    const activePowerDisplay = isCommOffline ? '—' : activePower.toFixed(1) + ' kW';
 
     const card = document.createElement("div");
     card.className = cardClass;
@@ -4134,16 +4178,18 @@ function renderPortfolioCards(plants) {
     card.setAttribute("tabindex", "0");
     card.dataset.plantId = plantId;
     card.dataset.plantName = plantName;
+    card.dataset.commStatus = plant.comm_status || '';
 
     card.innerHTML = `
       <div class="plant-card__top">
         <div class="${iconClass}"><i class="fa-solid fa-seedling"></i></div>
         <div class="plant-card__name">${plantName}</div>
+        ${commBadgeHtml}
       </div>
       <div class="plant-card__stats">
         <div class="plant-card__stat">
           <div class="plant-card__stat-label"><i class="fa-solid fa-bolt"></i> Active Power</div>
-          <div class="plant-card__stat-value active">${activePower.toFixed(1)} kW</div>
+          <div class="plant-card__stat-value active">${activePowerDisplay}</div>
         </div>
         <div class="plant-card__stat">
           <div class="plant-card__stat-label"><i class="fa-solid fa-layer-group"></i> Rated</div>
