@@ -79,18 +79,6 @@
         <section id="topSummary" class="plant-summary-fixed" aria-label="Resumo geral das usinas">
     <!-- ✅ WRAPPER: serve pra centralizar o conteúdo (fundo continua full width) -->
     <div class="psf-inner">
-      <div class="psf-gauge">
-        <div class="psf-ring-wrap">
-          <svg class="psf-ring-svg" viewBox="0 0 70 70">
-            <circle class="psf-ring-bg" cx="35" cy="35" r="30"/>
-            <circle class="psf-ring-fill" id="psfRingFill" cx="35" cy="35" r="30"
-              stroke-dasharray="0 188.5"
-              stroke-dashoffset="47.1"/>
-          </svg>
-          <span class="psf-ring-label" id="psfCapacityPct">—</span>
-        </div>
-      </div>
-
       <!-- STATUS: Gen | No comm | Off -->
       <div class="psf-status-icons">
         <div class="psf-status gen">
@@ -119,16 +107,36 @@
         </div>
       </div>
 
-      <!-- MÉTRICAS: Rated Power + Active Power (direita) -->
-      <div class="psf-metrics-group">
-        <div class="psf-rated">
-          <div class="psf-rated-label">Rated Power</div>
-          <div class="psf-rated-value" id="psfRatedPower">—</div>
+      <!-- RATED POWER (DC) — esquerda do anel -->
+      <div class="psf-rated psf-rated--dc">
+        <div class="psf-rated-label">Rated Power <span style="color:#4ade80;font-weight:700;">(DC)</span></div>
+        <div class="psf-rated-value" id="psfRatedPower">—</div>
+      </div>
+
+      <!-- GAUGE com label CAPACITY TOTAL acima -->
+      <div class="psf-gauge">
+        <div class="psf-gauge-total-label">CAPACITY TOTAL</div>
+        <div class="psf-ring-wrap">
+          <svg class="psf-ring-svg" viewBox="0 0 70 70">
+            <circle class="psf-ring-bg" cx="35" cy="35" r="30"/>
+            <circle class="psf-ring-fill" id="psfRingFill" cx="35" cy="35" r="30"
+              stroke-dasharray="0 188.5"
+              stroke-dashoffset="47.1"/>
+          </svg>
+          <span class="psf-ring-label" id="psfCapacityPct">—</span>
         </div>
-        <div class="psf-active">
-          <div class="psf-active-label">Active Power</div>
-          <div class="psf-active-value" id="psfActivePower">—</div>
-        </div>
+      </div>
+
+      <!-- CAPACITY (AC) — direita do anel -->
+      <div class="psf-rated psf-rated--ac">
+        <div class="psf-rated-label">Capacity <span style="color:#4ade80;font-weight:700;">(AC)</span></div>
+        <div class="psf-rated-value" id="psfRatedAc">—</div>
+      </div>
+
+      <!-- ACTIVE POWER -->
+      <div class="psf-active">
+        <div class="psf-active-label">Active Power</div>
+        <div class="psf-active-value" id="psfActivePower">—</div>
       </div>
     </div>
   </section>
@@ -732,5 +740,41 @@
       <path d="M7.3 6.8a6.7 6.7 0 1 0 9.4 0" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>
     </symbol>
   </svg>
+  <!-- ROBÔ ASSISTENTE — fica fora do .layout pois usa position:fixed -->
+  <div id="robotAssistant" class="robot-assistant">
+
+    <!-- Balão de fala (sai para a direita no desktop) -->
+    <div class="robot-bubble" id="robotBubble">
+      <div class="robot-bubble-inner">
+        <span class="robot-bubble-text" id="robotBubbleText"></span>
+        <span class="robot-bubble-cursor" id="robotBubbleCursor">▌</span>
+      </div>
+      <button class="robot-bubble-expand" id="robotBubbleExpand">
+        <i class="fa-solid fa-chevron-right"></i> Ver mais
+      </button>
+      <div class="robot-bubble-tail"></div>
+    </div>
+
+    <!-- Painel de relatório (também sai para a direita no desktop) -->
+    <div class="robot-report hidden" id="robotReport">
+      <div class="robot-report-header">
+        <span class="robot-report-title">
+          <i class="fa-solid fa-clipboard-list"></i> Diagnóstico
+        </span>
+        <button class="robot-report-close" id="robotReportClose">×</button>
+      </div>
+      <div class="robot-report-list" id="robotReportList"></div>
+    </div>
+
+    <!-- Avatar -->
+    <div class="robot-avatar" id="robotAvatar" title="Diagnóstico do sistema">
+      <img id="robotImg" src="img/roboaiotiidle.png" alt="Bot" class="robot-img" />
+    </div>
+
+    <!-- Badge de contagem -->
+    <span class="robot-badge hidden" id="robotBadge">0</span>
+
+  </div>
+
   </body>
   </html>
