@@ -7,7 +7,6 @@
 
   <!-- CSS -->
   <link rel="stylesheet" href="css/plant.css" />
-  <link rel="stylesheet" href="css/plant.css" />
   <link
     rel="stylesheet"
     href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css"
@@ -81,13 +80,17 @@
           <div class="kpi-label">Capacidade</div>
           <strong id="headerCapacity">—</strong>
         </div>
+        <div class="kpi">
+          <div class="kpi-label">Capacity <span style="color:#4ade80;font-weight:700;">(AC)</span></div>
+          <strong id="headerCapacityAc">—</strong>
+        </div>
       </div>
 
       <div class="plant-head-right">
         <div class="plant-weather-compact weather-station">
           <div class="weather-title-row">
             <h3 class="weather-title">Weather Station</h3>
-            <button id="weatherExpandBtn" class="weather-expand-btn" aria-label="Expandir dados meteorológicos">▾</button>
+            <button id="weatherExpandBtn" class="weather-expand-btn" aria-label="Expandir dados meteorológicos"><i class="fa-solid fa-chevron-down"></i></button>
           </div>
           <div class="weather-items-row">
             <div class="weather-item">
@@ -174,12 +177,12 @@
         <span>Inversores</span>
       </button>
 
-      <button class="device-nav-btn" type="button" data-target="#sec-relay">
+      <button class="device-nav-btn" id="navBtnRelay" type="button" data-target="#sec-relay">
         <i class="fa-solid fa-tower-broadcast" aria-hidden="true"></i>
         <span>Relé</span>
       </button>
 
-      <button class="device-nav-btn" type="button" data-target="#sec-multimeter">
+      <button class="device-nav-btn" id="navBtnMultimeter" type="button" data-target="#sec-multimeter">
         <i class="fa-solid fa-gauge-high" aria-hidden="true"></i>
         <span>Multimedidor</span>
       </button>
@@ -236,17 +239,40 @@
     <section class="card plant-chart-card plant-chart-card--monthly">
       <div class="card-header">
         <div class="monthly-head-wrap">
-          <div>
+          <div class="monthly-title-copy">
+            <span class="monthly-subtitle-note">Real = produzido at&eacute; hoje; esperado = expectativa cadastrada no banco.</span>
             <h2>Geração mensal</h2>
             <span class="subtitle">Últimos 30 dias · kWh / dia</span>
           </div>
           <div class="monthly-kpis">
             <div class="monthly-kpi-pill">
-              <span>Total real</span>
+              <span class="monthly-kpi-label">
+                Real at&eacute; hoje
+                <button class="monthly-help" type="button" aria-label="O que significa real ate hoje?">
+                  <i class="fa-regular fa-circle-question" aria-hidden="true"></i>
+                  <span class="monthly-help-tip" role="tooltip">Energia realmente produzida do in&iacute;cio do m&ecirc;s at&eacute; o dia atual.</span>
+                </button>
+              </span>
               <strong id="monthlyKpiReal">—</strong>
             </div>
             <div class="monthly-kpi-pill">
-              <span>Esperado</span>
+              <span class="monthly-kpi-label">
+                Esperado at&eacute; hoje
+                <button class="monthly-help" type="button" aria-label="O que significa esperado ate hoje?">
+                  <i class="fa-regular fa-circle-question" aria-hidden="true"></i>
+                  <span class="monthly-help-tip" role="tooltip">Somat&oacute;rio da expectativa di&aacute;ria do banco do in&iacute;cio do m&ecirc;s at&eacute; o dia atual.</span>
+                </button>
+              </span>
+              <strong id="monthlyKpiExpectedMtd">â€”</strong>
+            </div>
+            <div class="monthly-kpi-pill">
+              <span class="monthly-kpi-label">
+                Expectativa do m&ecirc;s
+                <button class="monthly-help" type="button" aria-label="O que significa expectativa do mes?">
+                  <i class="fa-regular fa-circle-question" aria-hidden="true"></i>
+                  <span class="monthly-help-tip" role="tooltip">Soma de todas as expectativas di&aacute;rias exibidas para o m&ecirc;s.</span>
+                </button>
+              </span>
               <strong id="monthlyKpiExp">—</strong>
             </div>
           </div>
@@ -282,9 +308,36 @@
     <!-- âncora invisível (com offset pra não ficar atrás do header sticky) -->
     <div id="sec-inverters" class="scroll-anchor"></div>
 
-    <h3 class="card-title">Inversores</h3>
+    <div class="inv-section-head">
+      <h3 class="card-title">Inversores</h3>
+      <div class="inv-view-toggle" id="invViewToggle">
+        <button class="inv-view-btn is-active" id="invBtnList" type="button" title="Modo lista">
+          <svg width="15" height="15" viewBox="0 0 15 15" fill="none">
+            <rect x="0" y="1"    width="15" height="2.5" rx="1" fill="currentColor"/>
+            <rect x="0" y="6.25" width="15" height="2.5" rx="1" fill="currentColor"/>
+            <rect x="0" y="11.5" width="15" height="2.5" rx="1" fill="currentColor"/>
+          </svg>
+          Lista
+        </button>
+        <button class="inv-view-btn" id="invBtnMap" type="button" title="Modo Unifilar">
+          <svg width="17" height="15" viewBox="0 0 17 15" fill="none" aria-hidden="true">
+            <line x1="1" y1="9" x2="16" y2="9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+            <line x1="3.5" y1="5" x2="3.5" y2="9" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+            <line x1="7"   y1="5" x2="7"   y2="9" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+            <line x1="10.5" y1="5" x2="10.5" y2="9" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+            <circle cx="3.5"  cy="3.6" r="1.4" stroke="currentColor" stroke-width="1" fill="none"/>
+            <circle cx="7"    cy="3.6" r="1.4" stroke="currentColor" stroke-width="1" fill="none"/>
+            <circle cx="10.5" cy="3.6" r="1.4" stroke="currentColor" stroke-width="1" fill="none"/>
+            <circle cx="14"   cy="12.2" r="1.9" stroke="currentColor" stroke-width="1.1" fill="none"/>
+            <circle cx="16"   cy="12.2" r="1.9" stroke="currentColor" stroke-width="1.1" fill="none" opacity=".5"/>
+            <line x1="14.5" y1="9" x2="14.5" y2="10.3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+          </svg>
+          Unifilar
+        </button>
+      </div>
+    </div>
 
-    <div class="inverters-section">
+    <div class="inverters-section" id="invertersListSection">
 
       <div class="inverter-header">
         <span></span>
@@ -301,6 +354,92 @@
       <div id="invertersContainer"></div>
 
     </div>
+
+    <!-- MODO UNIFILAR -->
+    <div id="cabineMapView" class="unifilar-view" style="display:none;">
+
+      <!-- Barra de ferramentas -->
+      <div class="unif-topbar">
+        <div class="unif-mode-btns">
+          <button class="unif-mode-btn is-active" id="unifilarBtnOverview" title="Vista geral da planta">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+              <rect x=".8" y=".8" width="12.4" height="12.4" rx="2" stroke="currentColor" stroke-width="1.2" fill="none"/>
+              <line x1=".8" y1="5" x2="13.2" y2="5" stroke="currentColor" stroke-width=".9"/>
+              <line x1="5" y1="5" x2="5" y2="13.2" stroke="currentColor" stroke-width=".9"/>
+            </svg>
+            Vista Geral
+          </button>
+          <button class="unif-mode-btn" id="unifilarBtnCabin" title="Zoom em cabines">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+              <rect x=".8" y="2.5" width="12.4" height="9.5" rx="1.5" stroke="currentColor" stroke-width="1.2" fill="none"/>
+              <line x1="5" y1="2.5" x2="5" y2="12" stroke="currentColor" stroke-width=".9"/>
+              <line x1="9" y1="2.5" x2="9" y2="12" stroke="currentColor" stroke-width=".9"/>
+            </svg>
+            Cabines
+          </button>
+        </div>
+
+        <!-- Navegação de cabines (visível só no modo cabine) -->
+        <div class="unif-cabin-nav" id="unifilarCabinNav" style="display:none;">
+          <button class="unif-nav-arr" id="unifilarPrev" aria-label="Cabine anterior">
+            <svg width="8" height="14" viewBox="0 0 8 14" fill="none"><path d="M7 1L1 7L7 13" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+          <span class="unif-cabin-nav-label" id="unifilarCabinLabel">—</span>
+          <button class="unif-nav-arr" id="unifilarNext" aria-label="Próxima cabine">
+            <svg width="8" height="14" viewBox="0 0 8 14" fill="none"><path d="M1 1L7 7L1 13" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+        </div>
+
+        <div style="flex:1"></div>
+
+        <!-- Legenda de status -->
+        <div class="unif-legend">
+          <span class="unif-leg-item"><span class="unif-leg-dot unif-leg-dot--online"></span>Online</span>
+          <span class="unif-leg-item"><span class="unif-leg-dot unif-leg-dot--alarm"></span>Alerta</span>
+          <span class="unif-leg-item"><span class="unif-leg-dot unif-leg-dot--offline"></span>Offline</span>
+        </div>
+      </div>
+
+      <!-- Conteúdo principal: diagrama + painel lateral -->
+      <div class="unif-content">
+
+        <!-- Área do diagrama -->
+        <div class="unif-stage-wrap" id="unifilarStageWrap">
+          <!-- Vista geral: planta inteira cabe na tela -->
+          <div class="unif-overview" id="unifilarOverview"></div>
+          <!-- Vista de cabine: inversores em detalhe, um por vez -->
+          <div class="unif-cabin-detail" id="unifilarCabinDetail" style="display:none;"></div>
+        </div>
+
+        <!-- Painel lateral de dispositivos -->
+        <div class="unif-side" id="unifilarSide">
+          <div class="unif-side-hdr">
+            <span class="unif-side-title">DISPOSITIVOS</span>
+            <div class="unif-side-actions">
+              <button class="unif-collapse-btn" id="unifilarCollapseBtn" title="Minimizar/Expandir painel" aria-label="Minimizar painel">
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none" id="unifCollapseSVG">
+                  <path d="M8 1L11 6L8 11" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+                  <line x1="1" y1="6" x2="11" y2="6" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" opacity=".4"/>
+                </svg>
+              </button>
+            </div>
+          </div>
+          <div class="unif-side-search-wrap">
+            <input class="unif-side-search" id="unifilarSearch" type="search" placeholder="Buscar dispositivo...">
+          </div>
+          <div class="unif-side-list" id="unifilarSideList"></div>
+          <div class="unif-side-footer" id="unifilarSideFooter"></div>
+        </div>
+
+      </div><!-- .unif-content -->
+
+      <!-- Barra de estatísticas inferior -->
+      <div class="unif-stats-bar" id="unifilarStatsBar"></div>
+
+      <!-- Dock para gráficos quando em modo mapa -->
+      <div id="cabineMapChartDock" class="cabine-map-chart-dock" aria-label="Gráficos compactos"></div>
+
+    </div><!-- #cabineMapView -->
 
     <div id="sec-multimeter" class="scroll-anchor"></div>
     <section id="multimeterSection" style="margin-top:24px">
@@ -489,6 +628,33 @@
   </section>
 
 </main>
+
+<!-- Robot assistente (insights analíticos) -->
+<div id="robotAssistant" class="robot-assistant">
+  <div class="robot-bubble" id="robotBubble">
+    <div class="robot-bubble-inner">
+      <span class="robot-bubble-text" id="robotBubbleText"></span>
+      <span class="robot-bubble-cursor" id="robotBubbleCursor">▌</span>
+    </div>
+    <button class="robot-bubble-expand" id="robotBubbleExpand">
+      <i class="fa-solid fa-chevron-right"></i> Ver mais
+    </button>
+    <div class="robot-bubble-tail"></div>
+  </div>
+  <div class="robot-report hidden" id="robotReport">
+    <div class="robot-report-header">
+      <span class="robot-report-title">
+        <i class="fa-solid fa-clipboard-list"></i> Diagnóstico
+      </span>
+      <button class="robot-report-close" id="robotReportClose">×</button>
+    </div>
+    <div class="robot-report-list" id="robotReportList"></div>
+  </div>
+  <div class="robot-avatar" id="robotAvatar" title="Diagnóstico do sistema">
+    <img id="robotImg" src="img/roboaiotiidle.png" alt="Bot" class="robot-img" />
+  </div>
+  <span class="robot-badge hidden" id="robotBadge">0</span>
+</div>
 
 <svg class="device-svg-sprite" aria-hidden="true" focusable="false" width="0" height="0">
   <symbol id="device-command-switch-glyph" viewBox="0 0 24 24">
