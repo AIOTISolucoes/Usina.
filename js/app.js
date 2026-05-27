@@ -43,7 +43,8 @@ function apiFetch(path, options = {}) {
 
   return fetch(`${API_BASE}${path}`, {
     ...options,
-    headers
+    headers,
+    cache: "no-store"
   });
 }
 
@@ -394,6 +395,10 @@ function setChipCount(id, value, title = "") {
   if (!el) return;
   el.textContent = String(value);
   if (title) el.title = title;
+  if (id === 'countNoComm' || id === 'countOff') {
+    const statusDiv = el.closest('.psf-status');
+    if (statusDiv) statusDiv.classList.toggle('psf-status--alarm', Number(value) > 0);
+  }
 }
 
 async function fetchInvertersRealtimeByPlant(plantId) {
@@ -1774,10 +1779,12 @@ function updateSummaryUI(plants) {
 
   let totalActivePower = 0;
   let totalRatedPower = 0;
+  let totalCapacityAc = 0;
 
   validPlants.forEach(p => {
     totalActivePower += Number(p?.active_power_kw ?? 0) || 0;
-    totalRatedPower += Number(p?.rated_power_kw ?? p?.rated_power_kwp ?? 0) || 0;
+    totalRatedPower += Number(p?.capacity_dc ?? 0) || 0;
+    totalCapacityAc += Number(p?.capacity_ac ?? 0) || 0;
   });
 
   const loadPct = totalRatedPower > 0 ? (totalActivePower / totalRatedPower) * 100 : 0;
@@ -1792,10 +1799,12 @@ function updateSummaryUI(plants) {
 
   const elPsfActive = document.getElementById("psfActivePower");
   const elPsfRated = document.getElementById("psfRatedPower");
+  const elPsfRatedAc = document.getElementById("psfRatedAc");
   const elPsfPercent = document.getElementById("psfCapacityPct");
 
   if (elPsfActive) elPsfActive.textContent = totalActivePower.toFixed(1) + " kW";
   if (elPsfRated) elPsfRated.textContent = totalRatedPower.toFixed(1) + " kWp";
+  if (elPsfRatedAc) elPsfRatedAc.textContent = totalCapacityAc > 0 ? totalCapacityAc.toFixed(1) + " kWp" : "—";
   if (elPsfPercent) elPsfPercent.textContent = loadPct.toFixed(1) + "%";
 
   // Update SVG progress ring
@@ -1812,14 +1821,20 @@ function getPortfolioPlantVisualState(plant) {
   const activePower = Number(plant?.active_power_kw ?? 0);
   const energyToday = Number(plant?.energy_today_kwh ?? plant?.daily_energy_kwh ?? 0);
   const irradiance = Number(plant?.irradiance_wm2 ?? 0);
-  const statusNum = Number(plant?.plant_status);
+  const statusColor = plant?.plant_status_color || plant?.plant_status || '';
   const hasAnyData = activePower > 0 || energyToday > 0 || irradiance > 0;
 
   if (activePower > 0) {
     return { priority: 0, kind: "generating", activePower, energyToday, irradiance, isOffline: false };
   }
 
-  if (statusNum === 28 || !hasAnyData) {
+  // Standby: inversores em espera (status_color amarelo) → card amarelo
+  if (statusColor === 'yellow') {
+    return { priority: 1, kind: "standby", activePower, energyToday, irradiance, isOffline: false };
+  }
+
+  // Desligada/sem dados: gray, red sem potência, ou sem dados
+  if (!hasAnyData || statusColor === 'gray' || statusColor === 'red') {
     return { priority: 2, kind: "offline", activePower, energyToday, irradiance, isOffline: true };
   }
 
@@ -1854,8 +1869,16 @@ function sortPortfolioPlants(plants) {
 }
 
 function getPlantCardStatus(plant) {
-  if (plant.comm_status === 'offline' || plant.plant_status_color === 'gray') {
+  // "Sem comunicação" = somente quando NÃO recebemos dados recentes (comunicação real perdida)
+  if (plant.comm_status === 'offline') {
     return { colorClass: 'plant-card--offline', badge: 'Sem comunicação', badgeClass: 'badge--offline' };
+  }
+  const lastUpdate = plant.updated_at || plant.last_update;
+  if (lastUpdate) {
+    const age = (Date.now() - new Date(lastUpdate).getTime()) / 60000;
+    if (age > 30) {
+      return { colorClass: 'plant-card--offline', badge: 'Sem comunicação', badgeClass: 'badge--offline' };
+    }
   }
   if (plant.comm_status === 'partial') {
     const rpt = Number(plant.inverter_reporting ?? 0);
@@ -1863,6 +1886,8 @@ function getPlantCardStatus(plant) {
     const txt = `Comunicação parcial (${rpt}/${rpt + stale})`;
     return { colorClass: 'plant-card--warning', badge: txt, badgeClass: 'badge--partial' };
   }
+  // plant_status_color 'red'/'gray'/'yellow' com dados frescos = NÃO é perda de comunicação
+  // red = inversores em falha mas comunicando; gray = desligada; yellow = standby
   return { colorClass: '', badge: null, badgeClass: null };
 }
 
@@ -1900,7 +1925,7 @@ function renderPortfolioTable(plants) {
       null;
     const plantIconClass = alarmSeverity
       ? `plant-icon plant-icon--${alarmSeverity}`
-      : "plant-icon plant-icon--ok";
+      : (plantState.kind === "standby" ? "plant-icon plant-icon--standby" : "plant-icon plant-icon--ok");
 
     const commBadgeHtml = commStatus.badge
       ? `<span class="${commStatus.badgeClass}" style="margin-left:8px">${commStatus.badge}</span>`
@@ -3977,16 +4002,20 @@ async function refreshDashboard() {
       renderPortfolioCards(typeof portfolioFilterPlants === "function"
         ? portfolioFilterPlants(lastValidPlants) : lastValidPlants);
     } else {
-      updatePortfolioCardAlarms();
+      updatePortfolioCardData(typeof portfolioFilterPlants === "function"
+        ? portfolioFilterPlants(lastValidPlants) : lastValidPlants);
+      _refreshMiniChartsIfStale();
     }
   }
 
   await refreshVisibleViewData();
   syncTopSummaryLayout();
+  try { await robotRefresh(); } catch(e) { console.warn("[ROBOT]", e); }
 }
 
 document.addEventListener("DOMContentLoaded", async () => {
   wireDataStudioOnce();
+  wireRobotAssistant();
 
   // Preenche nome do usuário logado
   try {
@@ -4088,6 +4117,106 @@ function wirePortfolioControls() {
   portfolioSetView(_portfolioCurrentView);
 }
 
+function updatePortfolioCardData(plants) {
+  const grid = document.getElementById("portfolioCardView");
+  if (!grid) return;
+
+  // Build lookup by plantId
+  const plantMap = new Map();
+  (Array.isArray(plants) ? plants : []).forEach(p => {
+    const id = String(p.power_plant_id ?? p.plant_id ?? p.id);
+    plantMap.set(id, p);
+  });
+
+  grid.querySelectorAll(".plant-card[data-plant-id]").forEach(card => {
+    const pid = card.dataset.plantId;
+    const plant = plantMap.get(String(pid));
+    if (!plant) return;
+
+    const plantState = getPortfolioPlantVisualState(plant);
+    const commStatus = getPlantCardStatus(plant);
+    const isCommOffline = commStatus.colorClass === 'plant-card--offline';
+    const activePower = plantState.activePower;
+    const ratedPower = Number(plant.rated_power_kw ?? plant.rated_power_kwp ?? 0);
+    const energyToday = plantState.energyToday;
+    const pr = plant.pr_daily_pct != null ? Number(plant.pr_daily_pct).toFixed(1) + "%" : "\u2014";
+    const irr = plant.irradiance_wm2 != null ? Number(plant.irradiance_wm2).toFixed(0) + " W/m\u00B2" : "\u2014";
+    const invAvail = plant.inverter_availability_pct != null ? Number(plant.inverter_availability_pct).toFixed(1) + "%" : "\u2014";
+    const activePowerDisplay = isCommOffline ? '\u2014' : activePower.toFixed(1) + ' kW';
+
+    // Update stat values in-place
+    const statValues = card.querySelectorAll(".plant-card__stat-value");
+    if (statValues[0]) statValues[0].textContent = activePowerDisplay;
+    if (statValues[1]) statValues[1].textContent = ratedPower.toFixed(1) + " kWp";
+    if (statValues[2]) statValues[2].textContent = energyToday.toFixed(1) + " kWh";
+    if (statValues[3]) statValues[3].textContent = pr;
+    if (statValues[4]) statValues[4].textContent = irr;
+    if (statValues[5]) statValues[5].textContent = invAvail;
+
+    // Update status dot + text
+    const isOffline = plantState.isOffline || isCommOffline;
+    let statusDotClass = "plant-card__status-dot";
+    let statusText;
+    if (isCommOffline) { statusDotClass += " offline"; statusText = "Sem comunica\u00E7\u00E3o"; }
+    else if (plantState.kind === "offline") { statusDotClass += " offline"; statusText = "Desligada"; }
+    else if (plantState.kind === "generating") { statusDotClass += " generating"; statusText = "Em gera\u00E7\u00E3o"; }
+    else { statusDotClass += " standby"; statusText = "Aguardando"; }
+
+    const dot = card.querySelector(".plant-card__status-dot");
+    const txt = card.querySelector(".plant-card__status-text");
+    if (dot) dot.className = statusDotClass;
+    if (txt) txt.textContent = statusText;
+
+    // Update card class (comm > alarm > offline)
+    const pname = card.dataset.plantName || "";
+    const alarmSeverity = normalizeAlarmSeverity(lastAlarmSeverityByPlant.get(pid))
+      || normalizeAlarmSeverity(lastAlarmSeverityByPlant.get(pname))
+      || normalizeAlarmSeverity(lastAlarmSeverityByPlant.get(Number(pid)))
+      || null;
+    const commSt = plant.comm_status || '';
+    card.dataset.commStatus = commSt;
+
+    let newCardClass;
+    if (commStatus.badge) {
+      newCardClass = `plant-card ${commStatus.colorClass}`;
+    } else {
+      const offCls = isOffline ? " plant-card--offline" : "";
+      const almCls = alarmSeverity ? ` alarm-${alarmSeverity}` : "";
+      const stdCls = (!isOffline && !alarmSeverity && plantState.kind === "standby") ? " standby-card" : "";
+      newCardClass = `plant-card${offCls}${almCls}${stdCls}`;
+    }
+    card.className = newCardClass;
+
+    // Update icon
+    const icon = card.querySelector(".plant-card__icon");
+    if (icon) {
+      if (commStatus.badge) icon.className = "plant-card__icon";
+      else if (alarmSeverity) icon.className = `plant-card__icon alarm-${alarmSeverity}`;
+      else if (plantState.kind === "standby") icon.className = "plant-card__icon standby-icon";
+      else icon.className = "plant-card__icon";
+    }
+
+    // Update comm badge
+    const existingBadge = card.querySelector(".badge--offline, .badge--partial");
+    if (commStatus.badge) {
+      if (existingBadge) {
+        existingBadge.className = commStatus.badgeClass;
+        existingBadge.textContent = commStatus.badge;
+      } else {
+        const top = card.querySelector(".plant-card__top");
+        if (top) {
+          const span = document.createElement("span");
+          span.className = commStatus.badgeClass;
+          span.textContent = commStatus.badge;
+          top.appendChild(span);
+        }
+      }
+    } else if (existingBadge) {
+      existingBadge.remove();
+    }
+  });
+}
+
 function updatePortfolioCardAlarms() {
   const grid = document.getElementById("portfolioCardView");
   if (!grid) return;
@@ -4149,7 +4278,7 @@ function renderPortfolioCards(plants) {
     }
     else if (plantState.kind === "offline") {
       statusDotClass += " offline";
-      statusText = "Sem dados";
+      statusText = "Desligada";
     }
     else if (isGenerating){ statusDotClass += " generating"; statusText = "Em gera\u00E7\u00E3o"; }
     else                  { statusDotClass += " standby";   statusText = "Aguardando"; }
@@ -4162,8 +4291,10 @@ function renderPortfolioCards(plants) {
     } else {
       const offlineClass = isOffline ? " plant-card--offline" : "";
       const alarmSuffix  = alarmSeverity ? ` alarm-${alarmSeverity}` : "";
-      iconClass = alarmSeverity ? `plant-card__icon alarm-${alarmSeverity}` : "plant-card__icon";
-      cardClass = `plant-card${offlineClass}${alarmSuffix}`;
+      const standbySuffix = (!isOffline && !alarmSeverity && plantState.kind === "standby") ? " standby-card" : "";
+      iconClass = alarmSeverity ? `plant-card__icon alarm-${alarmSeverity}` :
+                  (plantState.kind === "standby" ? "plant-card__icon standby-icon" : "plant-card__icon");
+      cardClass = `plant-card${offlineClass}${alarmSuffix}${standbySuffix}`;
     }
     const canvasId = "mini-chart-" + plantId;
 
@@ -4314,6 +4445,26 @@ async function _startMiniChartBatch(targets, renderGen) {
         console.warn("[mini-chart] retry falhou:", target.plantId, e?.message || e);
       }
     }
+  }
+}
+
+/**
+ * Re-fetches and re-renders mini-charts whose cache has expired (>5 min).
+ * Called on each refresh cycle so charts update without full re-render.
+ */
+function _refreshMiniChartsIfStale() {
+  const grid = document.getElementById("portfolioCardView");
+  if (!grid) return;
+  const staleTargets = [];
+  grid.querySelectorAll("canvas[id^='mini-chart-']").forEach(canvas => {
+    const plantId = canvas.id.replace("mini-chart-", "");
+    const cached = _miniChartDataCache.get(plantId) || _miniChartDataCache.get(Number(plantId));
+    if (!cached || (Date.now() - cached.ts) >= _MINI_CHART_CACHE_TTL_MS) {
+      staleTargets.push({ canvasId: canvas.id, plantId });
+    }
+  });
+  if (staleTargets.length > 0) {
+    _startMiniChartBatch(staleTargets, _portfolioRenderGen);
   }
 }
 
@@ -4685,6 +4836,31 @@ async function pemAddCabin() {
   } catch(e) { fb.textContent = e.message || "Erro."; fb.className = "plant-edit-feedback err"; }
 }
 
+function _applyPlantEditLocally(plantId, patch) {
+  const pid = String(plantId);
+  for (const p of lastValidPlants) {
+    const id = String(p.power_plant_id ?? p.plant_id ?? p.id);
+    if (id === pid) { Object.assign(p, patch); break; }
+  }
+  // Re-render table + cards with updated local data
+  renderPortfolioTable(lastValidPlants);
+  if (typeof _portfolioCurrentView !== "undefined" && _portfolioCurrentView === "card") {
+    const filtered = typeof portfolioFilterPlants === "function"
+      ? portfolioFilterPlants(lastValidPlants) : lastValidPlants;
+    updatePortfolioCardData(filtered);
+    // Also update card title if name changed
+    if (patch.power_plant_name) {
+      const grid = document.getElementById("portfolioCardView");
+      if (grid) grid.querySelectorAll(`.plant-card[data-plant-id="${pid}"]`).forEach(card => {
+        card.dataset.plantName = patch.power_plant_name;
+        const nameEl = card.querySelector(".plant-card__name");
+        if (nameEl) nameEl.textContent = patch.power_plant_name;
+      });
+    }
+  }
+  updateSummaryUI(lastValidPlants);
+}
+
 async function savePlantName() {
   if (!_PLANT_EDIT_ID) return;
   const inp = document.getElementById("plantEditNameInput");
@@ -4693,12 +4869,18 @@ async function savePlantName() {
   if (!n) { fb.textContent = "Nome vazio."; fb.className = "plant-edit-feedback err"; return; }
   fb.textContent = "Salvando…"; fb.className = "plant-edit-feedback";
   try {
+    const _u = JSON.parse(localStorage.getItem("user") || "{}");
     const r = await apiFetch(`/plants/${_PLANT_EDIT_ID}/name`, {
-      method: "PATCH", headers: {"Content-Type":"application/json"},
+      method: "PATCH",
+      headers: {"Content-Type":"application/json", "X-Username": _u.username || ""},
       body: JSON.stringify({plant_name: n})
     });
-    if (!r.ok) throw new Error((await r.json())?.error || `HTTP ${r.status}`);
+    const resp = await r.json();
+    if (!r.ok) throw new Error(resp?.error || `HTTP ${r.status}`);
+    // resp comes from RETURNING — confirmed written to DB
+    const savedName = resp?.body?.power_plant_name ?? resp?.power_plant_name ?? n;
     fb.textContent = "✓ Salvo!"; fb.className = "plant-edit-feedback ok";
+    _applyPlantEditLocally(_PLANT_EDIT_ID, { power_plant_name: savedName, plant_name: savedName, name: savedName, display_name: savedName });
   } catch(e) { fb.textContent = e.message || "Erro."; fb.className = "plant-edit-feedback err"; }
 }
 
@@ -4710,12 +4892,18 @@ async function savePlantRatedPower() {
   if (isNaN(val) || val < 0) { fb.textContent = "Valor inválido."; fb.className = "plant-edit-feedback err"; return; }
   fb.textContent = "Salvando…"; fb.className = "plant-edit-feedback";
   try {
+    const _u = JSON.parse(localStorage.getItem("user") || "{}");
     const r = await apiFetch(`/plants/${_PLANT_EDIT_ID}/name`, {
-      method: "PATCH", headers: {"Content-Type":"application/json"},
+      method: "PATCH",
+      headers: {"Content-Type":"application/json", "X-Username": _u.username || ""},
       body: JSON.stringify({capacity_dc: val})
     });
-    if (!r.ok) throw new Error((await r.json())?.error || `HTTP ${r.status}`);
+    const resp = await r.json();
+    if (!r.ok) throw new Error(resp?.error || `HTTP ${r.status}`);
+    // resp comes from RETURNING — confirmed written to DB
+    const savedDc = resp?.body?.capacity_dc ?? resp?.capacity_dc ?? val;
     fb.textContent = "✓ Salvo!"; fb.className = "plant-edit-feedback ok";
+    _applyPlantEditLocally(_PLANT_EDIT_ID, { rated_power_kw: savedDc, rated_power_kwp: savedDc, capacity_dc: savedDc });
   } catch(e) { fb.textContent = e.message || "Erro."; fb.className = "plant-edit-feedback err"; }
 }
 
@@ -5092,3 +5280,553 @@ async function createNewPlant() {
 }
 
 // wirePortfolioControls is now called synchronously inside the main DOMContentLoaded listener (above).
+
+// =============================================================================
+// ROBÔ ASSISTENTE DE DIAGNÓSTICO
+// =============================================================================
+const ROBOT_STATE = {
+  issues: [], currentIndex: 0, isTyping: false,
+  typingTimer: null, cycleTimer: null, dismissTimer: null,
+  reportOpen: false, bubbleVisible: false,
+  lastState: null, lastIssueHash: null, userRead: false,
+  avatarTimer: null, avatarState: null,
+};
+const ROBOT_TYPE_SPEED      = 40;
+const ROBOT_CYCLE_PAUSE     = 5000;
+const ROBOT_MAX_CHARS       = 110;
+const ROBOT_DISMISS_DELAY   = 12000;
+const ROBOT_AVATAR_GIF_MS   = 10000; // GIF plays for 10s then switches to static
+
+const ROBOT_AVATAR_MAP = {
+  critical: { gif: "img/roboaiotiredgif.gif",  png: "img/roboaiotired.png"  },
+  warning:  { gif: "img/roboaiotiidlegif.gif", png: "img/roboaiotiidle.png" },
+  gray:     { gif: "img/roboaiotioffgif.gif",  png: "img/roboaiotioff.png"  },
+  ok:       { gif: null,                        png: "img/roboaiotiok.png"   },
+};
+
+const ROBOT_NOTIF_PREFS_KEY = "robot_notif_prefs";
+const ROBOT_CAT_OPEN_KEY    = "robot_cat_open";
+
+const ROBOT_CATEGORY_META = {
+  temp_sustained:  { label: "Temperatura elevada",   order: 0 },
+  plant_shutdown:  { label: "Usina desligada",        order: 1 },
+  pr_declining:    { label: "PR em queda",            order: 2 },
+  sub_performance: { label: "Sub-performance",        order: 3 },
+  inv_clipping:    { label: "Clipping",               order: 4 },
+  string_zero:     { label: "String zerada",          order: 5 },
+  string_low:      { label: "String abaixo da m\u00e9dia", order: 6 },
+};
+
+const ROBOT_CATEGORY_ICONS = {
+  temp_sustained:  "fa-temperature-high",
+  plant_shutdown:  "fa-power-off",
+  pr_declining:    "fa-arrow-trend-down",
+  sub_performance: "fa-chart-bar",
+  inv_clipping:    "fa-bolt",
+  string_zero:     "fa-circle-xmark",
+  string_low:      "fa-battery-quarter",
+};
+
+function _robotGetNotifPrefs() {
+  try { return JSON.parse(localStorage.getItem(ROBOT_NOTIF_PREFS_KEY) || "{}"); }
+  catch (_) { return {}; }
+}
+
+function _robotSaveNotifPrefs(prefs) {
+  localStorage.setItem(ROBOT_NOTIF_PREFS_KEY, JSON.stringify(prefs));
+  const user = JSON.parse(localStorage.getItem("user") || "{}");
+  if (user.id || user.username) {
+    apiFetch("/users/notif-prefs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Username": user.username || "" },
+      body: JSON.stringify({ prefs })
+    }).catch(() => {});
+  }
+}
+
+function _robotIsMuted() {
+  return _robotGetNotifPrefs().muted === true;
+}
+
+function _robotIsTypeEnabled(type) {
+  const prefs = _robotGetNotifPrefs();
+  if (prefs.muted === true) return false;
+  if (Array.isArray(prefs.disabled_types) && prefs.disabled_types.includes(type)) return false;
+  return true;
+}
+
+function _robotGetOpenCats() {
+  try { return JSON.parse(localStorage.getItem(ROBOT_CAT_OPEN_KEY) || "[]"); }
+  catch (_) { return []; }
+}
+
+function _robotToggleCat(type) {
+  let open = _robotGetOpenCats();
+  if (open.includes(type)) open = open.filter(t => t !== type);
+  else open.push(type);
+  localStorage.setItem(ROBOT_CAT_OPEN_KEY, JSON.stringify(open));
+  return open.includes(type);
+}
+
+async function fetchDiagnosticsSummary() {
+  try {
+    const res = await apiFetch("/diagnostics/summary");
+    if (!res.ok) { console.warn("[ROBOT] HTTP", res.status); return null; }
+    const data = await res.json();
+    if (data && data.body) return typeof data.body === "string" ? JSON.parse(data.body) : data.body;
+    return data;
+  } catch (e) { console.error("[ROBOT]", e); return null; }
+}
+
+function robotIssuesHash(issues) {
+  return issues.map(i => `${i.plant_id}:${i.type}:${i.device_id||i.device_name||""}`).join("|");
+}
+
+function robotFormatTs(ts) {
+  if (!ts) return "";
+  try {
+    const d = new Date(ts);
+    if (isNaN(d)) return "";
+    const hh = String(d.getHours()).padStart(2, "0");
+    const mm = String(d.getMinutes()).padStart(2, "0");
+    const dd = String(d.getDate()).padStart(2, "0");
+    const mo = String(d.getMonth() + 1).padStart(2, "0");
+    return `${dd}/${mo} ${hh}:${mm}`;
+  } catch (_) { return ""; }
+}
+
+function robotIssueToText(issue) {
+  if (!issue) return "Sem anomalias\ndetectadas \u2713";
+  const plant  = issue.plant_name  || "Usina";
+  const device = issue.device_name ? ` \u2022 ${issue.device_name}` : "";
+  const msg    = issue.message     || "Insight detectado";
+  const ts     = robotFormatTs(issue.ts);
+  const prefix = {
+    temp_sustained: "\ud83c\udf21",
+    pr_declining:   "\ud83d\udcc9",
+    plant_shutdown: "\u26d4",
+    inv_clipping:   "\u26a1",
+    string_low:     "\ud83d\udd0b",
+    string_zero:      "\u274c",
+    sub_performance:  "\ud83d\udcca"
+  }[issue.type] || "\ud83d\udcca";
+  return `${prefix} ${plant}${device}\n${msg}${ts ? "\n\ud83d\udd52 " + ts : ""}`;
+}
+
+function robotBuildDeviceUrl(issue) {
+  if (!issue.plant_id) return null;
+  let url = "plant.html?plant_id=" + encodeURIComponent(issue.plant_id);
+  if (issue.device_id) url += "&device_id=" + encodeURIComponent(issue.device_id);
+  const invTypes = ["temp_sustained","inv_clipping","string_low","string_zero","sub_performance"];
+  if (issue.device_type === "inverter" || invTypes.includes(issue.type)) url += "#sec-inverters";
+  return url;
+}
+
+function robotTypewrite(text, onDone) {
+  const textEl   = document.getElementById("robotBubbleText");
+  const cursorEl = document.getElementById("robotBubbleCursor");
+  if (!textEl || !cursorEl) return;
+  if (ROBOT_STATE.typingTimer) { clearInterval(ROBOT_STATE.typingTimer); ROBOT_STATE.typingTimer = null; }
+  ROBOT_STATE.isTyping = true;
+  cursorEl.classList.remove("hidden");
+  textEl.textContent = "";
+  const txt = text.length > ROBOT_MAX_CHARS ? text.slice(0, ROBOT_MAX_CHARS) + "..." : text;
+  let ci = 0;
+  ROBOT_STATE.typingTimer = setInterval(() => {
+    if (ci < txt.length) { textEl.textContent = txt.slice(0, ++ci); }
+    else {
+      clearInterval(ROBOT_STATE.typingTimer); ROBOT_STATE.typingTimer = null;
+      ROBOT_STATE.isTyping = false; cursorEl.classList.add("hidden");
+      if (onDone) onDone();
+    }
+  }, ROBOT_TYPE_SPEED);
+}
+
+function robotSetBubbleOk() {
+  const textEl   = document.getElementById("robotBubbleText");
+  const cursorEl = document.getElementById("robotBubbleCursor");
+  if (textEl) textEl.textContent = "Ok!";
+  if (cursorEl) cursorEl.classList.add("hidden");
+  robotUpdateExpandBtn(false);
+  ROBOT_STATE.userRead = true;
+}
+
+function robotDismissBubble() {
+  robotSetBubbleOk();
+  if (ROBOT_STATE.dismissTimer) { clearTimeout(ROBOT_STATE.dismissTimer); ROBOT_STATE.dismissTimer = null; }
+}
+
+function robotScheduleDismiss() {
+  if (ROBOT_STATE.dismissTimer) clearTimeout(ROBOT_STATE.dismissTimer);
+  ROBOT_STATE.dismissTimer = setTimeout(() => {
+    if (!ROBOT_STATE.reportOpen && ROBOT_STATE.bubbleVisible) {
+      // Auto-dismiss: just hide bubble, do NOT mark as "ok" or change avatar
+      robotShowBubble(false);
+      if (ROBOT_STATE.dismissTimer) { clearTimeout(ROBOT_STATE.dismissTimer); ROBOT_STATE.dismissTimer = null; }
+    }
+  }, ROBOT_DISMISS_DELAY);
+}
+
+function robotGetGlobalState(issues) {
+  if (!issues || !issues.length) return "ok";
+  const nonShutdown = issues.filter(i => i.type !== "plant_shutdown");
+  // Só plant_shutdown → usina desligada → robô cinza/off
+  if (nonShutdown.length === 0) return "gray";
+  // Demais: vermelho (critical) ou amarelo (warning)
+  if (nonShutdown.some(i => i.severity === "critical")) return "critical";
+  return "warning";
+}
+
+function robotUpdateAvatar(state, overrideSrc) {
+  const img = document.getElementById("robotImg");
+  if (!img) return;
+
+  // Clear pending GIF→static timer
+  if (ROBOT_STATE.avatarTimer) {
+    clearTimeout(ROBOT_STATE.avatarTimer);
+    ROBOT_STATE.avatarTimer = null;
+  }
+
+  // No border/circle around the robot — image speaks for itself
+
+  // Direct override (e.g., roboaiotiok.png for thumbs-up after user reads)
+  if (overrideSrc) {
+    if (!img.src.endsWith(overrideSrc)) img.src = overrideSrc;
+    ROBOT_STATE.avatarState = state + "_override";
+    return;
+  }
+
+  const map = ROBOT_AVATAR_MAP[state] || ROBOT_AVATAR_MAP.ok;
+
+  // Play GIF if state changed and a GIF exists
+  if (map.gif && ROBOT_STATE.avatarState !== state) {
+    img.src = map.gif;
+    ROBOT_STATE.avatarState = state;
+
+    // After 10s → switch to static PNG + squish animation
+    ROBOT_STATE.avatarTimer = setTimeout(() => {
+      ROBOT_STATE.avatarTimer = null;
+      img.src = map.png;
+      img.classList.remove("robot-squish");
+      void img.offsetWidth; // force reflow to restart animation
+      img.classList.add("robot-squish");
+      img.addEventListener("animationend", () => img.classList.remove("robot-squish"), { once: true });
+    }, ROBOT_AVATAR_GIF_MS);
+  } else if (!map.gif && ROBOT_STATE.avatarState !== state) {
+    // No GIF for this state (e.g. "ok") — just set static
+    img.src = map.png;
+    ROBOT_STATE.avatarState = state;
+  }
+  // Same state → keep current image (GIF still playing or already static)
+}
+
+function robotUpdateBubble(state) {
+  const el = document.getElementById("robotBubble");
+  if (!el) return;
+  el.classList.remove("state-ok","state-warning","state-critical","state-gray");
+  el.classList.add("state-" + state);
+}
+
+function robotShowBubble(show) {
+  const el = document.getElementById("robotBubble");
+  if (el) el.classList.toggle("visible", !!show);
+  ROBOT_STATE.bubbleVisible = !!show;
+}
+
+function robotUpdateBadge(n) {
+  const el = document.getElementById("robotBadge");
+  if (!el) return;
+  if (n > 0) { el.textContent = n > 99 ? "99+" : n; el.classList.remove("hidden"); }
+  else el.classList.add("hidden");
+}
+
+function robotUpdateExpandBtn(show) {
+  const el = document.getElementById("robotBubbleExpand");
+  if (el) el.classList.toggle("visible", !!show);
+}
+
+function robotStartCycle() {
+  if (ROBOT_STATE.cycleTimer) { clearTimeout(ROBOT_STATE.cycleTimer); ROBOT_STATE.cycleTimer = null; }
+  const issues = ROBOT_STATE.issues;
+  if (!issues.length) return;
+  if (ROBOT_STATE.reportOpen || ROBOT_STATE.userRead) return;
+  // Show only the most recent/important issue in the bubble (first in the list)
+  robotTypewrite(robotIssueToText(issues[0]), () => robotScheduleDismiss());
+}
+
+function robotRenderReport(issues) {
+  const list = document.getElementById("robotReportList");
+  if (!list) return;
+  if (!issues || !issues.length) {
+    list.innerHTML = '<div class="robot-report-empty">Sem anomalias\ndetectadas \u2713</div>';
+    _robotRenderPrefsFooter();
+    return;
+  }
+
+  // Agrupar por categoria na ordem definida
+  const groups = {};
+  issues.forEach(iss => {
+    if (!groups[iss.type]) groups[iss.type] = [];
+    groups[iss.type].push(iss);
+  });
+
+  const types = Object.keys(groups).sort((a, b) => {
+    const oa = (ROBOT_CATEGORY_META[a] || { order: 99 }).order;
+    const ob = (ROBOT_CATEGORY_META[b] || { order: 99 }).order;
+    return oa - ob;
+  });
+
+  const openCats = _robotGetOpenCats();
+
+  const html = types.map(type => {
+    const meta  = ROBOT_CATEGORY_META[type] || { label: "Outros" };
+    const icon  = ROBOT_CATEGORY_ICONS[type] || "fa-list";
+    const items = groups[type];
+    const isOpen = openCats.includes(type);
+    const worst = items.some(i => i.severity === "critical") ? "critical"
+                : items.some(i => i.severity === "warning")  ? "warning" : "info";
+
+    const rows = items.map(iss => {
+      const sc = "sev-" + (iss.severity || "info");
+      const deviceUrl = robotBuildDeviceUrl(iss);
+      let deviceLine = iss.device_name || "";
+      if (iss.cabin_name) deviceLine += (deviceLine ? " \u2022 " : "") + iss.cabin_name;
+      const tsStr = robotFormatTs(iss.ts);
+      return `<div class="robot-cat-item" data-href="${deviceUrl || ''}">
+        <span class="robot-issue-dot ${sc}"></span>
+        <div class="robot-cat-item-body">
+          <div class="robot-cat-item-plant">${iss.plant_name || "\u2014"}${tsStr ? ` <span class="robot-issue-ts">${tsStr}</span>` : ""}</div>
+          <div class="robot-cat-item-msg">${iss.message || "\u2014"}</div>
+          ${deviceLine ? `<div class="robot-cat-item-device">${deviceLine}</div>` : ""}
+        </div>
+        ${deviceUrl ? '<i class="fa-solid fa-arrow-up-right-from-square robot-cat-item-go"></i>' : ''}
+      </div>`;
+    }).join("");
+
+    return `<div class="robot-cat-block ${isOpen ? "is-open" : ""}" data-cat="${type}">
+      <button type="button" class="robot-cat-header" data-cat="${type}">
+        <i class="fa-solid ${icon} robot-cat-icon sev-icon-${worst}"></i>
+        <span class="robot-cat-label">${meta.label}</span>
+        <span class="robot-cat-count">${items.length}</span>
+        <i class="fa-solid fa-chevron-down robot-cat-chevron"></i>
+      </button>
+      <div class="robot-cat-items">${rows}</div>
+    </div>`;
+  }).join("");
+
+  list.innerHTML = html;
+
+  list.querySelectorAll(".robot-cat-header").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const type  = btn.dataset.cat;
+      const block = list.querySelector(`.robot-cat-block[data-cat="${type}"]`);
+      const nowOpen = _robotToggleCat(type);
+      if (block) block.classList.toggle("is-open", nowOpen);
+    });
+  });
+
+  list.querySelectorAll(".robot-cat-item[data-href]").forEach(item => {
+    if (item.dataset.href) {
+      item.style.cursor = "pointer";
+      item.addEventListener("click", () => { window.location.href = item.dataset.href; });
+    }
+  });
+
+  _robotRenderPrefsFooter();
+}
+
+function robotToggleReport(forceOpen) {
+  const panel = document.getElementById("robotReport");
+  const badge = document.getElementById("robotBadge");
+  if (!panel) return;
+  const open = forceOpen !== undefined ? forceOpen : !ROBOT_STATE.reportOpen;
+  if (open) {
+    robotRenderReport(ROBOT_STATE.issues);
+    panel.classList.remove("hidden");
+    if (badge) badge.classList.add("hidden");
+    ROBOT_STATE.reportOpen = true;
+    if (ROBOT_STATE.cycleTimer) { clearTimeout(ROBOT_STATE.cycleTimer); ROBOT_STATE.cycleTimer = null; }
+    if (ROBOT_STATE.dismissTimer) { clearTimeout(ROBOT_STATE.dismissTimer); ROBOT_STATE.dismissTimer = null; }
+  } else {
+    panel.classList.add("hidden");
+    if (badge && ROBOT_STATE.issues.length > 0) badge.classList.remove("hidden");
+    ROBOT_STATE.reportOpen = false;
+    // After closing report, user has read — show "Ok!" + thumbs-up
+    robotDismissBubble();
+    robotUpdateAvatar("ok", "img/roboaiotiok.png");
+  }
+}
+
+async function robotRefresh() {
+  if (_robotIsMuted()) {
+    _robotApplyMutedState();
+    return;
+  }
+  _robotRemoveMutedState();
+  const data = await fetchDiagnosticsSummary();
+  if (!data) return;
+  const issues = (Array.isArray(data.issues) ? data.issues : [])
+    .filter(i => _robotIsTypeEnabled(i.type));
+  const newHash = robotIssuesHash(issues);
+  const issuesChanged = newHash !== ROBOT_STATE.lastIssueHash;
+  ROBOT_STATE.lastIssueHash = newHash;
+  ROBOT_STATE.issues = issues;
+  const state = robotGetGlobalState(issues);
+
+  // Always update bubble border color, badge, expand button
+  robotUpdateBubble(state);
+  robotUpdateBadge(issues.length);
+  robotUpdateExpandBtn(issues.length > 1);
+
+  if (!issues.length) {
+    ROBOT_STATE.currentIndex = 0;
+    if (!ROBOT_STATE.bubbleVisible || ROBOT_STATE.lastState !== "ok") {
+      ROBOT_STATE.userRead = false;
+      robotUpdateAvatar("ok");
+      robotShowBubble(true);
+      robotTypewrite("Sem anomalias\ndetectadas \u2713", () => robotScheduleDismiss());
+    }
+    ROBOT_STATE.lastState = "ok";
+    return;
+  }
+
+  ROBOT_STATE.lastState = state;
+  robotShowBubble(true);
+  if (ROBOT_STATE.reportOpen) robotRenderReport(issues);
+
+  // Only re-type and update avatar when issues actually changed
+  if (issuesChanged) {
+    ROBOT_STATE.userRead = false;
+    ROBOT_STATE.currentIndex = 0;
+    robotUpdateAvatar(state);
+    robotStartCycle();
+  }
+}
+
+function _robotApplyMutedState() {
+  robotShowBubble(false);
+  robotUpdateBadge(0);
+  const container = document.getElementById("robotAssistant");
+  if (container) container.classList.add("robot-muted-peek");
+  const img = document.getElementById("robotImg");
+  if (img) {
+    const peek = new Image();
+    peek.onload = () => { img.src = "img/roboaiotipeek.png"; };
+    peek.onerror = () => {}; // imagem não existe ainda → mantém atual
+    peek.src = "img/roboaiotipeek.png";
+  }
+  const panel = document.getElementById("robotReport");
+  if (panel) panel.classList.add("hidden");
+  ROBOT_STATE.reportOpen = false;
+}
+
+function _robotRemoveMutedState() {
+  const container = document.getElementById("robotAssistant");
+  if (container) container.classList.remove("robot-muted-peek");
+  const img = document.getElementById("robotImg");
+  if (img && img.src.includes("roboaiotipeek")) img.src = "img/roboaiotiidle.png";
+}
+
+function _robotRenderPrefsFooter() {
+  const panel = document.getElementById("robotReport");
+  if (!panel) return;
+  let footer = panel.querySelector(".robot-prefs-footer");
+  if (!footer) {
+    footer = document.createElement("div");
+    footer.className = "robot-prefs-footer";
+    panel.appendChild(footer);
+  }
+  const prefs    = _robotGetNotifPrefs();
+  const isMuted  = prefs.muted === true;
+  const disabled = Array.isArray(prefs.disabled_types) ? prefs.disabled_types : [];
+
+  footer.innerHTML = `
+    <button type="button" class="robot-prefs-collapse" id="robotPrefsCollapse">
+      <i class="fa-solid fa-gear"></i> Prefer\u00eancias de notifica\u00e7\u00e3o
+      <i class="fa-solid fa-chevron-down robot-prefs-chevron"></i>
+    </button>
+    <div class="robot-prefs-body" id="robotPrefsBody">
+      <label class="robot-prefs-toggle">
+        <input type="checkbox" id="robotPrefMuteAll" ${isMuted ? "checked" : ""}>
+        <span>Silenciar todas as notifica\u00e7\u00f5es</span>
+      </label>
+      <div class="robot-prefs-types ${isMuted ? "robot-prefs-types--disabled" : ""}">
+        ${Object.entries(ROBOT_CATEGORY_META).map(([type, m]) => {
+          const ico = ROBOT_CATEGORY_ICONS[type] || "fa-list";
+          return `<label class="robot-prefs-toggle robot-prefs-toggle--sub">
+            <input type="checkbox" class="robot-pref-type-cb" data-type="${type}"
+                   ${disabled.includes(type) ? "" : "checked"} ${isMuted ? "disabled" : ""}>
+            <span><i class="fa-solid ${ico}"></i> ${m.label}</span>
+          </label>`;
+        }).join("")}
+      </div>
+    </div>`;
+
+  const collapseBtn = footer.querySelector("#robotPrefsCollapse");
+  collapseBtn?.addEventListener("click", () => footer.classList.toggle("is-open"));
+
+  footer.querySelector("#robotPrefMuteAll")?.addEventListener("change", (e) => {
+    const p = _robotGetNotifPrefs();
+    p.muted = e.target.checked;
+    _robotSaveNotifPrefs(p);
+    _robotRenderPrefsFooter();
+    footer.classList.add("is-open");
+    if (p.muted) { _robotApplyMutedState(); }
+    else { _robotRemoveMutedState(); robotRefresh(); }
+  });
+
+  footer.querySelectorAll(".robot-pref-type-cb").forEach(cb => {
+    cb.addEventListener("change", () => {
+      const p = _robotGetNotifPrefs();
+      let dis = Array.isArray(p.disabled_types) ? p.disabled_types : [];
+      const type = cb.dataset.type;
+      if (cb.checked) dis = dis.filter(t => t !== type);
+      else if (!dis.includes(type)) dis.push(type);
+      p.disabled_types = dis;
+      _robotSaveNotifPrefs(p);
+      robotRefresh();
+    });
+  });
+}
+
+function wireRobotAssistant() {
+  // Sincronizar preferências salvas no backend
+  (async () => {
+    try {
+      const user = JSON.parse(localStorage.getItem("user") || "{}");
+      if (!user.username) return;
+      const r = await apiFetch("/users/notif-prefs", {
+        headers: { "X-Username": user.username }
+      });
+      if (r.ok) {
+        const d = await r.json();
+        if (d && d.prefs && typeof d.prefs === "object") {
+          localStorage.setItem(ROBOT_NOTIF_PREFS_KEY, JSON.stringify(d.prefs));
+        }
+      }
+    } catch (_) {}
+  })();
+
+  const avatar    = document.getElementById("robotAvatar");
+  const expandBtn = document.getElementById("robotBubbleExpand");
+  const closeBtn  = document.getElementById("robotReportClose");
+  const bubble    = document.getElementById("robotBubble");
+
+  if (avatar) avatar.addEventListener("click", () => robotToggleReport());
+  if (expandBtn) expandBtn.addEventListener("click", e => { e.stopPropagation(); robotToggleReport(true); });
+  if (closeBtn) closeBtn.addEventListener("click", () => robotToggleReport(false));
+  if (bubble) bubble.addEventListener("click", () => {
+    if (ROBOT_STATE.issues.length > 1) robotToggleReport(true);
+    else if (ROBOT_STATE.issues.length === 1) {
+      const url = robotBuildDeviceUrl(ROBOT_STATE.issues[0]);
+      if (url) window.location.href = url;
+    } else {
+      // No issues — dismiss bubble on click
+      robotDismissBubble();
+    }
+  });
+  document.addEventListener("click", e => {
+    const el = document.getElementById("robotAssistant");
+    if (ROBOT_STATE.reportOpen && el && !el.contains(e.target)) robotToggleReport(false);
+  });
+}
