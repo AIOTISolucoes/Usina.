@@ -1,4 +1,19 @@
 // ======================================================
+// CONTROLE DE ACESSO POR ROLE
+// ======================================================
+function _getUserRole() {
+  try {
+    const u = JSON.parse(localStorage.getItem("user") || "{}");
+    return u.role_key || "viewer";
+  } catch { return "viewer"; }
+}
+function _canSendCommand() {
+  if (typeof canSendCommand === "function") return canSendCommand();
+  const r = _getUserRole();
+  return ["superuser", "operator", "admin_customer"].includes(r);
+}
+
+// ======================================================
 // ESTADO ÚNICO DA USINA (FONTE DA VERDADE NO FRONT)
 // ======================================================
 let PLANT_STATE = {
@@ -8,7 +23,8 @@ let PLANT_STATE = {
   capacity_percent: 0,
   inverter_total: 0,
   inverter_online: 0,
-  pr_percent: 0
+  pr_percent: 0,
+  capacity_ac: null,
 };
 
 // ======================================================
@@ -114,6 +130,28 @@ function fmtAmp(v) {
   const n = Number(typeof v === "string" ? v.replace(",", ".") : v);
   if (!Number.isFinite(n)) return "—";
   return `${n.toFixed(2)} A`;
+}
+
+// ======================================================
+// HELPERS — INVERTER STATUS (inverter_status / state_operation / working_status)
+// ======================================================
+function getInverterStatusInfo(inv) {
+  const raw = inv?.inverter_status ?? inv?.state_operation;
+  const code = Number(raw);
+  if (!Number.isFinite(code)) return { code: null, label: "—", cls: "inv-st-unknown" };
+  switch (code) {
+    case 0: return { code, label: "Off",     cls: "inv-st-off" };
+    case 1: return { code, label: "Standby", cls: "inv-st-standby" };
+    case 2: return { code, label: "Run",     cls: "inv-st-run" };
+    case 3: return { code, label: "Fault",   cls: "inv-st-fault" };
+    default: return { code, label: `Desconhecido (${code})`, cls: "inv-st-unknown" };
+  }
+}
+
+function getWorkingStatus(inv) {
+  const raw = inv?.working_status;
+  if (raw == null || raw === "") return "—";
+  return String(raw);
 }
 
 // ======================================================
@@ -321,8 +359,11 @@ let PLANT_ALARMS_MENU_OPEN = false;
 let INVERTERS_REALTIME = [];
 let RELAY_REALTIME = null; // ✅ NEW
 let MULTIMETER_REALTIME = null;
+window.INVERTERS_REALTIME = INVERTERS_REALTIME;
+window.RELAY_REALTIME = RELAY_REALTIME;
+window.MULTIMETER_REALTIME = MULTIMETER_REALTIME;
 let OPEN_INVERTER_REAL_ID = null;
-let STRINGS_REFRESH_SEQ = 0;
+const STRINGS_REFRESH_SEQ_MAP = new Map();
 let IS_REFRESHING_PLANT = false;
 let INVERTER_EXTRAS_BY_ID = new Map(); // inverter_id (string) -> objeto inv completo
 
@@ -333,6 +374,15 @@ let PLANT_CATALOG = {
 
 let RELAY_SUPPORTED = null; // null = desconhecido / true / false
 let MULTIMETER_SUPPORTED = null; // null = desconhecido / true / false
+
+let PLANT_CAPABILITIES = {
+  hasRelay: null,
+  hasTransformer: null,
+  hasMultimeter: null,
+  relayDeviceId: null,
+  transformerDeviceId: null,
+  multimeterDeviceId: null,
+};
 
 const API_BASE = "https://jgeg9i0js1.execute-api.us-east-1.amazonaws.com";
 const PLANT_REFRESH_INTERVAL_MS = 10000;
@@ -851,7 +901,7 @@ function openCommandAuthFlow({ deviceType, deviceId, action, value }) {
     try {
       if (!PLANT_ID) throw new Error("plant_id não encontrado na URL");
 
-      const headers = buildAuthHeaders(); // X-Customer-Id + X-Is-Superuser
+      const headers = buildAuthHeaders();
       const res = await fetch(`${API_BASE}/plants/${PLANT_ID}/devices/${deviceId}/command`, {
         method: "POST",
         headers,
@@ -870,10 +920,8 @@ function openCommandAuthFlow({ deviceType, deviceId, action, value }) {
       closeAuth();
 
       if (res.ok && data.ok) {
-        const successMsg = action === "set_power"
-          ? `Potência setada para ${value} kW com sucesso.`
-          : `Comando ${action.toUpperCase()} enviado com sucesso.`;
-        showConsoleFeedback({ success: true, message: successMsg });
+        // Mostra o console com a barra de espera do CLP
+        _startClpWait({ deviceType, deviceId, action, value, commandId: data.command_id });
       } else {
         const errMsg = data.error
           || (res.status === 401 ? "Credenciais inválidas." : `Falha ao executar comando. (${res.status})`)
@@ -887,6 +935,158 @@ function openCommandAuthFlow({ deviceType, deviceId, action, value }) {
       confirmBtn.textContent = "Confirmar";
     }
   };
+}
+
+// ─── Aguarda confirmação do CLP (polling 3s, timeout 2min) ───────────────────
+function _startClpWait({ deviceType, deviceId, action, value, commandId }) {
+  ensureCommandConsoleModal();
+
+  const TOTAL_MS   = 120_000;   // 2 minutos
+  const POLL_MS    = 3_000;     // a cada 3s
+  const START      = Date.now();
+
+  // Abre (ou mantém aberto) o console de comandos
+  const overlay     = document.getElementById("cmdConsoleOverlay");
+  const feedbackEl  = document.getElementById("cmdConsoleFeedback");
+  const nameEl      = document.getElementById("cmdConsoleDeviceName");
+  const dotEl       = document.getElementById("cmdConsoleStateDot");
+  const stateTextEl = document.getElementById("cmdConsoleStateText");
+
+  if (!overlay || !feedbackEl) return;
+  if (nameEl) nameEl.textContent = `${String(deviceType).toUpperCase()} — ID ${deviceId}`;
+
+  // Atualiza bolinha de estado imediatamente (MQTT já foi enviado)
+  if (action === "on" || action === "off") {
+    setDevicePersistentState(deviceType, deviceId, action);
+    applyDeviceVisualState(deviceType, deviceId, action);
+    if (dotEl)       dotEl.className  = "cmd-console__state-dot " + (action === "on" ? "is-on" : "is-off");
+    if (stateTextEl) stateTextEl.textContent = `ESTADO ATUAL: ${action === "on" ? "LIGADO" : "DESLIGADO"}`;
+  }
+
+  overlay.classList.remove("hidden");
+  document.body.style.overflow = "hidden";
+
+  // Monta o painel de espera dentro de cmdConsoleFeedback
+  feedbackEl.classList.remove("hidden", "is-success", "is-error", "is-warning", "is-waiting");
+  feedbackEl.classList.add("is-waiting");
+  feedbackEl.innerHTML = `
+    <div class="cmd-console__clp-header">
+      <span class="cmd-console__clp-spinner"></span>
+      <span>Aguardando confirmação do CLP…</span>
+    </div>
+    <div class="cmd-console__clp-bar-wrap">
+      <div class="cmd-console__clp-bar-fill" id="clpBarFill"></div>
+    </div>
+    <div class="cmd-console__clp-bar-label">
+      <span id="clpBarStatus">Comando enviado via MQTT</span>
+      <span id="clpBarTimer">2:00</span>
+    </div>
+  `;
+
+  const fillEl   = document.getElementById("clpBarFill");
+  const timerEl  = document.getElementById("clpBarTimer");
+  const statusEl = document.getElementById("clpBarStatus");
+
+  let pollTimer   = null;
+  let animFrame   = null;
+  let finished    = false;
+
+  function formatTime(ms) {
+    const secs = Math.max(0, Math.ceil(ms / 1000));
+    const m    = Math.floor(secs / 60);
+    const s    = secs % 60;
+    return `${m}:${String(s).padStart(2, "0")}`;
+  }
+
+  function tick() {
+    if (finished) return;
+    const elapsed = Date.now() - START;
+    const pct     = Math.min(100, (elapsed / TOTAL_MS) * 100);
+    if (fillEl)  fillEl.style.width  = pct + "%";
+    if (timerEl) timerEl.textContent = formatTime(TOTAL_MS - elapsed);
+    animFrame = requestAnimationFrame(tick);
+  }
+  animFrame = requestAnimationFrame(tick);
+
+  function finish(type, message) {
+    finished = true;
+    cancelAnimationFrame(animFrame);
+    clearTimeout(pollTimer);
+
+    feedbackEl.classList.remove("is-waiting", "is-success", "is-error", "is-warning");
+
+    if (type === "success") {
+      feedbackEl.classList.add("is-success");
+      feedbackEl.innerHTML = `
+        <div class="cmd-console__feedback-inner">
+          <span class="cmd-console__feedback-icon"><i class="fa-solid fa-circle-check"></i></span>
+          <span class="cmd-console__feedback-text">${message}</span>
+        </div>`;
+    } else if (type === "error") {
+      feedbackEl.classList.add("is-error");
+      feedbackEl.innerHTML = `
+        <div class="cmd-console__feedback-inner">
+          <span class="cmd-console__feedback-icon"><i class="fa-solid fa-circle-xmark"></i></span>
+          <span class="cmd-console__feedback-text">${message}</span>
+        </div>`;
+    } else {
+      // warning (timeout)
+      feedbackEl.classList.add("is-warning");
+      feedbackEl.innerHTML = `
+        <div class="cmd-console__feedback-inner">
+          <span class="cmd-console__feedback-icon"><i class="fa-solid fa-triangle-exclamation"></i></span>
+          <span class="cmd-console__feedback-text">${message}</span>
+        </div>`;
+    }
+  }
+
+  async function poll() {
+    if (finished) return;
+
+    const elapsed = Date.now() - START;
+    if (elapsed >= TOTAL_MS) {
+      finish("warning", "Sem resposta do CLP em 2 minutos. Verifique o equipamento.");
+      return;
+    }
+
+    // Se não há command_id, apenas aguarda timeout (CLP ack ainda não implementado)
+    if (!commandId) {
+      pollTimer = setTimeout(poll, POLL_MS);
+      return;
+    }
+
+    try {
+      const res  = await fetch(`${API_BASE}/plants/${PLANT_ID}/commands/${commandId}/status`, {
+        headers: buildAuthHeaders(),
+      });
+      const data = res.ok ? await res.json() : {};
+
+      if (statusEl && data.status) {
+        const labels = { PENDING:"Aguardando envio…", SENT:"Enviado ao equipamento…", SUCCESS:"Enviado via MQTT", CLP_OK:"CLP confirmou", CLP_FAILED:"CLP reportou falha", FAILED:"Falha no envio" };
+        statusEl.textContent = labels[data.status] || data.status;
+      }
+
+      if (data.clp_ok === true) {
+        const msg = data.clp_message || (action === "set_power"
+          ? `Potência setada para ${value} kW confirmada pelo CLP.`
+          : `Comando ${action.toUpperCase()} confirmado pelo CLP.`);
+        finish("success", msg);
+        return;
+      }
+
+      if (data.clp_ok === false) {
+        const msg = data.clp_message || "O CLP reportou falha ao executar o comando.";
+        finish("error", msg);
+        return;
+      }
+    } catch (_) {
+      // erro de rede — continua tentando
+    }
+
+    pollTimer = setTimeout(poll, POLL_MS);
+  }
+
+  pollTimer = setTimeout(poll, POLL_MS);
 }
 
 function wireDeviceCommandButtons(rootEl) {
@@ -1007,10 +1207,12 @@ function getUserContext() {
     const user = JSON.parse(localStorage.getItem("user"));
     return {
       customer_id: user?.customer_id ?? null,
-      is_superuser: user?.is_superuser ?? false
+      is_superuser: user?.is_superuser ?? false,
+      username: user?.username ?? null,
+      user_id: user?.id ?? user?.user_id ?? null,
     };
   } catch {
-    return { customer_id: null, is_superuser: false };
+    return { customer_id: null, is_superuser: false, username: null, user_id: null };
   }
 }
 
@@ -1019,6 +1221,16 @@ function buildAuthHeaders() {
   const headers = { "Content-Type": "application/json" };
   if (ctx.customer_id) headers["X-Customer-Id"] = ctx.customer_id;
   if (ctx.is_superuser) headers["X-Is-Superuser"] = "true";
+  return headers;
+}
+
+function buildWriteAuthHeaders() {
+  const ctx = getUserContext();
+  const headers = { "Content-Type": "application/json" };
+  if (ctx.customer_id) headers["X-Customer-Id"] = ctx.customer_id;
+  if (ctx.is_superuser) headers["X-Is-Superuser"] = "true";
+  if (ctx.username) headers["X-Username"] = ctx.username;
+  if (ctx.user_id) headers["X-User-Id"] = String(ctx.user_id);
   return headers;
 }
 
@@ -1203,14 +1415,36 @@ async function safeFetchMultimeterIfSupported(plantId) {
   return payload?.item ?? payload ?? null;
 }
 
+async function fetchPlantCapabilities(plantId) {
+  try {
+    const res = await fetch(`${API_BASE}/plants/${plantId}/devices/catalog`, {
+      headers: buildAuthHeaders()
+    });
+    if (!res.ok) return;
+    const data = normalizeApiBody(await res.json());
+    PLANT_CAPABILITIES.hasRelay       = !!data.has_relay;
+    PLANT_CAPABILITIES.hasTransformer = !!data.has_transformer;
+    PLANT_CAPABILITIES.hasMultimeter  = !!data.has_multimeter;
+    PLANT_CAPABILITIES.relayDeviceId       = data.relay_device_id != null ? String(data.relay_device_id) : null;
+    PLANT_CAPABILITIES.transformerDeviceId = data.transformer_device_id != null ? String(data.transformer_device_id) : null;
+    PLANT_CAPABILITIES.multimeterDeviceId  = data.multimeter_device_id != null ? String(data.multimeter_device_id) : null;
+  } catch (e) {
+    console.warn('[fetchPlantCapabilities]', e);
+  }
+}
+
 function setRelaySectionVisible(visible) {
   const relaySection = document.getElementById("relaySection");
   if (relaySection) relaySection.style.display = visible ? "" : "none";
+  const btn = document.getElementById("navBtnRelay");
+  if (btn) btn.style.display = visible ? "" : "none";
 }
 
 function setMultimeterSectionVisible(visible) {
   const section = document.getElementById("multimeterSection");
   if (section) section.style.display = visible ? "" : "none";
+  const btn = document.getElementById("navBtnMultimeter");
+  if (btn) btn.style.display = visible ? "" : "none";
 }
 
 function setTrackersSectionVisible(visible) {
@@ -1221,6 +1455,7 @@ function setTrackersSectionVisible(visible) {
   if (btn) {
     btn.classList.toggle("on", visible);
     btn.setAttribute("aria-expanded", visible ? "true" : "false");
+    btn.style.display = visible ? "" : "none";
   }
 }
 
@@ -1286,7 +1521,7 @@ async function patchInverterString(plantId, inverterRealId, stringIndex, enabled
   const url = `${API_BASE}/plants/${plantId}/inverters/${inverterRealId}/strings/${stringIndex}`;
   const res = await fetch(url, {
     method: "PATCH",
-    headers: buildAuthHeaders(),
+    headers: buildWriteAuthHeaders(),
     body: JSON.stringify({ enabled })
   });
 
@@ -1505,7 +1740,7 @@ function ensureInverterRowsFromRealtime(inverters) {
         <span class="inv-metric inv-metric--wide" data-label="Leitura">—</span>
       </div>
       <span class="device-command-cell">
-        ${renderDeviceCommandControl("inverter", realId, isOnlineByFreshness(inv) && !isZeroSnapshot(inv) ? "on" : "off")}
+        ${_canSendCommand() ? renderDeviceCommandControl("inverter", realId, isOnlineByFreshness(inv) && !isZeroSnapshot(inv) ? "on" : "off") : ""}
       </span>
     `;
 
@@ -1663,6 +1898,2314 @@ function ensureInverterRowsFromRealtime(inverters) {
   }
 }
 
+// ======================================================
+// MODO UNIFILAR — SINGLE LINE DIAGRAM
+// ======================================================
+let _plantChartsPlaceholder = null;
+
+// Estado do modo unifilar
+let UNIF_MODE = "overview"; // "overview" | "cabin"
+let UNIF_CABIN_IDX = 0;
+let UNIF_GROUPS = [];
+let UNIF_SIDE_COLLAPSED = false;
+let UNIF_ACTIVE_CABIN_FILTER = null;
+let UNIF_SEARCH_TEXT = "";
+let UNIF_TRANSITION_RUNNING = false;
+let UNIF_MODAL_SEQ = 0;
+
+/* ── Estado global de zoom/pan (persiste entre refreshes) ── */
+let _unifZoom = null;   // null = não inicializado ainda
+let _unifPanX = 0;
+let _unifPanY = 0;
+let _unifZoomInited = false; // true após primeiro cálculo de initZoom
+let _unifEvtAbort = null;    // AbortController para limpar listeners de window
+
+function cabinMapEscape(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function cabinMapFormat(value, digits = 1, unit = "") {
+  const n = Number(typeof value === "string" ? value.replace(",", ".") : value);
+  if (!Number.isFinite(n)) return "—";
+  return `${n.toFixed(digits)}${unit ? ` ${unit}` : ""}`;
+}
+
+function cabinMapReadInvMetric(inv, keys) {
+  for (const key of keys) {
+    const value = inv?.[key];
+    if (value !== null && value !== undefined && value !== "") return value;
+  }
+  return null;
+}
+
+function isCabineMapVisible() {
+  const mapView = document.getElementById("cabineMapView");
+  return !!mapView && getComputedStyle(mapView).display !== "none";
+}
+function isUnifilarVisible() { return isCabineMapVisible(); }
+
+function resizePlantChartsSoon() {
+  const resize = () => {
+    try { dailyChartInstance?.resize?.(); } catch (err) { console.warn("[dailyChart] resize erro:", err); }
+    try { monthlyChartInstance?.resize?.(); } catch (err) { console.warn("[monthlyChart] resize erro:", err); }
+  };
+  requestAnimationFrame(() => {
+    resize();
+    setTimeout(resize, 80);
+  });
+}
+
+function getPlantChartsGrid() {
+  return document.querySelector(".plant-charts-grid");
+}
+
+function ensurePlantChartsPlaceholder(chartsGrid) {
+  if (!chartsGrid || _plantChartsPlaceholder) return;
+  _plantChartsPlaceholder = document.createComment("plant-charts-home");
+  chartsGrid.parentNode.insertBefore(_plantChartsPlaceholder, chartsGrid.nextSibling);
+}
+
+function movePlantChartsIntoCabineMap() {
+  const dock = document.getElementById("cabineMapChartDock");
+  const chartsGrid = getPlantChartsGrid();
+  if (!dock || !chartsGrid || dock.contains(chartsGrid)) return;
+  ensurePlantChartsPlaceholder(chartsGrid);
+  // Move para o dock que fica ABAIXO das cabines (no stage), não sobreposto
+  dock.appendChild(chartsGrid);
+  chartsGrid.classList.add("plant-charts-grid--cabine-map");
+  resizePlantChartsSoon();
+}
+
+function autoFitCabineMap() { /* substituído pelo modo unifilar */ }
+
+function movePlantChartsToList() {
+  const chartsGrid = getPlantChartsGrid();
+  if (!chartsGrid || !_plantChartsPlaceholder?.parentNode) return;
+  _plantChartsPlaceholder.parentNode.insertBefore(chartsGrid, _plantChartsPlaceholder);
+  chartsGrid.classList.remove("plant-charts-grid--cabine-map");
+  resizePlantChartsSoon();
+}
+
+function initCabineMapDragZoom() { /* substituído pelo modo unifilar */ }
+
+const CABINE_STRINGS_CACHE_TTL_MS = 60 * 1000;
+const CABINE_STRINGS_CACHE = new Map();
+const CABINE_STRINGS_PENDING = new Map();
+let CABINE_STRINGS_BALLOON_SEQ = 0;
+let CABINE_MAP_STRUCTURE_SIGNATURE = "";
+let CABINE_STRINGS_ESC_HANDLER = null;
+
+async function loadCabineStringsPayload(inverterRealId, { force = false } = {}) {
+  const id = String(inverterRealId ?? "");
+  if (!id || !PLANT_ID) return null;
+
+  const cached = CABINE_STRINGS_CACHE.get(id);
+  if (!force && cached && Date.now() - cached.ts < CABINE_STRINGS_CACHE_TTL_MS) {
+    return cached.payload;
+  }
+
+  if (!force && CABINE_STRINGS_PENDING.has(id)) {
+    return CABINE_STRINGS_PENDING.get(id);
+  }
+
+  const req = Promise.all([
+    fetchInverterStrings(PLANT_ID, id),
+    fetchInverterStringsRealtime(PLANT_ID, id)
+  ])
+    .then(([cfg, rt]) => {
+      const payload = mergeStringsPayload(cfg, rt, id);
+      CABINE_STRINGS_CACHE.set(id, { ts: Date.now(), payload });
+      return payload;
+    })
+    .catch(err => {
+      console.warn("[cabine strings] erro ao carregar strings:", err);
+      return null;
+    })
+    .finally(() => CABINE_STRINGS_PENDING.delete(id));
+
+  CABINE_STRINGS_PENDING.set(id, req);
+  return req;
+}
+
+function renderCabineStringsBalloonRows(payload, inverterRealId) {
+  const strings = Array.isArray(payload?.strings) ? payload.strings : [];
+  const inverterOnline = getInverterOnlineStateById(inverterRealId);
+
+  const visible = strings.filter(s =>
+    s.exists_in_api === true &&
+    s.effective_enabled !== false
+  );
+
+  if (!visible.length) {
+    return {
+      count: 0,
+      html: `<div class="csb-empty">Nenhuma string monitorada</div>`
+    };
+  }
+
+  const maxAmp = visible.reduce((m, s) => Math.max(m, asNumber(s.current_a, 0)), 0) || 10;
+
+  const html = visible
+    .slice()
+    .sort((a, b) => Number(a.string_index) - Number(b.string_index))
+    .map(s => {
+      const amp = s.current_a != null ? asNumber(s.current_a, 0) : null;
+      const pct = amp != null ? Math.min(100, (amp / maxAmp) * 100) : 0;
+      const inAlarm = isStringInAlarm(s, inverterOnline);
+      const noData = s.has_data !== true;
+      const disabled = s.effective_enabled === false;
+
+      const stClass = disabled ? "csb-str--disabled"
+        : inAlarm ? "csb-str--alarm"
+        : noData ? "csb-str--nodata"
+        : "csb-str--ok";
+
+      const statusTxt = disabled ? "Desabilitada"
+        : inAlarm ? (s.alarm_reason || s.alarm_state || "Alarme")
+        : noData ? "Sem dados"
+        : "OK";
+
+      const ampTxt = amp != null ? `${amp.toFixed(2)} A` : "—";
+
+      return `
+        <div class="csb-str-row ${stClass}">
+          <span class="csb-str-idx">S${s.string_index}</span>
+          <div class="csb-str-bar-wrap" title="${ampTxt}">
+            <div class="csb-str-bar" style="width:${pct.toFixed(1)}%"></div>
+          </div>
+          <span class="csb-str-amp">${ampTxt}</span>
+          <span class="csb-str-status">${statusTxt}</span>
+        </div>`;
+    }).join("");
+
+  return { count: visible.length, html };
+}
+
+// ======================================================
+// BALLOON DE STRINGS (popup ao clicar no card do inversor)
+// ======================================================
+
+function closeCabineStringsBalloon(immediate = false) {
+  CABINE_STRINGS_BALLOON_SEQ++;
+  if (CABINE_STRINGS_ESC_HANDLER) {
+    document.removeEventListener("keydown", CABINE_STRINGS_ESC_HANDLER);
+    CABINE_STRINGS_ESC_HANDLER = null;
+  }
+  const el = document.getElementById("cabineStringsBalloon");
+  if (!el) return;
+  if (immediate) {
+    el.remove();
+    return;
+  }
+  el.classList.remove("csb-backdrop--visible");
+  setTimeout(() => { if (el.parentNode) el.parentNode.removeChild(el); }, 220);
+}
+
+async function openCabineStringsBalloon(anchorEl, inv, invName) {
+  closeCabineStringsBalloon(true);
+
+  const realId = getInverterRealId(inv);
+  if (realId == null) return;
+
+  const seq = ++CABINE_STRINGS_BALLOON_SEQ;
+
+  const rect = anchorEl.getBoundingClientRect();
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+
+  const BALLOON_W = 370;
+  const MARGIN = 14;
+  const preferRight = rect.right + MARGIN + BALLOON_W <= vw;
+  const rawBx = preferRight ? rect.right + MARGIN : rect.left - MARGIN - BALLOON_W;
+  const bx = Math.max(12, Math.min(rawBx, vw - BALLOON_W - 12));
+  const BALLOON_EST_H = 260;
+  let by = rect.top + rect.height / 2 - BALLOON_EST_H / 2;
+  by = Math.max(12, Math.min(by, vh - BALLOON_EST_H - 12));
+  const tailY = Math.max(16, Math.min(BALLOON_EST_H - 32, rect.top + rect.height / 2 - by));
+
+  const tailSide = preferRight ? "tail-left" : "tail-right";
+
+  const backdrop = document.createElement("div");
+  backdrop.id = "cabineStringsBalloon";
+  backdrop.className = "csb-backdrop";
+  backdrop.innerHTML = `
+    <div class="csb-balloon csb-balloon--${tailSide}"
+         style="top:${by.toFixed(0)}px; left:${bx.toFixed(0)}px; --csb-tail-y:${tailY.toFixed(0)}px; width:${BALLOON_W}px">
+      <div class="csb-header">
+        <div class="csb-header-icon">
+          <svg viewBox="0 0 56 56" fill="none" width="16" height="16">
+            <rect x="3" y="10" width="50" height="34" rx="5"
+                  stroke="rgba(57,229,140,.8)" stroke-width="2" fill="rgba(57,229,140,.07)"/>
+            <path d="M30 14 L26 25 H30 L25 42 L35 23 H31 L35 14 Z"
+                  fill="rgba(57,229,140,.9)"/>
+          </svg>
+        </div>
+        <span class="csb-inv-name">${cabinMapEscape(invName)}</span>
+        <div class="csb-header-pills">
+          <span class="csb-pill" id="csbStringCount">Carregando...</span>
+        </div>
+        <button class="csb-close" aria-label="Fechar">&times;</button>
+      </div>
+      <div class="csb-body">
+        <div class="csb-col-labels">
+          <span></span><span>Corrente</span><span>Amp</span><span>Status</span>
+        </div>
+        <div class="csb-strings-grid" id="csbStringsGrid">
+          <div class="csb-empty">Carregando strings...</div>
+        </div>
+      </div>
+    </div>`;
+
+  backdrop.addEventListener("pointerdown", (e) => {
+    if (!e.target.closest(".csb-balloon") || e.target.closest(".csb-close")) {
+      closeCabineStringsBalloon();
+    }
+  });
+
+  CABINE_STRINGS_ESC_HANDLER = function escHandler(e) {
+    if (e.key === "Escape") {
+      closeCabineStringsBalloon();
+    }
+  };
+  document.addEventListener("keydown", CABINE_STRINGS_ESC_HANDLER);
+
+  document.body.appendChild(backdrop);
+  requestAnimationFrame(() => backdrop.classList.add("csb-backdrop--visible"));
+
+  const payload = await loadCabineStringsPayload(realId);
+  if (seq !== CABINE_STRINGS_BALLOON_SEQ) return;
+
+  const grid = document.getElementById("csbStringsGrid");
+  const count = document.getElementById("csbStringCount");
+  const rendered = renderCabineStringsBalloonRows(payload, realId);
+
+  if (grid) grid.innerHTML = rendered.html;
+  if (count) count.textContent = `${rendered.count} string${rendered.count !== 1 ? "s" : ""}`;
+}
+
+function buildAcdcChip(label, value, digits, unit) {
+  const n = Number(typeof value === "string" ? value.replace(",", ".") : value);
+  const txt = Number.isFinite(n) ? `${n.toFixed(digits)}${unit ? " " + unit : ""}` : "—";
+  return `<div class="cabine-acdc-chip">
+    <span class="cabine-acdc-chip__lbl">${label}</span>
+    <span class="cabine-acdc-chip__val">${txt}</span>
+  </div>`;
+}
+
+function buildCabineCard(inv, idx = 0) {
+  const realId = getInverterRealId(inv);
+  const safeRealId = realId == null ? "" : String(realId);
+  const name = getInverterDisplayName(inv, idx);
+  const isOnline = isOnlineByFreshness(inv) && !isZeroSnapshot(inv);
+  const hasAlarm = !!(inv?.alarm || inv?.fault || inv?.warning || inv?.alarm_active);
+
+  const powerKw = cabinMapReadInvMetric(inv, ["active_power_kw", "power_kw", "power", "active_power"]);
+  const effPct = cabinMapReadInvMetric(inv, ["efficiency_pct", "efficiency", "eff_pct"]);
+  const tempC = cabinMapReadInvMetric(inv, ["temperature_internal_c", "temperature_c", "temp_c", "temperature_current", "temperature"]);
+  const freqHz = cabinMapReadInvMetric(inv, ["frequency_hz", "freq_hz", "frequency"]);
+  const prRaw = cabinMapReadInvMetric(inv, ["performance_ratio", "pr", "pr_ratio", "performance"]);
+  const lastTs = cabinMapReadInvMetric(inv, ["last_reading_at", "last_reading_ts", "last_ts", "timestamp", "event_ts"]);
+  const ratedKw = cabinMapReadInvMetric(inv, ["rated_power_kw", "capacity_kw", "rated_kw", "nominal_power_kw", "rated_power"]);
+
+  const maxKw = Math.max(1, asNumber(ratedKw, 100));
+  const powerNum = asNumber(powerKw, 0);
+  const barPct = powerKw != null ? Math.min(100, Math.max(0, (powerNum / maxKw) * 100)) : 0;
+  const prPct = prRaw != null ? normalizePercentMaybe(prRaw) : null;
+  const loadPct = powerKw != null ? barPct : null;
+  const boltOpacity = isOnline ? Math.max(0.25, barPct / 100) : 0.12;
+  const boltColor = isOnline
+    ? `rgba(57,229,140,${boltOpacity.toFixed(2)})`
+    : "rgba(120,140,130,.2)";
+  const _cabStInfo = getInverterStatusInfo(inv);
+  const stateText = hasAlarm ? "Alarme" : _cabStInfo.label !== "—" ? _cabStInfo.label : (isOnline ? "Online" : "Offline");
+  const safeName = cabinMapEscape(name);
+  const safeTitle = cabinMapEscape(inv?.name || inv?.device_name || name);
+
+  const card = document.createElement("div");
+  card.className = `cabine-inv-card ${isOnline ? "is-online" : "is-offline"}${hasAlarm ? " has-alarm" : ""}`;
+  card.dataset.inverterRealId = safeRealId;
+  card.style.setProperty("--cabine-power-pct", `${barPct.toFixed(1)}%`);
+
+  card.innerHTML = `
+    <div class="cabine-inv-card__top">
+      <div class="cabine-inv-card__status ${_cabStInfo.cls}"></div>
+      <span class="cabine-inv-card__name" title="${safeTitle}">${safeName}</span>
+      <span class="cabine-inv-card__state">${stateText}</span>
+      ${realId != null ? `<button class="unif-dj-btn cabine-dj-btn" data-dj-inv-id="${safeRealId}"
+              title="Disjuntor: ${safeName}" onclick="event.stopPropagation()">
+        ${unifSVGDisjuntor(hasAlarm ? true : isOnline ? false : null, 'small')}
+      </button>` : ''}
+      ${_canSendCommand() && realId != null
+        ? `<div class="cabine-inv-card__cmd">${renderDeviceCommandControl("inverter", realId, isOnline ? "on" : "off")}</div>`
+        : ""}
+    </div>
+
+    <div class="cabine-inv-card__icon-row">
+      <svg viewBox="0 0 56 56" width="52" height="52" fill="none"
+           class="cabine-inv-svg" aria-hidden="true">
+        <defs>
+          <filter id="invGlow${safeRealId}" x="-30%" y="-30%" width="160%" height="160%">
+            <feGaussianBlur stdDeviation="${isOnline ? "2.2" : "0"}" result="b"/>
+            <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+          </filter>
+        </defs>
+        <!-- Corpo do inversor -->
+        <rect x="3" y="10" width="50" height="34" rx="5"
+              stroke="${isOnline ? "rgba(57,229,140,.65)" : "rgba(90,110,100,.28)"}"
+              stroke-width="1.6"
+              fill="${isOnline ? "rgba(57,229,140,.05)" : "rgba(0,0,0,.25)"}"
+              filter="url(#invGlow${safeRealId})"/>
+        <!-- Painel solar DC -->
+        <rect x="7" y="15" width="14" height="10" rx="1.5"
+              fill="${isOnline ? "rgba(57,229,140,.16)" : "rgba(50,70,60,.08)"}"/>
+        <line x1="7" y1="20" x2="21" y2="20"
+              stroke="${isOnline ? "rgba(57,229,140,.35)" : "rgba(50,70,60,.12)"}" stroke-width=".7"/>
+        <line x1="14" y1="15" x2="14" y2="25"
+              stroke="${isOnline ? "rgba(57,229,140,.35)" : "rgba(50,70,60,.12)"}" stroke-width=".7"/>
+        <path d="M21 20 L26 20" stroke="${isOnline ? "rgba(57,229,140,.5)" : "rgba(70,90,80,.2)"}"
+              stroke-width="1" stroke-dasharray="2 1.5"/>
+        <text x="8" y="31" font-size="4.5" fill="${isOnline ? "rgba(57,229,140,.55)" : "rgba(100,120,110,.25)"}"
+              font-family="monospace" font-weight="700">DC IN</text>
+        <!-- Raio central -->
+        <path d="M30 14 L26 25 H30 L25 42 L35 23 H31 L35 14 Z"
+              fill="${boltColor}" class="cabine-bolt-path"
+              opacity="${isOnline ? "1" : "0.18"}"/>
+        <!-- Ondas AC -->
+        <path d="M40 20 Q42 16.5 44 20 Q46 23.5 48 20"
+              stroke="${isOnline ? "rgba(57,229,140,.6)" : "rgba(80,100,90,.2)"}"
+              stroke-width="1.4" fill="none" stroke-linecap="round"/>
+        <path d="M40 26 Q42 22.5 44 26 Q46 29.5 48 26"
+              stroke="${isOnline ? "rgba(57,229,140,.4)" : "rgba(80,100,90,.15)"}"
+              stroke-width="1.1" fill="none" stroke-linecap="round"/>
+        <path d="M40 23 L37 23" stroke="${isOnline ? "rgba(57,229,140,.5)" : "rgba(70,90,80,.2)"}"
+              stroke-width="1" stroke-dasharray="2 1.5"/>
+        <text x="39" y="35" font-size="4.5" fill="${isOnline ? "rgba(57,229,140,.55)" : "rgba(100,120,110,.25)"}"
+              font-family="monospace" font-weight="700">AC OUT</text>
+        <!-- LED de status -->
+        <circle cx="46" cy="40" r="2.5"
+                fill="${isOnline ? "#39e58c" : (hasAlarm ? "#ef9f27" : "#334433")}"
+                style="${isOnline ? "filter:drop-shadow(0 0 5px rgba(57,229,140,.95));" : hasAlarm ? "filter:drop-shadow(0 0 4px rgba(239,159,39,.8));" : ""}"/>
+      </svg>
+
+      <div class="cabine-inv-card__power-bar-wrap">
+        <div class="cabine-inv-card__power-readout">
+          <span class="cabine-inv-card__power-label">${powerKw != null ? cabinMapFormat(powerKw, 0, "kW") : "—"}</span>
+          <span class="cabine-inv-card__load-label">${loadPct != null ? `${cabinMapFormat(loadPct, 0)}%` : ""}</span>
+        </div>
+        <div class="cabine-inv-card__power-bar-track">
+          <div class="cabine-inv-card__power-bar" style="width:${barPct.toFixed(1)}%;"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="cabine-inv-card__metrics">
+      <div class="cabine-inv-metric">
+        <span class="cabine-inv-metric__lbl">Efic.</span>
+        <span class="cabine-inv-metric__val">${effPct != null ? cabinMapFormat(effPct, 1, "%") : "—"}</span>
+      </div>
+      <div class="cabine-inv-metric">
+        <span class="cabine-inv-metric__lbl">Temp</span>
+        <span class="cabine-inv-metric__val ${tempC != null && asNumber(tempC, 0) > 70 ? "val-warn" : ""}">
+          ${tempC != null ? `${cabinMapFormat(tempC, 1)}&deg;C` : "—"}
+        </span>
+      </div>
+      <div class="cabine-inv-metric">
+        <span class="cabine-inv-metric__lbl">Freq</span>
+        <span class="cabine-inv-metric__val">${freqHz != null ? cabinMapFormat(freqHz, 2, "Hz") : "—"}</span>
+      </div>
+      <div class="cabine-inv-metric">
+        <span class="cabine-inv-metric__lbl">PR</span>
+        <span class="cabine-inv-metric__val">${prPct != null ? cabinMapFormat(prPct, 1, "%") : "—"}</span>
+      </div>
+      <div class="cabine-inv-metric">
+        <span class="cabine-inv-metric__lbl">Cap.</span>
+        <span class="cabine-inv-metric__val">${ratedKw != null ? cabinMapFormat(ratedKw, 0, "kW") : "—"}</span>
+      </div>
+      <div class="cabine-inv-metric">
+        <span class="cabine-inv-metric__lbl">Leit.</span>
+        <span class="cabine-inv-metric__val">${fmtDatePtBR(lastTs)}</span>
+      </div>
+      <div class="cabine-inv-metric">
+        <span class="cabine-inv-metric__lbl">Status</span>
+        <span class="cabine-inv-metric__val ${_cabStInfo.cls}">${_cabStInfo.label}</span>
+      </div>
+    </div>
+
+    ${(inv?.strings_rt && Array.isArray(inv.strings_rt) && inv.strings_rt.length > 0) ? `
+    <div class="cabine-inv-card__strings">
+      <div class="cabine-inv-strings-head">
+        <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+          <rect x="1" y="1" width="3" height="8" rx="0.8"
+                stroke="${isOnline ? "rgba(57,229,140,.7)" : "rgba(80,100,90,.3)"}" stroke-width=".8"/>
+          <rect x="6" y="1" width="3" height="8" rx="0.8"
+                stroke="${isOnline ? "rgba(57,229,140,.7)" : "rgba(80,100,90,.3)"}" stroke-width=".8"/>
+        </svg>
+        <span>Strings</span>
+      </div>
+      <div class="cabine-inv-strings-grid">
+        ${inv.strings_rt.slice(0, 20).map(s => {
+          const amp = s.current_a != null ? `${Number(s.current_a).toFixed(1)}A` : "—";
+          const inAlarm = (s.in_alarm || s.alarm) && isOnline;
+          const nodata = !s.has_data;
+          return `<div class="cabine-string-chip ${inAlarm ? "chip-alarm" : nodata ? "chip-nodata" : "chip-ok"}">
+            <span class="chip-idx">S${s.string_index}</span>
+            <span class="chip-amp">${amp}</span>
+          </div>`;
+        }).join("")}
+        ${inv.strings_rt.length > 20 ? `<div class="cabine-string-chip chip-nodata"><span class="chip-idx">+${inv.strings_rt.length - 20}</span></div>` : ""}
+      </div>
+    </div>` : ""}
+
+    <div class="cabine-inv-card__acdc">
+      <div class="cabine-acdc-section">
+        <span class="cabine-acdc-label">AC</span>
+        <div class="cabine-acdc-chips">
+          ${buildAcdcChip("V AB", inv?.line_voltage_ab_v ?? inv?.line_voltage_ab, 0, "V")}
+          ${buildAcdcChip("Ia",   inv?.current_phase_a_a ?? inv?.current_phase_a, 2, "A")}
+          ${buildAcdcChip("FP",   inv?.power_factor, 3, "")}
+        </div>
+      </div>
+      <div class="cabine-acdc-section">
+        <span class="cabine-acdc-label">DC</span>
+        <div class="cabine-acdc-chips">
+          ${buildAcdcChip("P DC",   inv?.power_dc_kw, 2, "kW")}
+          ${buildAcdcChip("V str",  inv?.string_voltage_v, 0, "V")}
+          ${buildAcdcChip("R isol", inv?.resistance_insulation_mohm, 1, "MΩ")}
+        </div>
+      </div>
+    </div>
+  `;
+
+  wireDeviceCommandButtons(card);
+  card.style.cursor = "pointer";
+
+  return card;
+}
+
+function initCabineMapCardClicks() {
+  /* Clicks em cards de inversores são tratados pelo Unifilar modal — sem ação aqui */
+}
+
+// ======================================================
+// MODO UNIFILAR — FUNÇÕES PRINCIPAIS
+// ======================================================
+
+function buildUnifGroups(invertersRaw) {
+  const uniq = dedupInvertersById(Array.isArray(invertersRaw) ? invertersRaw : []);
+  uniq.sort((a, b) => {
+    const an = String(getInverterDisplayName(a, 0) || "");
+    const bn = String(getInverterDisplayName(b, 0) || "");
+    return an.localeCompare(bn, "pt-BR", { numeric: true, sensitivity: "base" });
+  });
+  const hasCabins = uniq.some(inv => inv.cabin_id != null);
+  if (!hasCabins) return [{ id: "all", name: "Inversores", displayOrder: 0, inverters: uniq }];
+  const groupMap = new Map();
+  const noCabin = [];
+  uniq.forEach(inv => {
+    const cabinId = inv.cabin_id;
+    if (cabinId == null) { noCabin.push(inv); return; }
+    if (!groupMap.has(cabinId)) {
+      groupMap.set(cabinId, {
+        id: cabinId,
+        name: inv.section_name ?? inv.cabin_name ?? inv.cabin_code ?? `Cabine ${cabinId}`,
+        displayOrder: asNumber(inv.cabin_display_order, 999),
+        inverters: []
+      });
+    }
+    groupMap.get(cabinId).inverters.push(inv);
+  });
+  const groups = [...Array.from(groupMap.values()).sort((a, b) => a.displayOrder - b.displayOrder)];
+  if (noCabin.length) groups.push({ id: "none", name: "Sem cabine", displayOrder: 9999, inverters: noCabin });
+  return groups;
+}
+
+/* ── SVGs dos equipamentos ── */
+function unifSVGTransformer() {
+  return `<svg viewBox="0 0 48 80" fill="none" class="unif-equip-svg unif-equip-svg--trafo" width="48" height="80">
+    <defs>
+      <filter id="trafoGlw" x="-40%" y="-40%" width="180%" height="180%">
+        <feGaussianBlur stdDeviation="2" result="b"/>
+        <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+      </filter>
+    </defs>
+    <g filter="url(#trafoGlw)">
+      <!-- Linha de entrada (topo) -->
+      <line x1="24" y1="0" x2="24" y2="14" stroke="rgba(245,200,66,.7)" stroke-width="2" stroke-linecap="round"/>
+      <!-- Círculo AT (alta tensão - amarelo) -->
+      <circle cx="24" cy="28" r="14" stroke="rgba(245,200,66,.85)" stroke-width="1.8" fill="rgba(245,200,66,.05)"/>
+      <!-- Triângulo Delta dentro do círculo AT -->
+      <polygon points="24,18 15,34 33,34" stroke="rgba(245,200,66,.7)" stroke-width="1.3" fill="none" stroke-linejoin="round"/>
+      <!-- Círculo BT (baixa tensão - verde) -->
+      <circle cx="24" cy="50" r="14" stroke="rgba(127,208,85,.85)" stroke-width="1.8" fill="rgba(127,208,85,.05)"/>
+      <!-- Y (estrela) dentro do círculo BT -->
+      <line x1="24" y1="42" x2="24" y2="50" stroke="rgba(127,208,85,.7)" stroke-width="1.3" stroke-linecap="round"/>
+      <line x1="24" y1="50" x2="17" y2="58" stroke="rgba(127,208,85,.7)" stroke-width="1.3" stroke-linecap="round"/>
+      <line x1="24" y1="50" x2="31" y2="58" stroke="rgba(127,208,85,.7)" stroke-width="1.3" stroke-linecap="round"/>
+      <circle cx="24" cy="50" r="1.5" fill="rgba(127,208,85,.6)"/>
+      <!-- Linha de saída (base) -->
+      <line x1="24" y1="64" x2="24" y2="80" stroke="rgba(127,208,85,.7)" stroke-width="2" stroke-linecap="round"/>
+    </g>
+  </svg>`;
+}
+
+function unifSVGCC() {
+  return `<svg viewBox="0 0 40 40" fill="none" class="unif-equip-svg" width="36" height="36">
+    <defs>
+      <filter id="ccGlw" x="-30%" y="-30%" width="160%" height="160%">
+        <feGaussianBlur stdDeviation="1.8" result="b"/>
+        <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+      </filter>
+    </defs>
+    <g filter="url(#ccGlw)">
+      <!-- Caixa exterior -->
+      <rect x="2" y="2" width="36" height="36" rx="4"
+            stroke="rgba(127,208,85,.7)" stroke-width="1.5" fill="rgba(127,208,85,.04)"/>
+      <!-- Barras condutoras verticais -->
+      <line x1="10" y1="8"  x2="10" y2="32" stroke="rgba(127,208,85,.75)" stroke-width="1.6" stroke-linecap="round"/>
+      <line x1="16" y1="8"  x2="16" y2="32" stroke="rgba(127,208,85,.6)"  stroke-width="1.4" stroke-linecap="round"/>
+      <line x1="22" y1="8"  x2="22" y2="32" stroke="rgba(127,208,85,.45)" stroke-width="1.2" stroke-linecap="round"/>
+      <line x1="28" y1="8"  x2="28" y2="32" stroke="rgba(127,208,85,.32)" stroke-width="1.1" stroke-linecap="round"/>
+      <!-- Barra de barramento horizontal -->
+      <line x1="8" y1="14" x2="32" y2="14" stroke="rgba(127,208,85,.5)" stroke-width=".9" stroke-linecap="round" stroke-dasharray="2 2"/>
+      <line x1="8" y1="26" x2="32" y2="26" stroke="rgba(127,208,85,.5)" stroke-width=".9" stroke-linecap="round" stroke-dasharray="2 2"/>
+      <!-- Ponto de entrada -->
+      <circle cx="36" cy="20" r="2.5" fill="rgba(127,208,85,.85)"/>
+    </g>
+  </svg>`;
+}
+
+function unifSVGQGBT(isOnline) {
+  const cMain = isOnline === true  ? "rgba(127,208,85,.88)"
+              : isOnline === false ? "rgba(255,80,80,.72)"
+              :                     "rgba(127,208,85,.45)";
+  const cDot  = isOnline === true  ? "#7fd055"
+              : isOnline === false ? "#ff4444"
+              :                     "#334433";
+  const glow  = isOnline === true  ? "filter:drop-shadow(0 0 5px rgba(127,208,85,.95));"
+              : isOnline === false ? "filter:drop-shadow(0 0 5px rgba(255,80,80,.8));"
+              :                     "";
+  return `<svg viewBox="0 0 40 40" fill="none" class="unif-equip-svg" width="36" height="36">
+    <defs>
+      <filter id="qgbtGlw" x="-30%" y="-30%" width="160%" height="160%">
+        <feGaussianBlur stdDeviation="1.6" result="b"/>
+        <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+      </filter>
+    </defs>
+    <g filter="url(#qgbtGlw)">
+      <rect x="2" y="2" width="36" height="36" rx="4"
+            stroke="${cMain}" stroke-width="1.5" fill="rgba(127,208,85,.03)"/>
+      <!-- Chave seccionadora (linha de força) -->
+      <line x1="12" y1="30" x2="26" y2="30" stroke="${cMain}" stroke-width="2" stroke-linecap="round"/>
+      <!-- Contato móvel inclinado -->
+      <line x1="12" y1="30" x2="18" y2="18" stroke="${cMain}" stroke-width="2" stroke-linecap="round"/>
+      <!-- Contato fixo superior -->
+      <line x1="18" y1="16" x2="26" y2="16" stroke="${cMain}" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="3 2" opacity=".5"/>
+      <!-- Ponto de articulação -->
+      <circle cx="12" cy="30" r="2" fill="${cMain}"/>
+      <!-- Ponto de entrada saída -->
+      <circle cx="26" cy="30" r="2" fill="${cMain}"/>
+      <!-- LED de status (canto superior direito) -->
+      <circle cx="32" cy="8" r="3.5" fill="${cDot}" style="${glow}"/>
+    </g>
+  </svg>`;
+}
+
+function unifSVGSA() {
+  return `<svg viewBox="0 0 34 34" fill="none" class="unif-equip-svg" width="30" height="30">
+    <defs>
+      <filter id="saGlw" x="-30%" y="-30%" width="160%" height="160%">
+        <feGaussianBlur stdDeviation="1.4" result="b"/>
+        <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+      </filter>
+    </defs>
+    <g filter="url(#saGlw)">
+      <circle cx="17" cy="17" r="14"
+              stroke="rgba(127,208,85,.6)" stroke-width="1.4"
+              fill="rgba(127,208,85,.04)" stroke-dasharray="4 3"/>
+      <!-- Raio (serviços auxiliares) -->
+      <path d="M17 7 L14 16 H18 L13 27 L23 16 H19 L22 7 Z"
+            fill="rgba(127,208,85,.72)"/>
+    </g>
+  </svg>`;
+}
+
+/* ── Wire status helper ── */
+function getWireClass(device, isOnline) {
+  if (!device) return 'wire--idle';
+  if (isOnline === false) return 'wire--fault';
+  const quality = device?.quality ?? device?.data?.quality ?? null;
+  if (quality === 28) return 'wire--fault';
+  if (isOnline === true) return 'wire--active';
+  return 'wire--idle';
+}
+
+/* ── SVG relay v2 ── */
+function unifSVGRelayV2(isOnline) {
+  const c = isOnline ? 'rgba(57,229,140,' : 'rgba(239,68,68,';
+  return `<svg viewBox="0 0 52 64" width="52" height="64" fill="none" class="unif-device-svg">
+    <line x1="26" y1="0" x2="26" y2="10" stroke="${c}0.55)" stroke-width="2" stroke-linecap="round"/>
+    <rect x="6" y="10" width="40" height="36" rx="5"
+          fill="${isOnline ? 'rgba(57,229,140,0.06)' : 'rgba(239,68,68,0.05)'}"
+          stroke="${c}0.5)" stroke-width="1.5"/>
+    <path d="M12 22 Q16 18 20 22 Q24 26 28 22 Q32 18 36 22 Q40 26 44 22"
+          stroke="${c}0.6)" stroke-width="1.2" fill="none"/>
+    <path d="M12 30 Q16 26 20 30 Q24 34 28 30 Q32 26 36 30 Q40 34 44 30"
+          stroke="${c}0.4)" stroke-width="1" fill="none"/>
+    <circle cx="26" cy="38" r="5" stroke="${c}0.7)" stroke-width="1.2"/>
+    <path d="M26 34 L24 38 H27 L22 42 L30 37 H27 L28 34 Z"
+          fill="${c}0.8)" opacity="0.9"/>
+    <line x1="26" y1="46" x2="26" y2="56" stroke="${c}0.55)" stroke-width="2" stroke-linecap="round"/>
+    <circle cx="42" cy="14" r="2.5"
+            fill="${isOnline ? '#39e58c' : '#ef4444'}"
+            style="filter:drop-shadow(0 0 4px ${isOnline ? 'rgba(57,229,140,0.9)' : 'rgba(239,68,68,0.7)'})"/>
+  </svg>`;
+}
+
+/* ── SVG Cubículo de Proteção (conforme diagrama técnico IEC) ── */
+function unifSVGCubiculo(relayOnline) {
+  const isOn = relayOnline === true;
+  const c  = isOn ? 'rgba(57,229,140,' : 'rgba(239,68,68,';
+  const cY = 'rgba(245,200,66,';
+  const cW = 'rgba(255,255,255,';
+
+  return `<svg viewBox="0 0 110 210" width="154" height="294" fill="none" class="unif-cubiculo-svg">
+    <line x1="55" y1="0" x2="55" y2="10" stroke="${c}0.55)" stroke-width="2" stroke-linecap="round"/>
+    <rect x="6" y="10" width="98" height="188" rx="4"
+          fill="${c}${isOn ? '0.03' : '0.07'})" stroke="${c}0.55)" stroke-width="1.4" stroke-dasharray="5 3"
+          style="filter:drop-shadow(0 0 ${isOn ? '6' : '4'}px ${isOn ? 'rgba(57,229,140,0.25)' : 'rgba(239,68,68,0.2)'})"/>
+    <text x="55" y="22" text-anchor="middle" font-size="5.2"
+          fill="${cW}0.55)" font-family="monospace" font-weight="600" letter-spacing=".6">CUBÍCULO DE PROTEÇÃO</text>
+    <rect x="30" y="27" width="50" height="12" rx="2"
+          fill="${c}0.04)" stroke="${c}0.55)" stroke-width="1"/>
+    <line x1="42" y1="30" x2="42" y2="36" stroke="${c}0.55)" stroke-width="1.6" stroke-linecap="round"/>
+    <line x1="50" y1="30" x2="50" y2="36" stroke="${c}0.55)" stroke-width="1.6" stroke-linecap="round"/>
+    <line x1="58" y1="30" x2="58" y2="36" stroke="${c}0.55)" stroke-width="1.6" stroke-linecap="round"/>
+    <text x="84" y="36" font-size="4.5" fill="${c}0.55)" font-family="monospace">PR</text>
+    <text x="84" y="41" font-size="3.5" fill="${cW}0.35)" font-family="monospace">12kV/10kA</text>
+    <line x1="55" y1="39" x2="55" y2="48" stroke="${c}0.6)" stroke-width="1.5"/>
+    <circle cx="55" cy="50" r="2" fill="${c}0.7)" stroke="${c}0.8)" stroke-width="0.8"/>
+    <line x1="55" y1="52" x2="55" y2="55" stroke="${c}0.6)" stroke-width="1.2"/>
+    <line x1="55" y1="55" x2="62" y2="48" stroke="${c}0.7)" stroke-width="1.5" stroke-linecap="round"/>
+    <circle cx="55" cy="58" r="2" fill="${c}0.7)" stroke="${c}0.8)" stroke-width="0.8"/>
+    <text x="84" y="55" font-size="4.5" fill="${c}0.55)" font-family="monospace">S01</text>
+    <text x="84" y="60" font-size="3.5" fill="${cW}0.35)" font-family="monospace">15kV 400A</text>
+    <line x1="55" y1="60" x2="55" y2="68" stroke="${c}0.6)" stroke-width="1.5"/>
+    <circle cx="55" cy="74" r="6" stroke="${cY}0.6)" stroke-width="1" fill="${cY}0.03)"/>
+    <circle cx="55" cy="82" r="6" stroke="${cY}0.6)" stroke-width="1" fill="${cY}0.03)"/>
+    <text x="46" y="76" font-size="4" fill="${cY}0.5)" font-family="monospace" font-weight="600">Y</text>
+    <text x="46" y="84" font-size="4" fill="${cY}0.5)" font-family="monospace" font-weight="600">Y</text>
+    <text x="84" y="79" font-size="4.5" fill="${cY}0.55)" font-family="monospace">TP</text>
+    <text x="84" y="84" font-size="3.5" fill="${cW}0.35)" font-family="monospace">700VA</text>
+    <line x1="55" y1="88" x2="55" y2="96" stroke="${c}0.6)" stroke-width="1.5"/>
+    <circle cx="55" cy="102" r="6" stroke="${cY}0.6)" stroke-width="1" fill="${cY}0.03)"/>
+    <line x1="50" y1="102" x2="60" y2="102" stroke="${cY}0.5)" stroke-width="0.9"/>
+    <polygon points="59,100 62,102 59,104" fill="${cY}0.45)"/>
+    <text x="84" y="105" font-size="4.5" fill="${cY}0.55)" font-family="monospace">TC</text>
+    <line x1="49" y1="102" x2="35" y2="102" stroke="${c}0.5)" stroke-width="1" stroke-dasharray="2 2"/>
+    <line x1="35" y1="102" x2="35" y2="118" stroke="${c}0.5)" stroke-width="1" stroke-dasharray="2 2"/>
+    <line x1="55" y1="108" x2="55" y2="116" stroke="${c}0.6)" stroke-width="1.5"/>
+    <circle cx="35" cy="126" r="8" stroke="${c}0.55)" stroke-width="1.3" fill="${c}0.04)"/>
+    <text x="35" y="129.5" text-anchor="middle" font-size="9" font-weight="700"
+          fill="${c}0.7)" font-family="monospace">P</text>
+    <circle cx="46" cy="120" r="2.2"
+            fill="${isOn ? '#39e58c' : '#ef4444'}"
+            style="filter:drop-shadow(0 0 3px ${isOn ? 'rgba(57,229,140,0.8)' : 'rgba(239,68,68,0.7)'})"/>
+    <text x="18" y="129" font-size="3.8" fill="${c}0.55)" font-family="monospace">RELÉ</text>
+    <line x1="43" y1="126" x2="55" y2="126" stroke="${c}0.5)" stroke-width="1" stroke-dasharray="2 2"/>
+    <rect x="40" y="116" width="30" height="22" rx="3"
+          fill="${c}0.04)" stroke="${c}0.6)" stroke-width="1"/>
+    <line x1="55" y1="116" x2="55" y2="121" stroke="${c}0.8)" stroke-width="1.8" stroke-linecap="round"/>
+    <circle cx="55" cy="121" r="1.5" fill="${c}0.65)"/>
+    <line x1="55" y1="121" x2="55" y2="132" stroke="${c}0.85)" stroke-width="1.5" stroke-linecap="round"/>
+    <line x1="55" y1="132" x2="55" y2="138" stroke="${c}0.8)" stroke-width="1.8" stroke-linecap="round"/>
+    <text x="64" y="131" font-size="5" font-weight="700" fill="${c}0.65)" font-family="monospace">52</text>
+    <text x="84" y="126" font-size="4.5" fill="${c}0.55)" font-family="monospace">DJ-02</text>
+    <text x="84" y="131" font-size="3.5" fill="${cW}0.35)" font-family="monospace">630A</text>
+    <text x="84" y="136" font-size="3.5" fill="${cW}0.35)" font-family="monospace">17.5kV</text>
+    <line x1="55" y1="138" x2="55" y2="152" stroke="${c}0.6)" stroke-width="1.5"/>
+    <rect x="30" y="152" width="50" height="10" rx="2"
+          fill="${c}0.03)" stroke="${c}0.5)" stroke-width="0.8"/>
+    <line x1="42" y1="155" x2="42" y2="159" stroke="${c}0.55)" stroke-width="1.3" stroke-linecap="round"/>
+    <line x1="50" y1="155" x2="50" y2="159" stroke="${c}0.55)" stroke-width="1.3" stroke-linecap="round"/>
+    <line x1="58" y1="155" x2="58" y2="159" stroke="${c}0.55)" stroke-width="1.3" stroke-linecap="round"/>
+    <text x="84" y="160" font-size="4.5" fill="${c}0.55)" font-family="monospace">PR</text>
+    <line x1="55" y1="162" x2="55" y2="210" stroke="${c}0.55)" stroke-width="2" stroke-linecap="round"/>
+  </svg>`;
+}
+
+/* ── SVG medidor v2 (tamanho normal, na espinha) ── */
+function unifSVGMeterV2(isOnline) {
+  const c = isOnline ? 'rgba(57,229,140,' : 'rgba(239,68,68,';
+  return `<svg viewBox="0 0 52 64" width="52" height="64" fill="none" class="unif-device-svg">
+    <line x1="26" y1="0" x2="26" y2="12" stroke="${c}0.55)" stroke-width="2" stroke-linecap="round"/>
+    <rect x="5" y="12" width="42" height="34" rx="4"
+          fill="${isOnline ? 'rgba(57,229,140,0.06)' : 'rgba(239,68,68,0.05)'}"
+          stroke="${c}0.5)" stroke-width="1.5"/>
+    <rect x="10" y="17" width="32" height="18" rx="2"
+          fill="rgba(0,0,0,0.4)" stroke="${c}0.25)" stroke-width="0.7"/>
+    <line x1="13" y1="22" x2="39" y2="22" stroke="${c}0.45)" stroke-width="0.6"/>
+    <line x1="13" y1="26" x2="35" y2="26" stroke="${c}0.3)" stroke-width="0.6"/>
+    <line x1="13" y1="30" x2="38" y2="30" stroke="${c}0.4)" stroke-width="0.6"/>
+    <text x="26" y="23" text-anchor="middle" font-size="5"
+          fill="${c}0.7)" font-family="monospace" font-weight="700">METER</text>
+    <line x1="26" y1="46" x2="26" y2="56" stroke="${c}0.55)" stroke-width="2" stroke-linecap="round"/>
+    <circle cx="40" cy="42" r="2.2"
+            fill="${isOnline ? '#39e58c' : '#ef4444'}"
+            style="filter:drop-shadow(0 0 3px ${isOnline ? 'rgba(57,229,140,0.8)' : 'rgba(239,68,68,0.6)'})"/>
+  </svg>`;
+}
+
+/* ── SVG medidor PEQUENO (ao lado do DJ Geral) ── */
+function unifSVGMeterSmall(isOnline) {
+  const c = isOnline ? 'rgba(57,229,140,' : 'rgba(239,68,68,';
+  return `<svg viewBox="0 0 32 28" width="46" height="40" fill="none">
+    <line x1="0" y1="14" x2="5" y2="14" stroke="${c}0.55)" stroke-width="1.5" stroke-linecap="round"/>
+    <rect x="5" y="3" width="22" height="22" rx="2"
+          fill="${isOnline ? 'rgba(57,229,140,0.05)' : 'rgba(239,68,68,0.04)'}"
+          stroke="${c}0.6)" stroke-width="1.2"/>
+    <rect x="9" y="7" width="14" height="14" rx="1.5"
+          fill="rgba(0,0,0,0.35)" stroke="${c}0.35)" stroke-width="0.8"/>
+    <line x1="11" y1="11" x2="21" y2="11" stroke="${c}0.4)" stroke-width="0.5"/>
+    <line x1="11" y1="14" x2="19" y2="14" stroke="${c}0.3)" stroke-width="0.5"/>
+    <line x1="11" y1="17" x2="20" y2="17" stroke="${c}0.35)" stroke-width="0.5"/>
+    <circle cx="24" cy="22" r="1.5"
+            fill="${isOnline ? '#39e58c' : '#ef4444'}"
+            style="filter:drop-shadow(0 0 2px ${isOnline ? 'rgba(57,229,140,0.8)' : 'rgba(239,68,68,0.6)'})"/>
+  </svg>`;
+}
+
+/* ── SVG relé PEQUENO (ao lado do DJMT) ── */
+function unifSVGRelaySmall(isOnline) {
+  const c = isOnline ? 'rgba(57,229,140,' : 'rgba(239,68,68,';
+  return `<svg viewBox="0 0 32 28" width="46" height="40" fill="none">
+    <line x1="0" y1="14" x2="5" y2="14" stroke="${c}0.55)" stroke-width="1.5" stroke-linecap="round"/>
+    <rect x="5" y="3" width="22" height="22" rx="2"
+          fill="${isOnline ? 'rgba(57,229,140,0.05)' : 'rgba(239,68,68,0.04)'}"
+          stroke="${c}0.6)" stroke-width="1.2"/>
+    <text x="16" y="13" text-anchor="middle" font-size="5.5" font-weight="700"
+          fill="${c}0.7)" font-family="monospace">RELÉ</text>
+    <text x="16" y="20" text-anchor="middle" font-size="4.5"
+          fill="${c}0.5)" font-family="monospace">PROT.</text>
+    <circle cx="24" cy="22" r="1.5"
+            fill="${isOnline ? '#39e58c' : '#ef4444'}"
+            style="filter:drop-shadow(0 0 2px ${isOnline ? 'rgba(57,229,140,0.8)' : 'rgba(239,68,68,0.6)'})"/>
+  </svg>`;
+}
+
+/* ── SVG disjuntor (IEC) — SEM linhas de extensão ── */
+function unifSVGDisjuntor(isTripped, size) {
+  const lg  = size === 'large';
+  const vW  = lg ? 40 : 26;
+  const vH  = lg ? 34 : 22;
+  const w   = lg ? 52 : 32;
+  const h   = lg ? 46 : 32;
+  const cx  = vW / 2;
+  const bX  = lg ? 4 : 2, bY = lg ? 2 : 1;
+  const bW  = vW - bX * 2;
+  const bH  = lg ? 30 : 20;
+
+  const c   = isTripped === true  ? 'rgba(239,68,68,'
+            : isTripped === false ? 'rgba(57,229,140,'
+            :                      'rgba(245,200,66,';
+  const led = isTripped === true  ? '#ef4444'
+            : isTripped === false ? '#39e58c'
+            :                      '#f5c842';
+  const glo = isTripped === true  ? 'rgba(239,68,68,.8)'
+            : isTripped === false ? 'rgba(57,229,140,.8)'
+            :                      'rgba(245,200,66,.8)';
+  const bgFill = isTripped === true  ? 'rgba(239,68,68,.05)'
+               : isTripped === false ? 'rgba(57,229,140,.05)'
+               :                      'rgba(245,200,66,.04)';
+
+  const ctY2 = bY + (lg ? 10 : 7);
+  const cbY1 = bY + bH - (lg ? 10 : 7);
+  const armX2 = isTripped ? cx + (lg ? 8 : 5) : cx;
+  const sw = lg ? 2.5 : 2;
+
+  return `<svg viewBox="0 0 ${vW} ${vH}" width="${w}" height="${h}" fill="none">
+    <rect x="${bX}" y="${bY}" width="${bW}" height="${bH}" rx="${lg ? 4 : 3}"
+          fill="${bgFill}" stroke="${c}.55)" stroke-width="1.5"/>
+    ${lg ? `<text x="${cx}" y="${bY + bH - 3}" text-anchor="middle" font-size="5.5" font-family="monospace" font-weight="700" fill="${c}.4)">DJ</text>` : ''}
+    <line x1="${cx}" y1="${bY + 2}" x2="${cx}" y2="${ctY2}" stroke="${c}.85)" stroke-width="${sw}" stroke-linecap="round"/>
+    <circle cx="${cx}" cy="${ctY2}" r="${lg ? 2 : 1.5}" fill="${c}.75)"/>
+    <line x1="${cx}" y1="${ctY2}" x2="${armX2}" y2="${cbY1}" stroke="${c}.9)" stroke-width="${lg ? 2 : 1.8}" stroke-linecap="round"/>
+    <line x1="${cx}" y1="${cbY1}" x2="${cx}" y2="${bY + bH - 2}" stroke="${c}.85)" stroke-width="${sw}" stroke-linecap="round"/>
+    <circle cx="${bX + bW - (lg ? 5 : 4)}" cy="${bY + (lg ? 4 : 3)}" r="${lg ? 2.5 : 2}"
+            fill="${led}" style="filter:drop-shadow(0 0 3px ${glo})"/>
+  </svg>`;
+}
+
+/* ── Slot de inversor no overview (com líquido de eficiência) ── */
+function buildUnifInvSlotHTML(inv) {
+  const realId   = getInverterRealId(inv);
+  const safeId   = String(realId != null ? realId : Math.random().toString(36).slice(2)).replace(/[^a-zA-Z0-9_\-]/g, '_');
+  const isOnline = isOnlineByFreshness(inv) && !isZeroSnapshot(inv);
+  const hasAlarm = !!(inv?.alarm || inv?.fault || inv?.warning || inv?.alarm_active);
+  const powerKw  = asNumber(inv.active_power_kw ?? inv.power_kw ?? 0, 0);
+  const ratedKw  = asNumber(inv.rated_power_kw ?? 100, 100);
+  const effRaw   = asNumber(inv.efficiency_pct ?? inv.dc_efficiency ?? null, null);
+  const effPct   = effRaw ?? (ratedKw > 0 ? Math.min(100, (powerKw / ratedKw) * 100) : 0);
+  const nm       = cabinMapEscape(getInverterDisplayName(inv, 0));
+
+  // Corpo do inversor: x=3 y=10 w=50 h=34 → clip interno x=4 y=11 w=48 h=32
+  const LIQUID_TOP   = 11;
+  const LIQUID_H_MAX = 32;
+  const liquidH  = Math.max(0, (effPct / 100) * LIQUID_H_MAX);
+  const liquidY  = LIQUID_TOP + LIQUID_H_MAX - liquidH;
+  const slotCls  = hasAlarm ? 'has-alarm' : isOnline ? 'is-online' : 'is-offline';
+  const boltClr  = hasAlarm ? '#ef9f27' : isOnline ? '#39e58c' : '#334433';
+  const liqClr   = isOnline ? (hasAlarm ? '#ef9f27' : '#39e58c') : '#ef4444';
+  const liqAlpha = isOnline ? '0.55' : '0.2';
+  const wireClass = getWireClass(inv, isOnline);
+
+  return `<div class="unif-inv-slot ${slotCls}"
+               data-inv-id="${safeId}"
+               title="${nm}: ${powerKw.toFixed(0)} kW · Efic: ${effPct.toFixed(1)}%"
+               onclick="typeof openCabineDetailForInverter==='function'&&openCabineDetailForInverter('${safeId}')">
+    <svg width="2" height="12" style="overflow:visible">
+      <line x1="1" y1="0" x2="1" y2="12" class="${wireClass}" stroke-width="2"/>
+    </svg>
+    ${_canSendCommand() ? `<button class="unif-dj-btn" data-dj-inv-id="${safeId}" title="Disjuntor: ${nm}"
+            onclick="event.stopPropagation()">
+      ${unifSVGDisjuntor(hasAlarm ? true : isOnline ? false : null, 'small')}
+    </button>` : ''}
+    <svg viewBox="0 0 56 56" width="52" height="52" fill="none" class="cabine-inv-svg" aria-hidden="true">
+      <defs>
+        <filter id="ig${safeId}" x="-30%" y="-30%" width="160%" height="160%">
+          <feGaussianBlur stdDeviation="${isOnline ? '2' : '0'}" result="b"/>
+          <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+        </filter>
+        <clipPath id="ilc${safeId}">
+          <rect x="4" y="11" width="48" height="32" rx="4"/>
+        </clipPath>
+        <linearGradient id="ilg${safeId}" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="${liqClr}" stop-opacity="0.7"/>
+          <stop offset="100%" stop-color="${liqClr}" stop-opacity="0.3"/>
+        </linearGradient>
+      </defs>
+      <rect x="3" y="10" width="50" height="34" rx="5"
+            stroke="${isOnline ? 'rgba(57,229,140,.65)' : hasAlarm ? 'rgba(239,159,39,.5)' : 'rgba(90,110,100,.28)'}"
+            stroke-width="1.6"
+            fill="${isOnline ? 'rgba(57,229,140,.04)' : 'rgba(0,0,0,.25)'}"
+            filter="url(#ig${safeId})"/>
+      <g clip-path="url(#ilc${safeId})">
+        <rect class="inv-liquid" x="4" y="${liquidY.toFixed(1)}" width="48" height="${liquidH.toFixed(1)}"
+              fill="url(#ilg${safeId})" opacity="${liqAlpha}"/>
+        ${isOnline && liquidH > 4 ? `<path class="inv-liquid-wave"
+              d="M4,${liquidY.toFixed(1)} Q18,${(liquidY-2.5).toFixed(1)} 28,${liquidY.toFixed(1)} Q42,${(liquidY+2.5).toFixed(1)} 52,${liquidY.toFixed(1)} L52,${(liquidY+5).toFixed(1)} Q42,${(liquidY+7.5).toFixed(1)} 28,${(liquidY+5).toFixed(1)} Q18,${(liquidY+2.5).toFixed(1)} 4,${(liquidY+5).toFixed(1)} Z"
+              fill="${liqClr}" opacity="0.35"/>` : ''}
+      </g>
+      <rect x="7" y="15" width="14" height="10" rx="1.5"
+            fill="${isOnline ? 'rgba(57,229,140,.16)' : 'rgba(50,70,60,.08)'}"/>
+      <line x1="7" y1="20" x2="21" y2="20"
+            stroke="${isOnline ? 'rgba(57,229,140,.35)' : 'rgba(50,70,60,.12)'}" stroke-width=".7"/>
+      <line x1="14" y1="15" x2="14" y2="25"
+            stroke="${isOnline ? 'rgba(57,229,140,.35)' : 'rgba(50,70,60,.12)'}" stroke-width=".7"/>
+      <path d="M21 20 L26 20" stroke="${isOnline ? 'rgba(57,229,140,.5)' : 'rgba(70,90,80,.2)'}"
+            stroke-width="1" stroke-dasharray="2 1.5"/>
+      <path d="M30 14 L26 25 H30 L25 42 L35 23 H31 L35 14 Z"
+            fill="${boltClr}" opacity="${isOnline ? '1' : '0.18'}"/>
+      <path d="M40 20 Q42 16.5 44 20 Q46 23.5 48 20"
+            stroke="${isOnline ? 'rgba(57,229,140,.6)' : 'rgba(80,100,90,.2)'}"
+            stroke-width="1.4" fill="none" stroke-linecap="round"/>
+      <path d="M40 26 Q42 22.5 44 26 Q46 29.5 48 26"
+            stroke="${isOnline ? 'rgba(57,229,140,.4)' : 'rgba(80,100,90,.15)'}"
+            stroke-width="1.1" fill="none" stroke-linecap="round"/>
+      <circle cx="46" cy="40" r="2.5"
+              fill="${isOnline ? '#39e58c' : hasAlarm ? '#ef9f27' : '#334433'}"
+              style="${isOnline ? 'filter:drop-shadow(0 0 5px rgba(57,229,140,.95));' : hasAlarm ? 'filter:drop-shadow(0 0 4px rgba(239,159,39,.8));' : ''}"/>
+    </svg>
+    <span class="unif-inv-name">${nm}</span>
+    <span class="unif-inv-val">${powerKw > 0 ? powerKw.toFixed(0) + ' kW' : '—'}</span>
+  </div>`;
+}
+
+/* ── Coluna individual de inversor no overview (unifilar real) ── */
+/* ── SVG do inversor (sem slot wrapper) ── */
+function buildUnifInvSVGOnly(inv, safeId) {
+  const isOnline = isOnlineByFreshness(inv) && !isZeroSnapshot(inv);
+  const hasAlarm = !!(inv?.alarm || inv?.fault || inv?.warning || inv?.alarm_active);
+  const powerKw  = asNumber(inv.active_power_kw ?? inv.power_kw ?? 0, 0);
+  const ratedKw  = asNumber(inv.rated_power_kw ?? 100, 100);
+  const effRaw   = asNumber(inv.efficiency_pct ?? inv.dc_efficiency ?? null, null);
+  const effPct   = effRaw ?? (ratedKw > 0 ? Math.min(100, (powerKw / ratedKw) * 100) : 0);
+  const boltClr  = hasAlarm ? '#ef9f27' : isOnline ? '#39e58c' : '#334433';
+  const liqClr   = isOnline ? (hasAlarm ? '#ef9f27' : '#39e58c') : '#ef4444';
+  const liqAlpha = isOnline ? '0.55' : '0.2';
+
+  const LIQUID_TOP   = 11;
+  const LIQUID_H_MAX = 32;
+  const liquidH  = Math.max(0, (effPct / 100) * LIQUID_H_MAX);
+  const liquidY  = LIQUID_TOP + LIQUID_H_MAX - liquidH;
+
+  return `<svg viewBox="0 0 56 56" width="44" height="44" fill="none" class="cabine-inv-svg" aria-hidden="true">
+    <defs>
+      <filter id="ig${safeId}" x="-30%" y="-30%" width="160%" height="160%">
+        <feGaussianBlur stdDeviation="${isOnline ? '2' : '0'}" result="b"/>
+        <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+      </filter>
+      <clipPath id="ilc${safeId}">
+        <rect x="4" y="11" width="48" height="32" rx="4"/>
+      </clipPath>
+      <linearGradient id="ilg${safeId}" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stop-color="${liqClr}" stop-opacity="0.7"/>
+        <stop offset="100%" stop-color="${liqClr}" stop-opacity="0.3"/>
+      </linearGradient>
+    </defs>
+    <rect x="3" y="10" width="50" height="34" rx="5"
+          stroke="${isOnline ? 'rgba(57,229,140,.65)' : hasAlarm ? 'rgba(239,159,39,.5)' : 'rgba(90,110,100,.28)'}"
+          stroke-width="1.6"
+          fill="${isOnline ? 'rgba(57,229,140,.04)' : 'rgba(0,0,0,.25)'}"
+          filter="url(#ig${safeId})"/>
+    <g clip-path="url(#ilc${safeId})">
+      <rect class="inv-liquid" x="4" y="${liquidY.toFixed(1)}" width="48" height="${liquidH.toFixed(1)}"
+            fill="url(#ilg${safeId})" opacity="${liqAlpha}"/>
+      ${isOnline && liquidH > 4 ? `<path class="inv-liquid-wave"
+            d="M4,${liquidY.toFixed(1)} Q18,${(liquidY-2.5).toFixed(1)} 28,${liquidY.toFixed(1)} Q42,${(liquidY+2.5).toFixed(1)} 52,${liquidY.toFixed(1)} L52,${(liquidY+5).toFixed(1)} Q42,${(liquidY+7.5).toFixed(1)} 28,${(liquidY+5).toFixed(1)} Q18,${(liquidY+2.5).toFixed(1)} 4,${(liquidY+5).toFixed(1)} Z"
+            fill="${liqClr}" opacity="0.35"/>` : ''}
+    </g>
+    <rect x="7" y="15" width="14" height="10" rx="1.5"
+          fill="${isOnline ? 'rgba(57,229,140,.16)' : 'rgba(50,70,60,.08)'}"/>
+    <line x1="7" y1="20" x2="21" y2="20"
+          stroke="${isOnline ? 'rgba(57,229,140,.35)' : 'rgba(50,70,60,.12)'}" stroke-width=".7"/>
+    <line x1="14" y1="15" x2="14" y2="25"
+          stroke="${isOnline ? 'rgba(57,229,140,.35)' : 'rgba(50,70,60,.12)'}" stroke-width=".7"/>
+    <path d="M21 20 L26 20" stroke="${isOnline ? 'rgba(57,229,140,.5)' : 'rgba(70,90,80,.2)'}"
+          stroke-width="1" stroke-dasharray="2 1.5"/>
+    <path d="M30 14 L26 25 H30 L25 42 L35 23 H31 L35 14 Z"
+          fill="${boltClr}" opacity="${isOnline ? '1' : '0.18'}"/>
+    <path d="M40 20 Q42 16.5 44 20 Q46 23.5 48 20"
+          stroke="${isOnline ? 'rgba(57,229,140,.6)' : 'rgba(80,100,90,.2)'}"
+          stroke-width="1.4" fill="none" stroke-linecap="round"/>
+    <path d="M40 26 Q42 22.5 44 26 Q46 29.5 48 26"
+          stroke="${isOnline ? 'rgba(57,229,140,.4)' : 'rgba(80,100,90,.15)'}"
+          stroke-width="1.1" fill="none" stroke-linecap="round"/>
+    <circle cx="46" cy="40" r="2.5"
+            fill="${isOnline ? '#39e58c' : hasAlarm ? '#ef9f27' : '#334433'}"
+            style="${isOnline ? 'filter:drop-shadow(0 0 5px rgba(57,229,140,.95));' : hasAlarm ? 'filter:drop-shadow(0 0 4px rgba(239,159,39,.8));' : ''}"/>
+  </svg>`;
+}
+
+/* ── Branch de cabine: DJ → label → ramificação → inversores ── */
+function _buildCabineBranch(group, idx, canCmd, isSingle) {
+  const invs    = group.inverters || [];
+  const online  = invs.filter(i => isOnlineByFreshness(i) && !isZeroSnapshot(i)).length;
+  const alarm   = invs.filter(i => !!(i?.alarm||i?.fault||i?.warning||i?.alarm_active)).length;
+  const totalKw = invs.reduce((s,i) => s + asNumber(i.active_power_kw??i.power_kw??0,0), 0);
+  const cabWire = online > 0 ? 'wire--active' : alarm > 0 ? 'wire--fault' : 'wire--idle';
+  const djSt    = alarm > 0 ? true : online > 0 ? false : null;
+  const offAttr = online === 0 && alarm === 0 ? ' data-offline="1"' : '';
+
+  const invsHTML = invs.map(inv => {
+    const rid    = getInverterRealId(inv);
+    const sid    = String(rid!=null?rid:Math.random().toString(36).slice(2)).replace(/[^a-zA-Z0-9_\-]/g,'_');
+    const isOn   = isOnlineByFreshness(inv) && !isZeroSnapshot(inv);
+    const hasAlm = !!(inv?.alarm||inv?.fault||inv?.warning||inv?.alarm_active);
+    const pKw    = asNumber(inv.active_power_kw??inv.power_kw??0,0);
+    const nm     = cabinMapEscape(getInverterDisplayName(inv,0));
+    const wc     = getWireClass(inv, isOn);
+    const cls    = hasAlm?'has-alarm':isOn?'is-online':'is-offline';
+    const djS    = hasAlm?true:isOn?false:null;
+
+    return `<div class="unif-branch-inv ${cls}" data-inv-id="${sid}" data-cabin-id="${cabinMapEscape(String(group.id))}">
+      <svg class="unif-vw" width="2" height="18"><line x1="1" y1="0" x2="1" y2="18" class="${wc}" stroke-width="1.5"/></svg>
+      ${canCmd
+        ? `<button class="unif-dj-btn" data-dj-inv-id="${sid}" title="DJ: ${nm}" onclick="event.stopPropagation()">${unifSVGDisjuntor(djS,'small')}</button>`
+        : `<div class="unif-dj-sym">${unifSVGDisjuntor(djS,'small')}</div>`}
+      <svg class="unif-vw" width="2" height="10"><line x1="1" y1="0" x2="1" y2="10" class="${wc}" stroke-width="1.5"/></svg>
+      ${buildUnifInvSVGOnly(inv, sid)}
+      <span class="unif-inv-name">${nm}</span>
+      <span class="unif-inv-val">${pKw>0?pKw.toFixed(0)+' kW':'—'}</span>
+    </div>`;
+  }).join('');
+
+  // When there's only 1 cabin (or 0), the per-cabin DJ is redundant (DJBT above covers it).
+  // Multi-cabin: show the per-cabin DJ + optional meter arm.
+  if (isSingle) {
+    return `<div class="unif-branch"${offAttr} data-cabine-idx="${idx}">
+      <svg class="unif-vw" width="2" height="14"><line x1="1" y1="0" x2="1" y2="14" class="${cabWire}" stroke-width="1.5"/></svg>
+      <span class="unif-branch-label">${cabinMapEscape(group.name)}</span>
+      <span class="unif-branch-stats">${online}/${invs.length} · ${totalKw.toFixed(0)} kW</span>
+      <div class="unif-branch-fork">${invsHTML}</div>
+    </div>`;
+  }
+
+  const cabMeterItem   = Array.isArray(MULTIMETER_REALTIME) ? MULTIMETER_REALTIME[0] : MULTIMETER_REALTIME;
+  const cabMeterOnline = cabMeterItem ? multimeterOnlineFromPayload(cabMeterItem) : null;
+  const showCabMeter   = PLANT_CAPABILITIES.hasMultimeter === true;
+
+  const cabMeterArm = showCabMeter ? `
+    <div class="unif-cabin-meter-arm">
+      <svg class="unif-hconn" width="28" height="2"><line x1="0" y1="1" x2="28" y2="1" class="${cabWire}" stroke-width="1.2"/></svg>
+      <div class="unif-meter-side unif-cabin-meter-node" data-unif-device="multimeter">
+        ${unifSVGMeterSmall(cabMeterOnline === true)}
+      </div>
+    </div>` : '';
+
+  return `<div class="unif-branch"${offAttr} data-cabine-idx="${idx}">
+    <svg class="unif-vw" width="2" height="28"><line x1="1" y1="0" x2="1" y2="28" class="${cabWire}" stroke-width="2"/></svg>
+    <div class="unif-branch-dj-wrap">
+      <div class="unif-branch-dj">${unifSVGDisjuntor(djSt,'small')}</div>
+      ${cabMeterArm}
+    </div>
+    <svg class="unif-vw" width="2" height="14"><line x1="1" y1="0" x2="1" y2="14" class="${cabWire}" stroke-width="1.5"/></svg>
+    <span class="unif-branch-label">${cabinMapEscape(group.name)}</span>
+    <span class="unif-branch-stats">${online}/${invs.length} · ${totalKw.toFixed(0)} kW</span>
+    <div class="unif-branch-fork">${invsHTML}</div>
+  </div>`;
+}
+
+/* ── Navegar para detalhe de cabine a partir do inversor ── */
+function openCabineDetailForInverter(invId) {
+  const idx = UNIF_GROUPS.findIndex(g =>
+    g.inverters.some(inv => String(getInverterRealId(inv)) === String(invId))
+  );
+  if (idx < 0) return;
+  UNIF_CABIN_IDX = idx;
+  setUnifMode('cabin', idx);
+  setTimeout(() => {
+    const el = document.querySelector(`[data-inverter-real-id="${invId}"]`);
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }, 150);
+}
+
+/* ── Console de comando em massa (Disjuntor Geral) ── */
+function openBulkCommandConsole() {
+  if (!_canSendCommand()) return;
+  document.getElementById('bulkCmdOverlay')?.remove();
+
+  const allInvs = UNIF_GROUPS.flatMap(g =>
+    g.inverters.map(inv => ({
+      id:       String(getInverterRealId(inv) ?? ''),
+      name:     getInverterDisplayName(inv, 0),
+      cabin:    g.name,
+      isOnline: isOnlineByFreshness(inv) && !isZeroSnapshot(inv),
+      hasAlarm: !!(inv?.alarm || inv?.fault || inv?.warning || inv?.alarm_active)
+    }))
+  );
+  if (!allInvs.length) return;
+
+  const overlay = document.createElement('div');
+  overlay.id = 'bulkCmdOverlay';
+  overlay.className = 'bulk-cmd-overlay';
+
+  const invRows = allInvs.map(inv => {
+    const sc = inv.hasAlarm ? 'alarm' : inv.isOnline ? 'online' : 'offline';
+    const sl = inv.hasAlarm ? 'Alarme' : inv.isOnline ? 'Online' : 'Offline';
+    return `<label class="bulk-inv-row">
+      <input type="checkbox" class="bulk-inv-chk" value="${cabinMapEscape(inv.id)}" checked/>
+      <span class="bulk-inv-info">
+        <span class="bulk-inv-name">${cabinMapEscape(inv.name)}</span>
+        <span class="bulk-inv-cabin">${cabinMapEscape(inv.cabin)}</span>
+      </span>
+      <span class="bulk-inv-badge bulk-inv-badge--${sc}">${sl}</span>
+    </label>`;
+  }).join('');
+
+  overlay.innerHTML = `
+    <div class="bulk-cmd-console">
+      <div class="bulk-cmd-header">
+        <div class="bulk-cmd-title-wrap">
+          ${unifSVGDisjuntor(null, 'large')}
+          <div>
+            <div class="bulk-cmd-title">DJBT — Disjuntor Geral</div>
+            <div class="bulk-cmd-subtitle">Todos os inversores</div>
+          </div>
+        </div>
+        <button class="bulk-cmd-close" id="bulkCmdClose" type="button" aria-label="Fechar">×</button>
+      </div>
+
+      <div class="bulk-cmd-body" id="bulkCmdBody">
+        <div class="bulk-select-bar">
+          <button class="bulk-sel-btn" id="bulkSelAll" type="button">Sel. todos</button>
+          <button class="bulk-sel-btn" id="bulkSelNone" type="button">Desmarcar</button>
+          <span class="bulk-count" id="bulkCount">${allInvs.length} selecionados</span>
+        </div>
+        <div class="bulk-inv-list">${invRows}</div>
+      </div>
+
+      <div class="bulk-cmd-auth" id="bulkCmdAuth" style="display:none">
+        <p class="bulk-auth-label" id="bulkAuthLabel">Autenticação necessária</p>
+        <input class="bulk-auth-input" type="text" id="bulkAuthUser" placeholder="Usuário" autocomplete="username"/>
+        <input class="bulk-auth-input" type="password" id="bulkAuthPass" placeholder="Senha" autocomplete="current-password"/>
+        <div class="bulk-progress-wrap" id="bulkProgressWrap" style="display:none">
+          <div class="bulk-progress-bar"><div class="bulk-progress-fill" id="bulkProgressFill"></div></div>
+          <span class="bulk-progress-text" id="bulkProgressText">Enviando...</span>
+        </div>
+        <div class="bulk-auth-actions">
+          <button class="bulk-auth-cancel" id="bulkAuthCancel" type="button">Voltar</button>
+          <button class="bulk-auth-confirm" id="bulkAuthConfirm" type="button">Confirmar</button>
+        </div>
+      </div>
+
+      <div class="bulk-cmd-footer" id="bulkCmdFooter">
+        <button class="bulk-cmd-btn bulk-cmd-btn--on"    data-bulk-action="on"    type="button">
+          <svg width="13" height="13" viewBox="0 0 14 14" fill="none"><path d="M7 1.5a5.5 5.5 0 1 1 0 11 5.5 5.5 0 0 1 0-11zm0 1.5v3.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+          LIGAR
+        </button>
+        <button class="bulk-cmd-btn bulk-cmd-btn--off"   data-bulk-action="off"   type="button">
+          <svg width="13" height="13" viewBox="0 0 14 14" fill="none"><rect x="2.5" y="2.5" width="9" height="9" rx="1.8" stroke="currentColor" stroke-width="1.5"/></svg>
+          DESLIGAR
+        </button>
+        <button class="bulk-cmd-btn bulk-cmd-btn--reset" data-bulk-action="reset" type="button">
+          <svg width="13" height="13" viewBox="0 0 14 14" fill="none"><path d="M2 7A5 5 0 1 1 7 12" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><path d="M2 4.5v2.5H4.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          RESETAR
+        </button>
+      </div>
+    </div>`;
+
+  document.body.appendChild(overlay);
+  requestAnimationFrame(() => overlay.classList.add('bulk-cmd-visible'));
+
+  let pendingAction = null;
+
+  const closeBulk = () => {
+    overlay.classList.remove('bulk-cmd-visible');
+    setTimeout(() => overlay.remove(), 220);
+  };
+
+  document.getElementById('bulkCmdClose').addEventListener('click', closeBulk);
+  overlay.addEventListener('pointerdown', e => { if (!e.target.closest('.bulk-cmd-console')) closeBulk(); });
+
+  const updateCount = () => {
+    const n = overlay.querySelectorAll('.bulk-inv-chk:checked').length;
+    document.getElementById('bulkCount').textContent = `${n} selecionado${n !== 1 ? 's' : ''}`;
+  };
+  document.getElementById('bulkSelAll').addEventListener('click',  () => { overlay.querySelectorAll('.bulk-inv-chk').forEach(c => c.checked = true);  updateCount(); });
+  document.getElementById('bulkSelNone').addEventListener('click', () => { overlay.querySelectorAll('.bulk-inv-chk').forEach(c => c.checked = false); updateCount(); });
+  overlay.querySelectorAll('.bulk-inv-chk').forEach(c => c.addEventListener('change', updateCount));
+
+  overlay.querySelectorAll('.bulk-cmd-btn[data-bulk-action]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const selected = [...overlay.querySelectorAll('.bulk-inv-chk:checked')].map(c => c.value);
+      if (!selected.length) return;
+      const act = btn.dataset.bulkAction;
+      const actLbl = act === 'on' ? 'LIGAR' : act === 'off' ? 'DESLIGAR' : 'RESETAR';
+      pendingAction = { action: act, ids: selected };
+      document.getElementById('bulkAuthLabel').textContent =
+        `${actLbl} ${selected.length} inversor${selected.length !== 1 ? 'es' : ''} — autentique-se`;
+      document.getElementById('bulkAuthUser').value = '';
+      document.getElementById('bulkAuthPass').value = '';
+      document.getElementById('bulkProgressWrap').style.display = 'none';
+      document.getElementById('bulkAuthCancel').disabled = false;
+      document.getElementById('bulkAuthConfirm').disabled = false;
+      document.getElementById('bulkAuthConfirm').textContent = 'Confirmar';
+      document.getElementById('bulkCmdBody').style.display   = 'none';
+      document.getElementById('bulkCmdFooter').style.display = 'none';
+      document.getElementById('bulkCmdAuth').style.display   = '';
+      setTimeout(() => document.getElementById('bulkAuthUser')?.focus(), 50);
+    });
+  });
+
+  document.getElementById('bulkAuthCancel').addEventListener('click', () => {
+    document.getElementById('bulkCmdAuth').style.display   = 'none';
+    document.getElementById('bulkCmdBody').style.display   = '';
+    document.getElementById('bulkCmdFooter').style.display = '';
+    pendingAction = null;
+  });
+
+  document.getElementById('bulkAuthConfirm').addEventListener('click', async () => {
+    if (!pendingAction) return;
+    const username = (document.getElementById('bulkAuthUser').value || '').trim();
+    const password = document.getElementById('bulkAuthPass').value || '';
+    if (!username || !password) {
+      document.getElementById('bulkAuthLabel').textContent = 'Preencha usuário e senha.';
+      return;
+    }
+    const { action, ids } = pendingAction;
+    const progressWrap = document.getElementById('bulkProgressWrap');
+    const fillEl       = document.getElementById('bulkProgressFill');
+    const textEl       = document.getElementById('bulkProgressText');
+    const confirmBtn   = document.getElementById('bulkAuthConfirm');
+    const cancelBtn    = document.getElementById('bulkAuthCancel');
+
+    progressWrap.style.display = '';
+    confirmBtn.disabled = true;
+    cancelBtn.disabled  = true;
+    confirmBtn.textContent = 'Aguarde...';
+
+    let done = 0, errors = 0;
+    const total = ids.length;
+    const headers = typeof buildAuthHeaders === 'function' ? buildAuthHeaders() : { 'Content-Type': 'application/json' };
+
+    for (const deviceId of ids) {
+      textEl.textContent = `${action.toUpperCase()} → ${done + 1}/${total}`;
+      fillEl.style.width = `${Math.round((done / total) * 100)}%`;
+      try {
+        const res = await fetch(`${API_BASE}/plants/${PLANT_ID}/devices/${deviceId}/command`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ action, username, password, requested_by: username })
+        });
+        if (!res.ok) errors++;
+        if (action === 'on' || action === 'off') {
+          setDevicePersistentState('inverter', deviceId, action);
+          applyDeviceVisualState('inverter', deviceId, action);
+        }
+      } catch (_) { errors++; }
+      done++;
+    }
+
+    fillEl.style.width = '100%';
+    textEl.textContent = errors === 0
+      ? `${done} comando${done !== 1 ? 's' : ''} enviado${done !== 1 ? 's' : ''} com sucesso!`
+      : `${done - errors}/${done} enviados (${errors} erro${errors !== 1 ? 's' : ''})`;
+
+    setTimeout(closeBulk, 1800);
+  });
+}
+
+/* ── Overview: constrói HTML do diagrama completo ── */
+function buildUnifilarOverviewHTML(groups, relayData, multimeterData) {
+  const relayItem   = Array.isArray(relayData)     ? relayData[0]     : relayData;
+  const meterItem   = Array.isArray(multimeterData) ? multimeterData[0] : multimeterData;
+  const relayOnline = relayItem  ? relayOnlineFromPayload(relayItem)      : null;
+  const meterOnline = meterItem  ? multimeterOnlineFromPayload(meterItem) : null;
+
+  const meterPowerRaw = meterItem
+    ? pickDeviceMetricValue(meterItem, meterItem?.analog ?? meterItem?.data ?? {}, ["active_power_kw","p_kw","power_kw"])
+    : null;
+  const meterPowerStr = meterPowerRaw != null ? `${cabinMapFormat(meterPowerRaw, 1)} kW` : '—';
+  const meterName     = meterItem?.device_name || meterItem?.name || 'Medidor';
+
+  const relayPowerRaw = relayItem
+    ? pickDeviceMetricValue(relayItem, relayItem?.analog ?? {}, ["active_power_kw","power_kw","active_power","power"])
+    : null;
+  const relayPowerStr = relayPowerRaw != null ? `${cabinMapFormat(relayPowerRaw, 1)} kW` : '—';
+  const relayName     = relayItem?.device_name || relayItem?.name || 'Relé';
+
+  const anyOn    = groups.some(g => g.inverters.some(i => isOnlineByFreshness(i) && !isZeroSnapshot(i)));
+  const wireMain = anyOn ? 'wire--active' : 'wire--idle';
+  const wireMeter = meterItem ? getWireClass(meterItem, meterOnline) : wireMain;
+  const wireRelay = relayItem ? getWireClass(relayItem, relayOnline) : wireMain;
+
+  const meterBadge = meterOnline === true  ? '<span class="unif-badge unif-badge--online" id="unifMeterBadge">Online</span>'
+                   : meterOnline === false ? '<span class="unif-badge unif-badge--offline" id="unifMeterBadge">Offline</span>'
+                   : '';
+  const relayBadge = relayOnline === true  ? '<span class="unif-badge unif-badge--online" id="unifRelayBadge">Online</span>'
+                   : relayOnline === false ? '<span class="unif-badge unif-badge--offline" id="unifRelayBadge">Offline</span>'
+                   : '';
+
+  const canCmd = _canSendCommand();
+
+  // Capabilities (null = unknown → show by default)
+  const hasRelay       = PLANT_CAPABILITIES.hasRelay !== false;
+  const hasTransformer = PLANT_CAPABILITIES.hasTransformer !== false;
+  // Show multimeter if catalog confirmed it exists (regardless of realtime),
+  // OR catalog not yet loaded and there's realtime data (backward compat)
+  const hasMultimeter  = PLANT_CAPABILITIES.hasMultimeter === true
+    || (PLANT_CAPABILITIES.hasMultimeter !== false && meterItem != null);
+  // Fallback to realtime payload device_id when catalog not yet loaded
+  const relayDevId = PLANT_CAPABILITIES.relayDeviceId
+    ?? (relayItem?.device_id != null ? String(relayItem.device_id) : null)
+    ?? (relayItem?.relay_id  != null ? String(relayItem.relay_id)  : null);
+
+  // DJMT state: based on command state (not relay online status — relay is a separate device)
+  // Default "on" = closed (null = unknown/yellow), "off" = tripped/open
+  const djmtCmdState = relayDevId ? getDevicePersistentState("relay", relayDevId, null) : null;
+  const djmtTripped  = djmtCmdState === "off" ? true : djmtCmdState === "on" ? false : null;
+  const djmtOff      = djmtCmdState === "off"; // propagate to downstream wires
+
+  // DJBT wire cascade: if no inverters are active, mark as idle
+  const wireBelowDjbt = anyOn ? wireMain : 'wire--idle';
+
+  // Wire below DJMT (affects everything downstream if DJMT is commanded off)
+  const wireBelowDjmt = djmtOff ? 'wire--idle' : wireMain;
+
+  const isSingle    = groups.length <= 1;
+  const cabinesHTML = groups.map((g, i) => _buildCabineBranch(g, i, canCmd, isSingle)).join('');
+
+  return `<div class="unif-diagram unif-diagram--v2" id="unifDiagramRoot">
+
+    <div class="unif-zoom-bar">
+      <button class="unif-zoom-btn" id="unifZoomIn" title="+">+</button>
+      <button class="unif-zoom-btn" id="unifZoomReset" title="Reset">\u27F2</button>
+      <button class="unif-zoom-btn" id="unifZoomOut" title="\u2212">\u2212</button>
+    </div>
+
+    <div class="unif-pan-area" id="unifPanArea">
+    <div class="unif-zoomable" id="unifZoomable">
+    <div class="unif-spine">
+
+      <!-- REDE -->
+      <div class="unif-node-row">
+        <svg viewBox="0 0 40 28" width="46" height="34" fill="none" opacity=".4">
+          <line x1="20" y1="0" x2="20" y2="28" stroke="rgba(255,255,255,.4)" stroke-width="1.5"/>
+          <line x1="8" y1="7" x2="32" y2="7" stroke="rgba(255,255,255,.4)" stroke-width="1.5"/>
+          <line x1="4" y1="14" x2="36" y2="14" stroke="rgba(255,255,255,.4)" stroke-width="1.5"/>
+          <line x1="8" y1="7" x2="4" y2="28" stroke="rgba(255,255,255,.2)" stroke-width="1"/>
+          <line x1="32" y1="7" x2="36" y2="28" stroke="rgba(255,255,255,.2)" stroke-width="1"/>
+        </svg>
+        <span class="unif-grid-lbl">REDE</span>
+      </div>
+
+      <!-- Fio: REDE → DJMT -->
+      <svg class="unif-vw" width="2" height="20"><line x1="1" y1="0" x2="1" y2="20" class="${wireMain}" stroke-width="2"/></svg>
+
+      <!-- DJMT + Relé de Proteção ao lado -->
+      <div class="unif-djmt-row">
+        <div class="unif-spine-device unif-spine-dj${canCmd && relayDevId ? ' is-clickable' : ''}"
+             id="unifNodeDjmt"
+             ${canCmd && relayDevId ? `data-dj-relay-id="${relayDevId}"` : ''}>
+          ${unifSVGDisjuntor(djmtTripped, 'large')}
+          <span class="unif-node-lbl unif-lbl-dj">DJMT</span>
+          ${canCmd && relayDevId ? '<span class="unif-dj-hint">Comandar</span>' : ''}
+        </div>
+        ${hasRelay ? `
+        <div class="unif-relay-arm">
+          <svg class="unif-hconn" width="48" height="2"><line x1="0" y1="1" x2="48" y2="1" class="${wireRelay}" stroke-width="1.5"/></svg>
+          <div class="unif-meter-side ${relayOnline === false ? 'is-offline' : ''}"
+               id="unifNodeRelayArm" data-unif-device="relay">
+            ${unifSVGRelaySmall(relayOnline === true)}
+            <span class="unif-meter-lbl">${cabinMapEscape(relayName)}</span>
+            <span class="unif-meter-val" id="unifRelayArmPower">${relayPowerStr}</span>
+            ${relayBadge}
+          </div>
+        </div>` : ''}
+      </div>
+
+      <!-- Fio: DJMT → Trafo/DJBT (com X se DJMT aberto) -->
+      ${djmtOff
+        ? `<div class="unif-wire-break" style="height:${hasTransformer?14:22}px">
+             <svg width="14" height="${hasTransformer?14:22}" style="overflow:visible;display:block;margin:0 auto">
+               <line x1="7" y1="0" x2="7" y2="${Math.floor((hasTransformer?14:22)/2)-5}" stroke="rgba(239,68,68,0.35)" stroke-width="2" stroke-linecap="round"/>
+               <text x="7" y="${Math.floor((hasTransformer?14:22)/2)+4}" text-anchor="middle" font-size="10" fill="rgba(239,68,68,0.75)" font-weight="700">✕</text>
+               <line x1="7" y1="${Math.floor((hasTransformer?14:22)/2)+7}" x2="7" y2="${hasTransformer?14:22}" stroke="rgba(239,68,68,0.35)" stroke-width="2" stroke-linecap="round"/>
+             </svg>
+           </div>`
+        : hasTransformer
+          ? `<svg class="unif-vw" width="2" height="14"><line x1="1" y1="0" x2="1" y2="14" class="${wireBelowDjmt}" stroke-width="2"/></svg>`
+          : `<svg class="unif-vw" width="2" height="22"><line x1="1" y1="0" x2="1" y2="22" class="${wireBelowDjmt}" stroke-width="2"/></svg>`
+      }
+
+      ${hasTransformer ? `
+      <!-- TRANSFORMADOR -->
+      <div class="unif-node-row">
+        <div class="unif-node--trafo-v2" data-unif-device="transformer">
+          ${unifSVGTransformer()}
+          <span class="unif-node-lbl">TR-01</span>
+        </div>
+      </div>
+
+      <!-- Fio: Trafo → DJBT -->
+      <svg class="unif-vw" width="2" height="22"><line x1="1" y1="0" x2="1" y2="22" class="${wireBelowDjmt}" stroke-width="2"/></svg>
+      ` : ''}
+
+      <!-- DJBT centralizado + MEDIDOR ao lado -->
+      <div class="unif-dj-meter-row">
+        <div class="unif-spine-device unif-spine-dj${canCmd ? ' is-clickable' : ''}"
+             id="unifDjGeral"
+             ${canCmd ? 'onclick="typeof openBulkCommandConsole===\'function\'&&openBulkCommandConsole()"' : ''}>
+          ${unifSVGDisjuntor(anyOn ? false : null, 'large')}
+          <span class="unif-node-lbl unif-lbl-dj">DJBT</span>
+          ${canCmd ? '<span class="unif-dj-hint">Comandar</span>' : ''}
+        </div>
+        ${hasMultimeter ? `
+        <div class="unif-meter-arm">
+          <svg class="unif-hconn" width="48" height="2"><line x1="0" y1="1" x2="48" y2="1" class="${wireMeter}" stroke-width="1.5"/></svg>
+          <div class="unif-meter-side ${meterOnline === false ? 'is-offline' : ''}"
+               id="unifNodeMeter" data-unif-device="multimeter">
+            ${unifSVGMeterSmall(meterOnline === true)}
+            <span class="unif-meter-lbl">${cabinMapEscape(meterName)}</span>
+            <span class="unif-meter-val" id="unifMeterPower">${meterPowerStr}</span>
+            ${meterBadge}
+          </div>
+        </div>` : ''}
+      </div>
+
+      <!-- Fio: DJBT → Cabines (com X se sem produção) -->
+      <svg class="unif-vw" width="2" height="24"><line x1="1" y1="0" x2="1" y2="24" class="${wireBelowDjbt}" stroke-width="2"/></svg>
+
+      <!-- CABINES (árvore) -->
+      <div class="unif-tree">${cabinesHTML}</div>
+
+    </div>
+    </div>
+    </div>
+  </div>`;
+}
+
+/* ── Inicialização: toggle Lista / Unifilar ── */
+function initInvViewToggle() {
+  const btnList    = document.getElementById("invBtnList");
+  const btnMap     = document.getElementById("invBtnMap");
+  const listSection = document.getElementById("invertersListSection");
+  const unifView   = document.getElementById("cabineMapView");
+  if (!btnList || !btnMap || !listSection || !unifView) return;
+  if (btnList.dataset.unifReady === "true") return;
+  btnList.dataset.unifReady = "true";
+
+  const switchView = (toMap) => {
+    document.body.classList.toggle("plant-map-mode", toMap);
+    btnList.classList.toggle("is-active", !toMap);
+    btnMap.classList.toggle("is-active", toMap);
+    listSection.style.display = toMap ? "none" : "";
+    unifView.style.display    = toMap ? "flex" : "none";
+
+    if (!toMap) { movePlantChartsToList(); return; }
+
+    movePlantChartsToList();
+    initUnifilarControls();
+    buildUnifilarOverview();
+    renderUnifilarSidePanel();
+    renderUnifilarStatsBar();
+  };
+
+  btnList.addEventListener("click", () => switchView(false));
+  btnMap.addEventListener("click",  () => switchView(true));
+  switchView(false);
+}
+
+function initUnifilarControls() {
+  const btn = document.getElementById("unifilarBtnOverview");
+  if (!btn || btn.dataset.unifCtrl) return;
+  btn.dataset.unifCtrl = "1";
+
+  document.getElementById("unifilarBtnOverview")?.addEventListener("click", () => setUnifMode("overview"));
+  document.getElementById("unifilarBtnCabin")?.addEventListener("click",   () => setUnifMode("cabin"));
+  document.getElementById("unifilarPrev")?.addEventListener("click",        () => navigateUnifCabin(-1));
+  document.getElementById("unifilarNext")?.addEventListener("click",        () => navigateUnifCabin(1));
+  document.getElementById("unifilarCollapseBtn")?.addEventListener("click", toggleUnifSidePanel);
+
+  const searchEl = document.getElementById("unifilarSearch");
+  if (searchEl) {
+    searchEl.addEventListener("input", () => {
+      UNIF_SEARCH_TEXT = searchEl.value.toLowerCase().trim();
+      renderUnifilarSidePanel();
+    });
+  }
+}
+
+function setUnifMode(mode, cabinIdx) {
+  if (UNIF_TRANSITION_RUNNING) return;
+  UNIF_MODE = mode;
+
+  const btnOv    = document.getElementById("unifilarBtnOverview");
+  const btnCab   = document.getElementById("unifilarBtnCabin");
+  const cabNav   = document.getElementById("unifilarCabinNav");
+  const overview = document.getElementById("unifilarOverview");
+  const detail   = document.getElementById("unifilarCabinDetail");
+
+  btnOv?.classList.toggle("is-active", mode === "overview");
+  btnCab?.classList.toggle("is-active", mode === "cabin");
+
+  if (mode === "overview") {
+    if (cabNav) cabNav.style.display = "none";
+    if (detail) detail.style.display = "none";
+    if (overview) overview.style.display = "";
+    buildUnifilarOverview();
+    UNIF_ACTIVE_CABIN_FILTER = null;
+    renderUnifilarSidePanel();
+  } else {
+    if (cabinIdx != null) UNIF_CABIN_IDX = cabinIdx;
+    if (cabNav) cabNav.style.display = "flex";
+    if (overview) overview.style.display = "none";
+    if (detail) detail.style.display = "";
+    renderUnifCabinDetail(UNIF_CABIN_IDX, null);
+  }
+}
+
+function navigateUnifCabin(dir) {
+  if (UNIF_TRANSITION_RUNNING || !UNIF_GROUPS.length) return;
+  UNIF_CABIN_IDX = ((UNIF_CABIN_IDX + dir) + UNIF_GROUPS.length) % UNIF_GROUPS.length;
+  renderUnifCabinDetail(UNIF_CABIN_IDX, dir > 0 ? "left" : "right");
+  UNIF_ACTIVE_CABIN_FILTER = String(UNIF_GROUPS[UNIF_CABIN_IDX]?.id ?? "");
+  renderUnifilarSidePanel();
+}
+
+function renderUnifCabinDetail(idx, direction) {
+  const detail = document.getElementById("unifilarCabinDetail");
+  const label  = document.getElementById("unifilarCabinLabel");
+  if (!detail || !UNIF_GROUPS.length) return;
+
+  const group = UNIF_GROUPS[idx] || UNIF_GROUPS[0];
+  if (!group) return;
+
+  if (label) label.textContent = `${group.name} (${group.inverters.length} inv.)`;
+
+  const container = document.createElement("div");
+  container.className = "unif-cabin-cards";
+  const idxRef = { value: 0 };
+  group.inverters.forEach(inv => container.appendChild(buildCabineCard(inv, idxRef.value++)));
+
+  /* Disjuntor individual na visão de cabine */
+  container.querySelectorAll(".cabine-dj-btn[data-dj-inv-id]").forEach(btn => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (!_canSendCommand()) return;
+      const id = btn.dataset.djInvId;
+      if (id) openCommandConsole({ deviceType: "inverter", deviceId: id });
+    });
+  });
+
+  /* Wires click -> modal */
+  container.querySelectorAll(".cabine-inv-card[data-inverter-real-id]").forEach(card => {
+    card.addEventListener("click", (e) => {
+      if (e.target.closest("button,a,.device-command-control")) return;
+      const id  = card.dataset.inverterRealId;
+      const inv = INVERTER_EXTRAS_BY_ID.get(String(id)) ||
+        dedupInvertersById(INVERTERS_REALTIME).find(x => String(getInverterRealId(x)) === String(id));
+      if (inv) openUnifDeviceModal(inv, "inverter");
+    });
+  });
+
+  if (direction && detail.firstElementChild) {
+    UNIF_TRANSITION_RUNNING = true;
+    const outClass = direction === "left" ? "unif-slide-out-left" : "unif-slide-out-right";
+    const inClass  = direction === "left" ? "unif-slide-in-right" : "unif-slide-in-left";
+    detail.firstElementChild.classList.add(outClass);
+    container.classList.add(inClass);
+    detail.appendChild(container);
+    setTimeout(() => {
+      detail.querySelector("." + outClass)?.remove();
+      container.classList.remove(inClass);
+      UNIF_TRANSITION_RUNNING = false;
+    }, 380);
+  } else {
+    detail.innerHTML = "";
+    detail.appendChild(container);
+  }
+}
+
+function buildUnifilarOverview() {
+  const el = document.getElementById("unifilarOverview");
+  if (!el) return;
+
+  /* Limpa listeners de window da renderização anterior */
+  if (_unifEvtAbort) _unifEvtAbort.abort();
+  _unifEvtAbort = new AbortController();
+  const sig = _unifEvtAbort.signal;
+
+  UNIF_GROUPS = buildUnifGroups(INVERTERS_REALTIME);
+  el.innerHTML = buildUnifilarOverviewHTML(UNIF_GROUPS, RELAY_REALTIME, MULTIMETER_REALTIME);
+
+  // ── Zoom + Pan (usa CSS zoom para resolução nítida) ──
+  const panArea  = document.getElementById('unifPanArea');
+  const zoomable = document.getElementById('unifZoomable');
+  if (panArea && zoomable) {
+
+    const applyTransform = () => {
+      const z = _unifZoom || 0.5;
+      zoomable.style.zoom = z;
+      zoomable.style.transform = `translate(${_unifPanX / z}px, ${_unifPanY / z}px)`;
+    };
+
+    const calcFitZoom = () => {
+      const areaW = panArea.clientWidth  || 800;
+      const areaH = panArea.clientHeight || 500;
+      zoomable.style.zoom = 1;
+      zoomable.style.transform = 'none';
+      const contentW = zoomable.scrollWidth  || 800;
+      const contentH = zoomable.scrollHeight || 500;
+      let fit = Math.min(areaW / contentW, areaH / contentH, 1);
+      fit = Math.max(0.30, Math.min(1, fit));
+      return Math.round(fit * 100) / 100;
+    };
+
+    /* Re-render: aplica zoom/pan IMEDIATAMENTE (síncrono) → sem flicker */
+    if (_unifZoomInited) {
+      applyTransform();
+    } else {
+      /* Primeira renderização: mede o conteúdo, calcula zoom auto-fit e centraliza */
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          const fitZ = calcFitZoom(); // deixa zoom=1 para medir scrollWidth/Height corretos
+          const z = Math.min(1, fitZ * 1.3);
+          _unifZoom = z;
+          // Mede com zoom=1 (calcFitZoom já aplicou zoom=1)
+          const contentW = zoomable.scrollWidth  || 800;
+          const contentH = zoomable.scrollHeight || 500;
+          const areaW    = panArea.clientWidth   || 800;
+          const areaH    = panArea.clientHeight  || 500;
+          // Centraliza o diagrama na área de pan
+          _unifPanX = Math.round((areaW - contentW * z) / 2);
+          _unifPanY = Math.max(0, Math.round((areaH - contentH * z) / 2));
+          _unifZoomInited = true;
+          applyTransform();
+        });
+      });
+    }
+
+    let _dragging = false, _startX = 0, _startY = 0, _startPanX = 0, _startPanY = 0;
+
+    document.getElementById('unifZoomIn')?.addEventListener('click', () => {
+      _unifZoom = Math.min(3.0, (_unifZoom || 0.5) + 0.15);
+      applyTransform();
+    });
+    document.getElementById('unifZoomOut')?.addEventListener('click', () => {
+      _unifZoom = Math.max(0.25, (_unifZoom || 0.5) - 0.15);
+      applyTransform();
+    });
+    document.getElementById('unifZoomReset')?.addEventListener('click', () => {
+      const resetZ = calcFitZoom(); // deixa zoom=1 para medir scrollWidth/Height
+      _unifZoom = resetZ;
+      const contentW = zoomable.scrollWidth  || 800;
+      const contentH = zoomable.scrollHeight || 500;
+      const areaW    = panArea.clientWidth   || 800;
+      const areaH    = panArea.clientHeight  || 500;
+      _unifPanX = Math.round((areaW - contentW * resetZ) / 2);
+      _unifPanY = Math.max(0, Math.round((areaH - contentH * resetZ) / 2));
+      applyTransform();
+    });
+
+    panArea.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      const delta = e.deltaY > 0 ? -0.06 : 0.06;
+      _unifZoom = Math.max(0.25, Math.min(3.0, (_unifZoom || 0.5) + delta));
+      applyTransform();
+    }, { passive: false });
+
+    panArea.addEventListener('mousedown', (e) => {
+      if (e.target.closest('.unif-dj-btn, .unif-zoom-btn, .unif-branch-inv, [data-unif-device]')) return;
+      _dragging = true;
+      _startX = e.clientX; _startY = e.clientY;
+      _startPanX = _unifPanX; _startPanY = _unifPanY;
+      panArea.style.cursor = 'grabbing';
+      e.preventDefault();
+    });
+    window.addEventListener('mousemove', (e) => {
+      if (!_dragging) return;
+      _unifPanX = _startPanX + (e.clientX - _startX);
+      _unifPanY = _startPanY + (e.clientY - _startY);
+      applyTransform();
+    }, { signal: sig });
+    window.addEventListener('mouseup', () => {
+      if (!_dragging) return;
+      _dragging = false;
+      if (panArea) panArea.style.cursor = 'grab';
+    }, { signal: sig });
+
+    let _lastTouchDist = 0;
+    panArea.addEventListener('touchstart', (e) => {
+      if (e.touches.length === 1) {
+        const t = e.touches[0];
+        if (e.target.closest('.unif-dj-btn, .unif-zoom-btn, .unif-branch-inv, [data-unif-device]')) return;
+        _dragging = true;
+        _startX = t.clientX; _startY = t.clientY;
+        _startPanX = _unifPanX; _startPanY = _unifPanY;
+      } else if (e.touches.length === 2) {
+        _dragging = false;
+        _lastTouchDist = Math.hypot(
+          e.touches[0].clientX - e.touches[1].clientX,
+          e.touches[0].clientY - e.touches[1].clientY
+        );
+      }
+    }, { passive: true });
+    panArea.addEventListener('touchmove', (e) => {
+      if (e.touches.length === 1 && _dragging) {
+        _unifPanX = _startPanX + (e.touches[0].clientX - _startX);
+        _unifPanY = _startPanY + (e.touches[0].clientY - _startY);
+        applyTransform();
+      } else if (e.touches.length === 2) {
+        const dist = Math.hypot(
+          e.touches[0].clientX - e.touches[1].clientX,
+          e.touches[0].clientY - e.touches[1].clientY
+        );
+        if (_lastTouchDist > 0) {
+          const scale = dist / _lastTouchDist;
+          _unifZoom = Math.max(0.25, Math.min(3.0, (_unifZoom || 0.5) * scale));
+          applyTransform();
+        }
+        _lastTouchDist = dist;
+      }
+    }, { passive: true });
+    panArea.addEventListener('touchend', () => { _dragging = false; _lastTouchDist = 0; });
+  }
+
+  // ── Click: inversores nas branches ──
+  el.querySelectorAll('.unif-branch-inv[data-inv-id]').forEach(s => {
+    s.addEventListener('click', () => {
+      if (s.dataset.invId && typeof openCabineDetailForInverter === 'function')
+        openCabineDetailForInverter(s.dataset.invId);
+    });
+  });
+
+  // ── Click: nós de equipamento na espinha (trafo, medidor, cubículo) ──
+  el.querySelectorAll("[data-unif-device]").forEach(node => {
+    node.addEventListener("click", () => openUnifDeviceModalById(node.dataset.unifDevice, null));
+  });
+
+  // ── Click: disjuntor individual → command console do inversor ──
+  el.querySelectorAll(".unif-dj-btn").forEach(btn => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const id = btn.dataset.djInvId;
+      if (id) openCommandConsole({ deviceType: "inverter", deviceId: id });
+    });
+  });
+
+  // ── Click: DJMT → command console do relé ──
+  el.querySelectorAll("[data-dj-relay-id]").forEach(btn => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const id = btn.dataset.djRelayId;
+      if (id && _canSendCommand()) openCommandConsole({ deviceType: "relay", deviceId: id });
+    });
+  });
+}
+
+function refreshCabineMapCards(invertersRaw) {
+  if (!isUnifilarVisible()) return;
+  UNIF_GROUPS = buildUnifGroups(invertersRaw);
+  if (UNIF_MODE === "overview") {
+    buildUnifilarOverview();
+  } else {
+    UNIF_CABIN_IDX = Math.min(UNIF_CABIN_IDX, Math.max(0, UNIF_GROUPS.length - 1));
+    renderUnifCabinDetail(UNIF_CABIN_IDX, null);
+  }
+  renderUnifilarSidePanel();
+  renderUnifilarStatsBar();
+}
+
+function updateCabineRelayNode(relayData) {
+  if (!isUnifilarVisible() || UNIF_MODE !== "overview") return;
+  const item  = Array.isArray(relayData) ? relayData[0] : relayData;
+  const relay = document.getElementById("unifNodeRelayArm");
+  const val   = document.getElementById("unifRelayArmPower");
+  const badge = document.getElementById("unifRelayBadge");
+  if (!relay) return;
+  const online = item ? relayOnlineFromPayload(item) : false;
+  const pKw    = item ? pickDeviceMetricValue(item, item?.analog ?? {}, ["active_power_kw","power_kw","active_power","power"]) : null;
+  relay.classList.toggle("is-online",  online);
+  relay.classList.toggle("is-offline", !online && item != null);
+  if (val)   val.textContent   = pKw != null ? `${cabinMapFormat(pKw, 1)} kW` : "—";
+  if (badge) badge.textContent = online ? "Online" : "Offline";
+}
+
+function updateCabineMeterNode(multimeterData) {
+  if (!isUnifilarVisible() || UNIF_MODE !== "overview") return;
+  const item = Array.isArray(multimeterData) ? multimeterData[0] : multimeterData;
+  const meter = document.getElementById("unifNodeMeter");
+  const val   = document.getElementById("unifMeterPower");
+  if (!meter) return;
+  const online = item ? multimeterOnlineFromPayload(item) : false;
+  const pKw    = item ? pickDeviceMetricValue(item, item?.analog ?? item?.data ?? {}, ["active_power_kw","p_kw","power_kw"]) : null;
+  meter.classList.toggle("is-online",  online);
+  meter.classList.toggle("is-offline", !online && item != null);
+  if (val) val.textContent = pKw != null ? `${cabinMapFormat(pKw, 1)} kW` : "—";
+}
+
+/* ── Painel lateral de dispositivos ── */
+function renderUnifilarSidePanel() {
+  const listEl   = document.getElementById("unifilarSideList");
+  const footerEl = document.getElementById("unifilarSideFooter");
+  if (!listEl) return;
+
+  const alarms  = Array.isArray(ACTIVE_ALARMS) ? ACTIVE_ALARMS : [];
+  const devices = buildUnifDeviceList(UNIF_ACTIVE_CABIN_FILTER, UNIF_SEARCH_TEXT || "");
+
+  listEl.innerHTML = devices.length > 0
+    ? devices.map(d => {
+        const devAlarms = alarms.filter(a =>
+          String(a?.device_id ?? a?.deviceId ?? '') === String(d.id)
+        );
+        return buildUnifSideRow(d, devAlarms);
+      }).join('')
+    : `<div class="unif-side-empty">Sem dispositivos</div>`;
+
+  listEl.querySelectorAll(".unif-side-row").forEach(row => {
+    row.addEventListener("click", (e) => {
+      if (e.target.closest(".unif-side-alarm-badge")) return;
+      openUnifDeviceModalById(row.dataset.unifSideType, row.dataset.unifSideId);
+    });
+  });
+
+  listEl.querySelectorAll(".unif-side-alarm-badge").forEach(badge => {
+    badge.addEventListener("click", (e) => {
+      e.stopPropagation();
+      showUnifAlarmPopover(badge, badge.dataset.deviceId);
+    });
+  });
+
+  if (footerEl) {
+    const online  = devices.filter(d => d.status === "online").length;
+    const alarm   = devices.filter(d => d.status === "alarm").length;
+    const offline = devices.filter(d => d.status === "offline").length;
+    footerEl.innerHTML = `
+      <span class="unif-foot-item"><span class="unif-foot-dot unif-foot-dot--online"></span>Online ${online}</span>
+      <span class="unif-foot-item"><span class="unif-foot-dot unif-foot-dot--alarm"></span>Alerta ${alarm}</span>
+      <span class="unif-foot-item"><span class="unif-foot-dot unif-foot-dot--offline"></span>Offline ${offline}</span>`;
+  }
+}
+
+function buildUnifDeviceList(cabinFilter, search) {
+  const devices = [];
+  const q = (search || "").toLowerCase();
+
+  UNIF_GROUPS.forEach(group => {
+    if (cabinFilter && String(group.id) !== String(cabinFilter)) return;
+    group.inverters.forEach(inv => {
+      const id     = String(getInverterRealId(inv) ?? "");
+      const name   = getInverterDisplayName(inv, 0);
+      const online = isOnlineByFreshness(inv) && !isZeroSnapshot(inv);
+      const alarm  = !!(inv?.alarm || inv?.fault || inv?.warning || inv?.alarm_active);
+      const rated  = asNumber(inv.rated_power_kw ?? 0, 0);
+      if (q && !name.toLowerCase().includes(q)) return;
+      devices.push({ id, type: "inverter", name, sub: "Inversor", power: rated > 0 ? `${rated.toFixed(0)} kW` : "—",
+        status: alarm ? "alarm" : online ? "online" : "offline", data: inv });
+    });
+  });
+
+  if (!cabinFilter) {
+    const alarms = Array.isArray(ACTIVE_ALARMS) ? ACTIVE_ALARMS : [];
+    const meterItem = Array.isArray(MULTIMETER_REALTIME) ? MULTIMETER_REALTIME[0] : MULTIMETER_REALTIME;
+    if (meterItem) {
+      const mName = meterItem.device_name || meterItem.name || "Medidor";
+      const mPow  = pickDeviceMetricValue(meterItem, meterItem?.analog ?? meterItem?.data ?? {}, ["active_power_kw","p_kw","power_kw"]);
+      const mId   = String(meterItem.device_id ?? meterItem.multimeter_id ?? "meter");
+      const mOnline = multimeterOnlineFromPayload(meterItem);
+      const mAlarm  = alarms.some(a => String(a?.device_id ?? a?.deviceId ?? '') === mId);
+      if (!q || mName.toLowerCase().includes(q) || "medidor meter multímetro".includes(q))
+        devices.push({ id: mId, type: "multimeter",
+          name: mName, sub: "Medidor", power: mPow != null ? `${mPow.toFixed(1)} kW` : "—",
+          status: mAlarm ? "alarm" : mOnline ? "online" : "offline", data: meterItem });
+    }
+
+    const relayItem = Array.isArray(RELAY_REALTIME) ? RELAY_REALTIME[0] : RELAY_REALTIME;
+    if (relayItem) {
+      const rName = relayItem.device_name || relayItem.name || "Relé";
+      const rPow  = pickDeviceMetricValue(relayItem, relayItem?.analog ?? {}, ["active_power_kw","power_kw","active_power","power"]);
+      const rId   = String(relayItem.device_id ?? relayItem.relay_id ?? "relay");
+      const rOnline = relayOnlineFromPayload(relayItem);
+      const rAlarm  = alarms.some(a => String(a?.device_id ?? a?.deviceId ?? '') === rId);
+      if (!q || rName.toLowerCase().includes(q) || "relé relay proteção".includes(q))
+        devices.push({ id: rId, type: "relay",
+          name: rName, sub: "Relé", power: rPow != null ? `${rPow.toFixed(1)} kW` : "—",
+          status: rAlarm ? "alarm" : rOnline ? "online" : "offline", data: relayItem });
+    }
+  }
+  return devices;
+}
+
+function buildUnifSideRow(d, deviceAlarms = []) {
+  const _sideStInfo = d.type === "inverter" ? getInverterStatusInfo(d) : null;
+  const sc = d.status === "alarm" ? "alarm" : (_sideStInfo ? _sideStInfo.cls : (d.status === "online" ? "online" : "offline"));
+  const sl = d.status === "alarm" ? "Alerta" : (_sideStInfo && _sideStInfo.label !== "—" ? _sideStInfo.label : (d.status === "online" ? "Online" : "Offline"));
+  const iconMap = {
+    inverter:    `<svg viewBox="0 0 20 20" fill="none"><rect x="1" y="3" width="18" height="14" rx="2" stroke="currentColor" stroke-width="1.2"/><path d="M10 5L8 10h3L7 15l9-7h-4l2-3z" fill="currentColor" opacity=".7"/></svg>`,
+    multimeter:  `<svg viewBox="0 0 20 20" fill="none"><rect x="2" y="2" width="16" height="16" rx="2" stroke="currentColor" stroke-width="1.2"/><line x1="6" y1="6" x2="6" y2="14" stroke="currentColor" stroke-width="1.1" opacity=".7"/><line x1="9" y1="6" x2="9" y2="14" stroke="currentColor" stroke-width="1.1" opacity=".7"/><line x1="12" y1="6" x2="12" y2="14" stroke="currentColor" stroke-width="1.1" opacity=".5"/></svg>`,
+    transformer: `<svg viewBox="0 0 24 20" fill="none"><circle cx="7" cy="10" r="6" stroke="currentColor" stroke-width="1.3"/><circle cx="17" cy="10" r="6" stroke="currentColor" stroke-width="1.3" opacity=".6"/></svg>`,
+    relay:       `<svg viewBox="0 0 20 20" fill="none"><rect x="1" y="4" width="18" height="12" rx="2" stroke="currentColor" stroke-width="1.2"/><line x1="6" y1="14" x2="14" y2="14" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><line x1="6" y1="14" x2="9" y2="9" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><line x1="6" y1="9" x2="14" y2="9" stroke="currentColor" stroke-width=".8" stroke-dasharray="2 1.5" opacity=".4" stroke-linecap="round"/></svg>`,
+    sa:          `<svg viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="8" stroke="currentColor" stroke-width="1.2"/><path d="M10 3L8.5 8.5H11.5L8 17L14.5 10H11.5L13 3Z" fill="currentColor" opacity=".7"/></svg>`,
+    rede:        `<svg viewBox="0 0 20 20" fill="none"><line x1="10" y1="1" x2="10" y2="19" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><line x1="2" y1="5" x2="18" y2="5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/><line x1="4" y1="9" x2="16" y2="9" stroke="currentColor" stroke-width="1" stroke-linecap="round"/><line x1="2" y1="5" x2="6" y2="19" stroke="currentColor" stroke-width="1" stroke-linecap="round" opacity=".6"/><line x1="18" y1="5" x2="14" y2="19" stroke="currentColor" stroke-width="1" stroke-linecap="round" opacity=".6"/><circle cx="2" cy="5" r="1.4" fill="currentColor"/><circle cx="18" cy="5" r="1.4" fill="currentColor"/></svg>`
+  };
+  const alarmBadge = deviceAlarms.length > 0
+    ? `<button class="unif-side-alarm-badge" data-device-id="${d.id}"
+              title="${deviceAlarms.length} alarme(s) ativo(s)">
+         <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+           <path d="M7 1L1 13h12L7 1z" stroke="#f59e0b" stroke-width="1.3"
+                 fill="rgba(245,158,11,.15)" stroke-linejoin="round"/>
+           <path d="M7 5.5v3" stroke="#f59e0b" stroke-width="1.3" stroke-linecap="round"/>
+           <circle cx="7" cy="10.5" r=".7" fill="#f59e0b"/>
+         </svg>
+         ${deviceAlarms.length > 1 ? `<span class="unif-side-alarm-count">${deviceAlarms.length}</span>` : ''}
+       </button>`
+    : '';
+  return `<div class="unif-side-row" data-unif-side-type="${d.type}" data-unif-side-id="${d.id}">
+    <div class="unif-side-row-icon" style="color:rgba(127,208,85,.65)">${iconMap[d.type] || iconMap.inverter}</div>
+    <div class="unif-side-row-info">
+      <span class="unif-side-row-name">${cabinMapEscape(d.name)}</span>
+      <span class="unif-side-row-sub">${d.sub}</span>
+    </div>
+    <div class="unif-side-row-right">
+      <span class="unif-side-row-power">${d.power}</span>
+      <span class="unif-side-status unif-side-status--${sc}">${sl}</span>
+    </div>
+    <button class="unif-side-row-action" type="button" title="Ver detalhes">⋮</button>
+    ${alarmBadge}
+  </div>`;
+}
+
+/* ── Linha de alarme no painel lateral ── */
+function buildUnifAlarmRow(alarm) {
+  const deviceType = String(alarm.device_type ?? alarm.type ?? 'inverter');
+  const deviceId   = String(alarm.device_id ?? alarm.deviceId ?? '');
+  const deviceName = String(alarm.device_name ?? alarm.deviceName ?? deviceId);
+  const msg        = String(alarm.event_name ?? alarm.alarm_message ?? alarm.message ?? alarm.event_code ?? '—');
+  const rawTs      = alarm.started_at ?? alarm.timestamp ?? alarm.created_at ?? null;
+  let timeStr = '';
+  if (rawTs) {
+    try {
+      const d = new Date(rawTs);
+      if (!isNaN(d.getTime())) {
+        const pad = n => String(n).padStart(2, '0');
+        timeStr = `${pad(d.getDate())}/${pad(d.getMonth()+1)} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+      }
+    } catch(_) {}
+  }
+  return `<div class="unif-alarm-row"
+    data-unif-alarm-device-type="${deviceType}"
+    data-unif-alarm-device-id="${deviceId}">
+    <div class="unif-alarm-icon">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+        <path d="M8 1.5L1 14h14L8 1.5z" stroke="#f59e0b" stroke-width="1.4" stroke-linejoin="round" fill="rgba(245,158,11,.12)"/>
+        <path d="M8 6v4" stroke="#f59e0b" stroke-width="1.5" stroke-linecap="round"/>
+        <circle cx="8" cy="12" r=".85" fill="#f59e0b"/>
+      </svg>
+    </div>
+    <div class="unif-alarm-info">
+      <span class="unif-alarm-device">${cabinMapEscape(deviceName)}</span>
+      <span class="unif-alarm-msg">${cabinMapEscape(msg)}</span>
+    </div>
+    ${timeStr ? `<span class="unif-alarm-time">${timeStr}</span>` : ''}
+  </div>`;
+}
+
+/* ── Popover flutuante de alarmes ── */
+function showUnifAlarmPopover(anchorEl, deviceId) {
+  document.getElementById("unifAlarmPopover")?.remove();
+  const alarms = (Array.isArray(ACTIVE_ALARMS) ? ACTIVE_ALARMS : [])
+    .filter(a => String(a?.device_id ?? a?.deviceId ?? '') === String(deviceId));
+  if (!alarms.length) return;
+
+  const pop = document.createElement("div");
+  pop.id = "unifAlarmPopover";
+  pop.className = "unif-alarm-popover";
+  pop.innerHTML = `
+    <div class="unif-alarm-pop-header">Alarmes ativos (${alarms.length})</div>
+    ${alarms.map(a => buildUnifAlarmRow(a)).join('')}`;
+  document.body.appendChild(pop);
+
+  const rect = anchorEl.getBoundingClientRect();
+  const popW = 260;
+  let left = rect.left - popW - 8;
+  if (left < 8) left = rect.right + 8;
+  pop.style.cssText = `top:${rect.top + window.scrollY}px;left:${left}px;width:${popW}px`;
+
+  const close = (e) => {
+    if (!pop.contains(e.target) && e.target !== anchorEl) {
+      pop.remove();
+      document.removeEventListener("click", close, true);
+    }
+  };
+  setTimeout(() => document.addEventListener("click", close, true), 0);
+}
+
+/* ── Barra de estatísticas ── */
+function renderUnifilarStatsBar() {
+  const el = document.getElementById("unifilarStatsBar");
+  if (!el) return;
+  const total = UNIF_GROUPS.reduce((s, g) => s + g.inverters.length, 0);
+  const dcKwp = UNIF_GROUPS.reduce((s, g) => s + g.inverters.reduce((gs, inv) => gs + asNumber(inv.rated_power_kw ?? 0, 0), 0), 0);
+  const acKw  = asNumber(PLANT_STATE.active_power_kw, 0);
+  const rated = asNumber(PLANT_STATE.rated_power_kwp, 0);
+  el.innerHTML = `
+    <div class="unif-stat">
+      <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><rect x="1" y="3" width="16" height="12" rx="2" stroke="rgba(127,208,85,.6)" stroke-width="1.2"/></svg>
+      <span class="unif-stat-lbl">TOTAL INVERSORES</span><strong class="unif-stat-val">${total}</strong>
+    </div>
+    <div class="unif-stat">
+      <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><rect x="2" y="4" width="14" height="8" rx="1.5" stroke="rgba(127,208,85,.6)" stroke-width="1.2"/><line x1="5" y1="4" x2="4" y2="1" stroke="rgba(127,208,85,.5)" stroke-width="1.1"/><line x1="9" y1="4" x2="9" y2="1" stroke="rgba(127,208,85,.5)" stroke-width="1.1"/><line x1="13" y1="4" x2="14" y2="1" stroke="rgba(127,208,85,.5)" stroke-width="1.1"/></svg>
+      <span class="unif-stat-lbl">POTÊNCIA DC TOTAL</span><strong class="unif-stat-val">${dcKwp.toFixed(0)} kWp</strong>
+    </div>
+    <div class="unif-stat">
+      <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><path d="M9 2L7 9h4L5 16l11-7h-4l2-7z" fill="rgba(127,208,85,.7)"/></svg>
+      <span class="unif-stat-lbl">POTÊNCIA AC TOTAL</span><strong class="unif-stat-val">${acKw.toFixed(1)} kW</strong>
+    </div>
+    <div class="unif-stat">
+      <svg width="20" height="18" viewBox="0 0 20 18" fill="none"><circle cx="7" cy="9" r="6" stroke="rgba(127,208,85,.6)" stroke-width="1.2"/><circle cx="13" cy="9" r="6" stroke="#f5c842" stroke-width="1.2" opacity=".75"/></svg>
+      <span class="unif-stat-lbl">TRANSFORMADOR</span><strong class="unif-stat-val">${rated > 0 ? rated.toFixed(0) + " kVA" : "—"}</strong>
+    </div>
+    `;
+}
+
+/* ── Colapsar painel lateral ── */
+function toggleUnifSidePanel() {
+  UNIF_SIDE_COLLAPSED = !UNIF_SIDE_COLLAPSED;
+  const side = document.getElementById("unifilarSide");
+  const svg  = document.getElementById("unifCollapseSVG");
+  if (side) side.classList.toggle("is-collapsed", UNIF_SIDE_COLLAPSED);
+  if (svg) {
+    svg.innerHTML = UNIF_SIDE_COLLAPSED
+      ? `<path d="M4 1L7 6L4 11" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+         <line x1="11" y1="6" x2="1" y2="6" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" opacity=".4"/>`
+      : `<path d="M8 1L11 6L8 11" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+         <line x1="1" y1="6" x2="11" y2="6" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" opacity=".4"/>`;
+  }
+}
+
+/* ── Modal de dispositivo ── */
+function openUnifDeviceModalById(type, id) {
+  if (type === "inverter") {
+    const inv = INVERTER_EXTRAS_BY_ID.get(String(id)) ||
+      dedupInvertersById(INVERTERS_REALTIME).find(x => String(getInverterRealId(x)) === String(id));
+    if (inv) { openUnifDeviceModal(inv, "inverter"); return; }
+  }
+  if (type === "relay")      { openUnifDeviceModal(Array.isArray(RELAY_REALTIME)      ? RELAY_REALTIME[0]      : RELAY_REALTIME,      "relay");      return; }
+  if (type === "multimeter") { openUnifDeviceModal(Array.isArray(MULTIMETER_REALTIME) ? MULTIMETER_REALTIME[0] : MULTIMETER_REALTIME, "multimeter"); return; }
+  openUnifDeviceModal(null, type);
+}
+
+function openUnifDeviceModal(data, type) {
+  closeUnifDeviceModal(true);
+  const seq = ++UNIF_MODAL_SEQ;
+
+  const modal = document.createElement("div");
+  modal.id = "unifDeviceModal";
+  modal.className = "unif-modal-backdrop";
+
+  const typeLabels = { inverter:"Inversor", relay:"Relé / Proteção", multimeter:"Multimedidor",
+    transformer:"Transformador", sa:"Serviços Auxiliares", rede:"Rede", cc:"Caixa Combinadora",
+    qgbt:"QGBT MT", weather:"Estação Meteorológica" };
+  const typeLabel = typeLabels[type] || type;
+
+  let title = "Dispositivo";
+  if (type === "inverter" && data) title = cabinMapEscape(getInverterDisplayName(data, 0));
+  else if (type === "relay")       title = "PMT";
+  else if (type === "multimeter")  title = "CC 01 / Multimedidor";
+  else if (type === "transformer") title = "T01 — Transformador";
+  else if (type === "sa")          title = "SA 01";
+  else if (type === "rede")        title = "REDE";
+
+  const bodyHTML = buildUnifModalBody(data, type);
+
+  modal.innerHTML = `<div class="unif-modal-card">
+    <div class="unif-modal-hdr">
+      <div class="unif-modal-title-group">
+        <span class="unif-modal-type-badge">${typeLabel}</span>
+        <h3 class="unif-modal-title">${title}</h3>
+      </div>
+      <button class="unif-modal-close" type="button" aria-label="Fechar">×</button>
+    </div>
+    <div class="unif-modal-body" id="unifModalBody">${bodyHTML}</div>
+  </div>`;
+
+  modal.querySelector(".unif-modal-close").addEventListener("click", closeUnifDeviceModal);
+  modal.addEventListener("pointerdown", e => { if (!e.target.closest(".unif-modal-card")) closeUnifDeviceModal(); });
+  const escFn = e => { if (e.key === "Escape") closeUnifDeviceModal(); };
+  document.addEventListener("keydown", escFn);
+  modal._escFn = escFn;
+
+  document.body.appendChild(modal);
+  requestAnimationFrame(() => modal.classList.add("unif-modal-visible"));
+
+  /* Carrega strings do inversor de forma assíncrona */
+  if (type === "inverter" && data) {
+    const realId = getInverterRealId(data);
+    if (realId != null) {
+      loadCabineStringsPayload(realId).then(payload => {
+        if (seq !== UNIF_MODAL_SEQ) return;
+        const grid  = document.getElementById("unifModalStrGrid");
+        const count = document.getElementById("unifModalStrCount");
+        if (!grid) return;
+        const rendered = renderCabineStringsBalloonRows(payload, realId);
+        grid.innerHTML = rendered.html;
+        if (count) count.textContent = `${rendered.count} string${rendered.count !== 1 ? "s" : ""}`;
+      });
+    }
+  }
+
+  /* Wires command buttons inside modal */
+  setTimeout(() => wireDeviceCommandButtons(modal), 50);
+}
+
+function closeUnifDeviceModal(immediate = false) {
+  UNIF_MODAL_SEQ++;
+  const modal = document.getElementById("unifDeviceModal");
+  if (!modal) return;
+  if (modal._escFn) document.removeEventListener("keydown", modal._escFn);
+  if (immediate) { modal.remove(); return; }
+  modal.classList.remove("unif-modal-visible");
+  setTimeout(() => modal.parentNode?.removeChild(modal), 230);
+}
+
+function buildUnifModalBody(data, type) {
+  if (type === "inverter"    && data) return buildUnifInverterBody(data);
+  if (type === "relay"       && data) return buildUnifRelayBody(data);
+  if (type === "multimeter"  && data) return buildUnifMeterBody(data);
+  if (type === "transformer")         return buildUnifTrafoBody();
+  return `<div class="unif-modal-empty">Sem dados disponíveis para este dispositivo.</div>`;
+}
+
+function buildUnifInverterBody(inv) {
+  const realId = getInverterRealId(inv);
+  const online  = isOnlineByFreshness(inv) && !isZeroSnapshot(inv);
+  const alarm   = !!(inv?.alarm || inv?.fault || inv?.warning || inv?.alarm_active);
+  const pKw     = cabinMapReadInvMetric(inv, ["active_power_kw","power_kw","power","active_power"]);
+  const eff     = cabinMapReadInvMetric(inv, ["efficiency_pct","efficiency","eff_pct"]);
+  const temp    = cabinMapReadInvMetric(inv, ["temperature_internal_c","temperature_c","temp_c","temperature"]);
+  const freq    = cabinMapReadInvMetric(inv, ["frequency_hz","freq_hz","frequency"]);
+  const prRaw   = cabinMapReadInvMetric(inv, ["performance_ratio","pr","pr_ratio"]);
+  const rated   = cabinMapReadInvMetric(inv, ["rated_power_kw","capacity_kw","rated_kw"]);
+  const lastTs  = cabinMapReadInvMetric(inv, ["last_reading_at","last_reading_ts","last_ts","timestamp","event_ts"]);
+  const prPct   = prRaw != null ? normalizePercentMaybe(prRaw) : null;
+  const _unifStInfo = getInverterStatusInfo(inv);
+  const sc      = alarm ? "alarm" : _unifStInfo.cls;
+  const sl      = alarm ? "Alerta" : _unifStInfo.label !== "—" ? _unifStInfo.label : (online ? "Online" : "Offline");
+
+  const f0 = (v, u) => { const n = Number(typeof v === "string" ? v.replace(",", ".") : v); return Number.isFinite(n) ? `${n.toFixed(0)} ${u}` : "—"; };
+  const f2 = (v, u) => { const n = Number(typeof v === "string" ? v.replace(",", ".") : v); return Number.isFinite(n) ? `${n.toFixed(2)} ${u}` : "—"; };
+
+  const vab = inv?.line_voltage_ab_v ?? inv?.line_voltage_ab;
+  const vbc = inv?.line_voltage_bc_v ?? inv?.line_voltage_bc;
+  const vca = inv?.line_voltage_ca_v ?? inv?.line_voltage_ca;
+  const ia  = inv?.current_phase_a_a ?? inv?.current_phase_a;
+  const ib  = inv?.current_phase_b_a ?? inv?.current_phase_b;
+  const ic  = inv?.current_phase_c_a ?? inv?.current_phase_c;
+  const fp  = inv?.power_factor;
+  const kvar = inv?.power_reactive_kvar;
+  const kva  = inv?.apparent_power_kva;
+  const dcKw = inv?.power_dc_kw;
+  const strV = inv?.string_voltage_v;
+  const iso  = inv?.resistance_insulation_mohm;
+
+  return `<div class="unif-modal-status-bar">
+    <span class="unif-modal-state unif-modal-state--${sc}">${sl}</span>
+    <span class="unif-modal-last">Última leitura: ${fmtDatePtBR(lastTs)}</span>
+  </div>
+  <div class="unif-modal-kpis">
+    <div class="unif-modal-kpi"><span class="unif-modal-kpi-lbl">Potência</span><strong class="unif-modal-kpi-val">${pKw != null ? cabinMapFormat(pKw, 1, "kW") : "—"}</strong></div>
+    <div class="unif-modal-kpi"><span class="unif-modal-kpi-lbl">Eficiência</span><strong class="unif-modal-kpi-val">${eff != null ? cabinMapFormat(eff, 1, "%") : "—"}</strong></div>
+    <div class="unif-modal-kpi"><span class="unif-modal-kpi-lbl">Temperatura</span><strong class="unif-modal-kpi-val ${temp != null && asNumber(temp, 0) > 70 ? "val-warn" : ""}">${temp != null ? `${cabinMapFormat(temp, 1)}°C` : "—"}</strong></div>
+    <div class="unif-modal-kpi"><span class="unif-modal-kpi-lbl">Frequência</span><strong class="unif-modal-kpi-val">${freq != null ? cabinMapFormat(freq, 2, "Hz") : "—"}</strong></div>
+    <div class="unif-modal-kpi"><span class="unif-modal-kpi-lbl">PR</span><strong class="unif-modal-kpi-val">${prPct != null ? cabinMapFormat(prPct, 1, "%") : "—"}</strong></div>
+    <div class="unif-modal-kpi"><span class="unif-modal-kpi-lbl">Cap. Nominal</span><strong class="unif-modal-kpi-val">${rated != null ? cabinMapFormat(rated, 0, "kW") : "—"}</strong></div>
+    <div class="unif-modal-kpi"><span class="unif-modal-kpi-lbl">Inv Status</span><strong class="unif-modal-kpi-val ${_unifStInfo.cls}">${_unifStInfo.label}</strong></div>
+    <div class="unif-modal-kpi"><span class="unif-modal-kpi-lbl">Work Status</span><strong class="unif-modal-kpi-val">${getWorkingStatus(inv)}</strong></div>
+  </div>
+  <div class="unif-modal-section">
+    <div class="unif-modal-section-hdr"><span>Strings</span><span class="unif-modal-count" id="unifModalStrCount">Carregando...</span></div>
+    <div class="unif-modal-str-grid" id="unifModalStrGrid"><div class="unif-modal-loading">Carregando strings...</div></div>
+  </div>
+  <div class="unif-modal-section">
+    <div class="unif-modal-section-hdr"><span>AC</span></div>
+    <div class="unif-modal-chips">
+      <div class="unif-chip"><span class="unif-chip-lbl">V AB</span><span class="unif-chip-val">${f0(vab,"V")}</span></div>
+      <div class="unif-chip"><span class="unif-chip-lbl">V BC</span><span class="unif-chip-val">${f0(vbc,"V")}</span></div>
+      <div class="unif-chip"><span class="unif-chip-lbl">V CA</span><span class="unif-chip-val">${f0(vca,"V")}</span></div>
+      <div class="unif-chip"><span class="unif-chip-lbl">Ia</span><span class="unif-chip-val">${f2(ia,"A")}</span></div>
+      <div class="unif-chip"><span class="unif-chip-lbl">Ib</span><span class="unif-chip-val">${f2(ib,"A")}</span></div>
+      <div class="unif-chip"><span class="unif-chip-lbl">Ic</span><span class="unif-chip-val">${f2(ic,"A")}</span></div>
+      <div class="unif-chip"><span class="unif-chip-lbl">FP</span><span class="unif-chip-val">${(()=>{const n=Number(typeof fp==="string"?fp.replace(",","."):fp);return Number.isFinite(n)?n.toFixed(3):"—"})()}</span></div>
+      <div class="unif-chip"><span class="unif-chip-lbl">Q reativa</span><span class="unif-chip-val">${f2(kvar,"kvar")}</span></div>
+      <div class="unif-chip"><span class="unif-chip-lbl">S aparente</span><span class="unif-chip-val">${f2(kva,"kVA")}</span></div>
+    </div>
+  </div>
+  <div class="unif-modal-section">
+    <div class="unif-modal-section-hdr"><span>DC</span></div>
+    <div class="unif-modal-chips">
+      <div class="unif-chip"><span class="unif-chip-lbl">P DC</span><span class="unif-chip-val">${f2(dcKw,"kW")}</span></div>
+      <div class="unif-chip"><span class="unif-chip-lbl">V string</span><span class="unif-chip-val">${f0(strV,"V")}</span></div>
+      <div class="unif-chip"><span class="unif-chip-lbl">R isol.</span><span class="unif-chip-val">${(()=>{const n=Number(typeof iso==="string"?iso.replace(",","."):iso);return Number.isFinite(n)?`${n.toFixed(2)} MΩ`:"—"})()}</span></div>
+    </div>
+  </div>
+  ${_canSendCommand() && realId != null ? `
+  <div class="unif-modal-section">
+    <div class="unif-modal-section-hdr"><span>Comandos</span></div>
+    <div class="unif-modal-cmds">${renderDeviceCommandControl("inverter", realId, online ? "on" : "off")}</div>
+  </div>` : ""}`;
+}
+
+function buildUnifRelayBody(item) {
+  if (!item) return `<div class="unif-modal-empty">Sem dados do relé</div>`;
+  const analog  = item?.analog ?? {};
+  const ev      = item?.event  ?? {};
+  const online  = relayOnlineFromPayload(item);
+  const pKw     = pickDeviceMetricValue(item, analog, ["active_power_kw","power_kw","active_power","power"]);
+  const pApKva  = pickDeviceMetricValue(item, analog, ["apparent_power_kva","power_apparent_kva","apparent_power"]);
+  const pRkvar  = pickDeviceMetricValue(item, analog, ["reactive_power_kvar","power_reactive_kvar","reactive_power"]);
+  const vAB     = analog.voltage_ab_v;
+  const vBC     = analog.voltage_bc_v;
+  const vCA     = analog.voltage_ca_v;
+  const iA      = analog.current_a_a;
+  const iB      = analog.current_b_a;
+  const iC      = analog.current_c_a;
+  const relayOn = item?.relay_on;
+  const isValid = item?.is_valid;
+  const commFlt = item?.communication_fault;
+  const evCode  = ev.event_code;
+  const evName  = ev.event_name;
+  const evSev   = ev.severity;
+  const lastTs  = item?.last_update ?? item?.last_reading_at ?? item?.timestamp ?? analog?.timestamp ?? ev?.timestamp;
+  const sc      = online ? "online" : "offline";
+  const relayId = item?.device_id ?? PLANT_CAPABILITIES.relayDeviceId ?? null;
+
+  const fmt = (v, dec = 1) => v != null ? Number(v).toFixed(dec) : "—";
+  const fmtFlag = (v, trueLabel = "SIM", falseLabel = "NÃO") => {
+    if (v === true)  return `<span class="unif-relay-flag unif-relay-flag--true">${trueLabel}</span>`;
+    if (v === false) return `<span class="unif-relay-flag unif-relay-flag--false">${falseLabel}</span>`;
+    return `<span class="unif-relay-flag unif-relay-flag--neutral">—</span>`;
+  };
+
+  const hasVoltages = vAB != null || vBC != null || vCA != null;
+  const hasCurrents = iA  != null || iB  != null || iC  != null;
+
+  return `
+  <div class="unif-modal-status-bar">
+    <span class="unif-modal-state unif-modal-state--${sc}">${online ? "Online" : "Offline"}</span>
+    <span class="unif-modal-last">Última leitura: ${fmtDatePtBR(lastTs)}</span>
+  </div>
+  <div class="unif-modal-section-hdr"><span>Potências</span></div>
+  <div class="unif-modal-kpis">
+    <div class="unif-modal-kpi"><span class="unif-modal-kpi-lbl">Ativa</span><strong class="unif-modal-kpi-val">${pKw != null ? fmt(pKw) + " kW" : "—"}</strong></div>
+    <div class="unif-modal-kpi"><span class="unif-modal-kpi-lbl">Aparente</span><strong class="unif-modal-kpi-val">${pApKva != null ? fmt(pApKva) + " kVA" : "—"}</strong></div>
+    <div class="unif-modal-kpi"><span class="unif-modal-kpi-lbl">Reativa</span><strong class="unif-modal-kpi-val">${pRkvar != null ? fmt(pRkvar, 2) + " kvar" : "—"}</strong></div>
+  </div>
+  ${hasVoltages ? `
+  <div class="unif-modal-section-hdr" style="margin-top:8px"><span>Tensões</span></div>
+  <div class="unif-modal-kpis">
+    <div class="unif-modal-kpi"><span class="unif-modal-kpi-lbl">V AB</span><strong class="unif-modal-kpi-val">${fmt(vAB, 0)} V</strong></div>
+    <div class="unif-modal-kpi"><span class="unif-modal-kpi-lbl">V BC</span><strong class="unif-modal-kpi-val">${fmt(vBC, 0)} V</strong></div>
+    <div class="unif-modal-kpi"><span class="unif-modal-kpi-lbl">V CA</span><strong class="unif-modal-kpi-val">${fmt(vCA, 0)} V</strong></div>
+  </div>` : ''}
+  ${hasCurrents ? `
+  <div class="unif-modal-section-hdr" style="margin-top:8px"><span>Correntes</span></div>
+  <div class="unif-modal-kpis">
+    <div class="unif-modal-kpi"><span class="unif-modal-kpi-lbl">I A</span><strong class="unif-modal-kpi-val">${fmt(iA)} A</strong></div>
+    <div class="unif-modal-kpi"><span class="unif-modal-kpi-lbl">I B</span><strong class="unif-modal-kpi-val">${fmt(iB)} A</strong></div>
+    <div class="unif-modal-kpi"><span class="unif-modal-kpi-lbl">I C</span><strong class="unif-modal-kpi-val">${fmt(iC)} A</strong></div>
+  </div>` : ''}
+  <div class="unif-modal-section-hdr" style="margin-top:8px"><span>Flags de Proteção</span></div>
+  <div class="unif-relay-flags">
+    <div class="unif-relay-flag-row"><span class="unif-relay-flag-lbl">Relé ON</span>${fmtFlag(relayOn, "ON", "OFF")}</div>
+    <div class="unif-relay-flag-row"><span class="unif-relay-flag-lbl">Comun. Válida</span>${fmtFlag(isValid)}</div>
+    ${commFlt != null ? `<div class="unif-relay-flag-row"><span class="unif-relay-flag-lbl">Cód. Comunicação</span><span class="unif-relay-flag unif-relay-flag--neutral">${commFlt}</span></div>` : ''}
+    ${evCode  != null ? `<div class="unif-relay-flag-row"><span class="unif-relay-flag-lbl">Evento</span><span class="unif-relay-flag unif-relay-flag--neutral">${evCode}${evName ? ` — ${evName}` : ''}</span></div>` : ''}
+    ${evSev   != null ? `<div class="unif-relay-flag-row"><span class="unif-relay-flag-lbl">Severidade</span><span class="unif-relay-flag unif-relay-flag--neutral">${evSev}</span></div>` : ''}
+  </div>
+  ${_canSendCommand() && relayId ? `
+  <div class="unif-modal-section">
+    <div class="unif-modal-section-hdr"><span>Comandos</span></div>
+    <div class="unif-modal-cmds">${renderDeviceCommandControl("relay", relayId, online && relayOn ? "on" : "off")}</div>
+  </div>` : ""}`;
+}
+
+function buildUnifMeterBody(item) {
+  if (!item) return `<div class="unif-modal-empty">Sem dados do multimedidor</div>`;
+  const analog   = item?.analog ?? item?.data ?? {};
+  const online   = multimeterOnlineFromPayload(item);
+  const act      = pickDeviceMetricValue(item, analog, ["active_power_kw","p_kw","power_kw","active_power"]);
+  const app      = pickDeviceMetricValue(item, analog, ["apparent_power_kva","power_apparent_kva","apparent_power"]);
+  const react    = pickDeviceMetricValue(item, analog, ["reactive_power_kvar","power_reactive_kvar","reactive_power"]);
+  const pf       = pickDeviceMetricValue(item, analog, ["power_factor","power_factor_pct","pf"]);
+  const lastTs   = item?.last_reading_at ?? item?.last_update ?? item?.timestamp ?? analog?.timestamp ?? data?.timestamp;
+  const sc = online ? "online" : "offline";
+  return `<div class="unif-modal-status-bar">
+    <span class="unif-modal-state unif-modal-state--${sc}">${online ? "Online" : "Offline"}</span>
+    <span class="unif-modal-last">Última leitura: ${fmtDatePtBR(lastTs)}</span>
+  </div>
+  <div class="unif-modal-kpis">
+    <div class="unif-modal-kpi"><span class="unif-modal-kpi-lbl">Potência Ativa</span><strong class="unif-modal-kpi-val">${act != null ? cabinMapFormat(act, 1) + " kW" : "—"}</strong></div>
+    <div class="unif-modal-kpi"><span class="unif-modal-kpi-lbl">Potência Aparente</span><strong class="unif-modal-kpi-val">${app != null ? cabinMapFormat(app, 1) + " kVA" : "—"}</strong></div>
+    <div class="unif-modal-kpi"><span class="unif-modal-kpi-lbl">Potência Reativa</span><strong class="unif-modal-kpi-val">${react != null ? cabinMapFormat(react, 2) + " kvar" : "—"}</strong></div>
+    <div class="unif-modal-kpi"><span class="unif-modal-kpi-lbl">Fator de Potência</span><strong class="unif-modal-kpi-val">${pf != null ? cabinMapFormat(pf, 3) : "—"}</strong></div>
+  </div>`;
+}
+
+function buildUnifTrafoBody() {
+  const rated = asNumber(PLANT_STATE.rated_power_kwp, 0);
+  return `<div class="unif-modal-kpis">
+    <div class="unif-modal-kpi"><span class="unif-modal-kpi-lbl">Capacidade</span><strong class="unif-modal-kpi-val">${rated > 0 ? rated.toFixed(0) + " kVA" : "—"}</strong></div>
+    <div class="unif-modal-kpi"><span class="unif-modal-kpi-lbl">Status</span><strong class="unif-modal-kpi-val">Online</strong></div>
+    <div class="unif-modal-kpi"><span class="unif-modal-kpi-lbl">Temperatura</span><strong class="unif-modal-kpi-val" id="unifModalTrafoTemp">—</strong></div>
+  </div>`;
+}
+
 function countOnlineInverters(invertersRaw) {
   const inverters = dedupInvertersById(invertersRaw);
   let online = 0;
@@ -1679,11 +4222,16 @@ function renderHeaderSummary() {
   const elRated = document.getElementById("headerRatedPower");
   const elActive = document.getElementById("headerActivePower");
   const elCapacity = document.getElementById("headerCapacity");
+  const elCapacityAc = document.getElementById("headerCapacityAc");
   if (!elRated || !elActive || !elCapacity) return;
 
   elRated.textContent = `${asNumber(PLANT_STATE.rated_power_kwp).toFixed(1)} kWp`;
   elActive.textContent = `${asNumber(PLANT_STATE.active_power_kw).toFixed(1)} kW`;
   elCapacity.textContent = `${asNumber(PLANT_STATE.capacity_percent).toFixed(1)} %`;
+  if (elCapacityAc) {
+    const ac = PLANT_STATE.capacity_ac;
+    elCapacityAc.textContent = ac != null && ac > 0 ? `${Number(ac).toFixed(1)} kWp` : "—";
+  }
 }
 
 // ======================================================
@@ -1925,7 +4473,8 @@ function ensureRelayUiScaffold() {
     commandBarWrap.style.gridColumn = "7";
     commandBarWrap.style.gridRow = "1";
     commandBarWrap.style.justifySelf = "center";
-    commandBarWrap.dataset.label = "COMANDOS";
+    commandBarWrap.dataset.label = _canSendCommand() ? "COMANDOS" : "";
+    if (!_canSendCommand()) commandBarWrap.style.visibility = "hidden";
   }
 
   if (detailsPanel) {
@@ -1979,7 +4528,7 @@ function ensureDeviceMiniHeaders() {
         <span>APPARENT POWER</span>
         <span>REACTIVE POWER</span>
         <span>ÚLTIMA LEITURA</span>
-        <span>COMANDOS</span>
+        <span>${_canSendCommand() ? "COMANDOS" : ""}</span>
       `;
       spans = headerEl.querySelectorAll("span");
     } else {
@@ -1989,7 +4538,7 @@ function ensureDeviceMiniHeaders() {
       spans[3].textContent = "APPARENT POWER";
       spans[4].textContent = "REACTIVE POWER";
       spans[5].textContent = "ÚLTIMA LEITURA";
-      spans[6].textContent = "COMANDOS";
+      spans[6].textContent = _canSendCommand() ? "COMANDOS" : "";
     }
   };
 
@@ -2124,7 +4673,8 @@ function ensureMultimeterUiScaffold() {
     commandBarWrap.style.gridColumn = "7";
     commandBarWrap.style.gridRow = "1";
     commandBarWrap.style.justifySelf = "center";
-    commandBarWrap.dataset.label = "COMANDOS";
+    commandBarWrap.dataset.label = _canSendCommand() ? "COMANDOS" : "";
+    if (!_canSendCommand()) commandBarWrap.style.visibility = "hidden";
   }
 
   return {
@@ -2148,6 +4698,11 @@ function renderRelayCommandBar(deviceId, currentState = "off") {
   const safeId = String(deviceId);
   const normalizedState = currentState === "on" ? "on" : "off";
   setDevicePersistentState("relay", safeId, normalizedState);
+  if (!_canSendCommand()) {
+    wrap.innerHTML = "";
+    wrap.style.display = "none";
+    return;
+  }
   wrap.innerHTML = renderDeviceCommandControl("relay", safeId, normalizedState);
   wrap.style.display = "flex";
   wrap.style.alignItems = "center";
@@ -2165,6 +4720,11 @@ function renderMultimeterCommandBar(deviceId) {
     return;
   }
   const safeId = String(deviceId);
+  if (!_canSendCommand()) {
+    wrap.innerHTML = "";
+    wrap.style.display = "none";
+    return;
+  }
   wrap.innerHTML = renderDeviceCommandControl("multimeter", safeId, getDevicePersistentState("multimeter", safeId, "off"));
   wrap.style.display = "flex";
   wrap.style.alignItems = "center";
@@ -2332,14 +4892,17 @@ function setInverterMetricCell(cellEl, metricText) {
   cellEl.innerHTML = `<span class="metric-number">${numberPart}</span>${unitHtml}`;
 }
 
-function setRowOnlineUi(rowEl, online) {
-  rowEl.classList.remove("online", "offline");
-  rowEl.classList.add(online ? "online" : "offline");
+function setRowOnlineUi(rowEl, online, inv) {
+  const stInfo = inv ? getInverterStatusInfo(inv) : null;
+  const statusCls = stInfo ? stInfo.cls : (online ? "inv-st-run" : "inv-st-off");
+
+  rowEl.classList.remove("online", "offline", "inv-st-off", "inv-st-standby", "inv-st-run", "inv-st-fault", "inv-st-unknown");
+  rowEl.classList.add(online ? "online" : "offline", statusCls);
 
   const dot = rowEl.querySelector(".status-dot, [data-role='status-dot']");
   if (dot) {
-    dot.classList.remove("online", "offline");
-    dot.classList.add(online ? "online" : "offline");
+    dot.classList.remove("online", "offline", "inv-st-off", "inv-st-standby", "inv-st-run", "inv-st-fault", "inv-st-unknown");
+    dot.classList.add(online ? "online" : "offline", statusCls);
   }
 }
 
@@ -2394,7 +4957,7 @@ function renderInverterRowKpis(rowEl, inv) {
 
   const freshOnline = isOnlineByFreshness(inv);
   const online = freshOnline && !isZeroSnapshot(inv);
-  setRowOnlineUi(rowEl, online);
+  setRowOnlineUi(rowEl, online, inv);
 }
 
 function renderInvertersRows(inverters) {
@@ -2421,7 +4984,7 @@ function renderInvertersRows(inverters) {
         pr: "—",
         last: "—"
       });
-      setRowOnlineUi(row, false);
+      setRowOnlineUi(row, false, null);
       return;
     }
 
@@ -2465,6 +5028,7 @@ function mergeStringsPayload(configPayload, realtimePayload, inverterRealId) {
       effective_enabled,
       has_data,
       current_a: rt?.current_a ?? null,
+      is_online: rt?.is_online ?? false,
       last_ts: rt?.last_ts ?? null,
       monitorable,
       alarm_active: rt?.alarm_active ?? cfg?.alarm_active ?? null,
@@ -2490,7 +5054,7 @@ function isStringMonitorable(str) {
 
 function getInverterOnlineStateById(inverterRealId) {
   const inv = INVERTER_EXTRAS_BY_ID.get(String(inverterRealId));
-  if (!inv) return false;
+  if (!inv) return null;
   return isOnlineByFreshness(inv) && !isZeroSnapshot(inv);
 }
 
@@ -2561,6 +5125,10 @@ function renderStringsGrid(gridEl, payload) {
       ...payload,
       strings
     });
+    const panel = gridEl.closest(".inverter-strings");
+    if (panel && panel.classList.contains("open")) {
+      panel.style.maxHeight = panel.scrollHeight + "px";
+    }
   };
 
   const visibleStrings = strings.filter(isEffectiveEnabled);
@@ -2583,7 +5151,7 @@ function renderStringsGrid(gridEl, payload) {
       el.classList.add("active");
     }
 
-    const ampText = str.has_data ? fmtAmp(str.current_a) : "—";
+    const ampText = (str.has_data && inverterOnline !== false) ? fmtAmp(str.current_a) : "—";
 
     el.innerHTML = `
       S${str.string_index}
@@ -2603,9 +5171,8 @@ function renderStringsGrid(gridEl, payload) {
           await patchInverterString(PLANT_ID, inverterRealId, str.string_index, false);
           str.enabled = false;
         } catch (error) {
-          console.warn("PATCH falhou ao desativar string (rollback local):", error?.message || error);
-          setDisabledPref(inverterRealId, str.string_index, false);
-          rerender();
+          // ✅ FIX Bug 3: não desfaz preferência local — localStorage é fonte da verdade
+          console.warn("[strings] PATCH falhou ao desativar string, preferência local mantida:", error?.message || error);
         }
       }, 180);
     });
@@ -2640,10 +5207,8 @@ function renderStringsGrid(gridEl, payload) {
       try {
         await patchInverterString(PLANT_ID, inverterRealId, next.string_index, true);
       } catch (error) {
-        console.warn("PATCH falhou ao reativar string (rollback local):", error?.message || error);
-        setDisabledPref(inverterRealId, next.string_index, true);
-        next.enabled = false;
-        rerender();
+        // ✅ FIX Bug 3: não desfaz preferência local — localStorage é fonte da verdade
+        console.warn("[strings] PATCH falhou ao reativar string, preferência local mantida:", error?.message || error);
       }
     });
 
@@ -2679,6 +5244,9 @@ function renderInverterExtras(inverterRealId, inv) {
   const rowAc = wrap.querySelector(`.inv-side-row[data-row="ac"]`);
   const rowDc = wrap.querySelector(`.inv-side-row[data-row="dc"]`);
   if (!rowAc || !rowDc) return;
+
+  // ✅ FIX Bug 1: remove status rows anteriores para evitar duplicação a cada refresh
+  wrap.querySelectorAll(".inverter-extra-row").forEach(el => el.remove());
 
   rowAc.innerHTML = "";
   rowDc.innerHTML = "";
@@ -2744,6 +5312,22 @@ function renderInverterExtras(inverterRealId, inv) {
     const n = Number(typeof v === "string" ? v.replace(",", ".") : v);
     return Number.isFinite(n) ? `${n.toFixed(2)} MΩ` : "—";
   })()));
+
+  // ── Inv Status / Work Status chips ──
+  const stInfo = getInverterStatusInfo(inv);
+  const wkStatus = getWorkingStatus(inv);
+  const rowStatus = document.createElement("div");
+  rowStatus.className = "inverter-extra-row";
+
+  const invStatusSvg = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>`;
+  const workStatusSvg = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>`;
+
+  const stChip = makeChip(invStatusSvg + " Inv Status", stInfo.label);
+  stChip.classList.add(stInfo.cls);
+  rowStatus.appendChild(stChip);
+
+  rowStatus.appendChild(makeChip(workStatusSvg + " Work Status", wkStatus));
+  wrap.appendChild(rowStatus);
 }
 
 // ======================================================
@@ -2989,6 +5573,8 @@ function normalizeMonthlyPayload(payload) {
   const converted = maybeConvertWhToKwh(daily, mtd);
   daily = converted.daily;
   mtd = converted.mtd;
+  const dailyForTotals = daily.slice();
+  const mtdForTotals = mtd.slice();
 
   const capped = capMonthlyOutliers(daily);
   daily = capped.daily;
@@ -3019,11 +5605,40 @@ function normalizeMonthlyPayload(payload) {
     labels: finalLabels,
     daily_kwh: daily,
     mtd_kwh: mtd,
+    daily_kwh_for_totals: dailyForTotals,
+    mtd_kwh_for_totals: mtdForTotals,
     expected_daily_kwh: expectedDaily,
     expected_mtd_kwh: expectedMtd,
     irradiation_daily_kwh_m2: irradiationDaily,
     energy_kwh: daily
   };
+}
+
+function getMonthlyCurrentIndex(labels, daily) {
+  const list = Array.isArray(labels) ? labels : [];
+  if (!list.length) return -1;
+
+  const today = new Date();
+  const dd = String(today.getDate()).padStart(2, "0");
+  const mm = String(today.getMonth() + 1).padStart(2, "0");
+  const yyyy = String(today.getFullYear());
+  const todayKeys = new Set([
+    String(today.getDate()),
+    dd,
+    `${dd}/${mm}`,
+    `${dd}-${mm}`,
+    `${yyyy}-${mm}-${dd}`
+  ]);
+
+  const indexFromToday = list.findIndex(label => todayKeys.has(String(label ?? "").trim()));
+  if (indexFromToday >= 0) return indexFromToday;
+
+  const real = Array.isArray(daily) ? daily : [];
+  for (let i = Math.min(real.length, list.length) - 1; i >= 0; i--) {
+    if (Number(real[i]) > 0) return i;
+  }
+
+  return list.length - 1;
 }
 
 // ======================================================
@@ -3037,8 +5652,17 @@ function renderMonthlyChart() {
   const daily = Array.isArray(MONTHLY?.daily_kwh)
     ? MONTHLY.daily_kwh.map(v => Number(v) || 0)
     : (Array.isArray(MONTHLY?.energy_kwh) ? MONTHLY.energy_kwh.map(v => Number(v) || 0) : []);
+  const dailyForTotals = Array.isArray(MONTHLY?.daily_kwh_for_totals)
+    ? MONTHLY.daily_kwh_for_totals.map(v => Number(v) || 0)
+    : daily;
+  const realMtd = Array.isArray(MONTHLY?.mtd_kwh_for_totals)
+    ? MONTHLY.mtd_kwh_for_totals.map(v => Number(v) || 0)
+    : [];
   const expectedDaily = Array.isArray(MONTHLY?.expected_daily_kwh)
     ? MONTHLY.expected_daily_kwh.map(v => Number(v) || 0)
+    : [];
+  const expectedMtd = Array.isArray(MONTHLY?.expected_mtd_kwh)
+    ? MONTHLY.expected_mtd_kwh.map(v => Number(v) || 0)
     : [];
 
   if (!labels.length || !daily.length) return;
@@ -3046,12 +5670,21 @@ function renderMonthlyChart() {
   const expectedPadded = expectedDaily.slice(0, daily.length);
   while (expectedPadded.length < daily.length) expectedPadded.push(0);
 
-  const totalReal = daily.reduce((a, b) => a + (Number(b) || 0), 0);
-  const totalExpected = expectedPadded.reduce((a, b) => a + (Number(b) || 0), 0);
-  const deviation = totalExpected > 0 ? ((totalReal - totalExpected) / totalExpected) * 100 : 0;
-  const daysWithGeneration = daily.filter(v => Number(v) > 0).length;
+  const currentIndex = Math.max(0, Math.min(getMonthlyCurrentIndex(labels, dailyForTotals), daily.length - 1));
+  const currentLabel = String(labels[currentIndex] ?? "").trim() || "hoje";
+  const dailyToDate = dailyForTotals.slice(0, currentIndex + 1);
+  const expectedToDate = expectedPadded.slice(0, currentIndex + 1);
+
+  const totalReal = Number(realMtd[currentIndex]) ||
+    dailyToDate.reduce((a, b) => a + (Number(b) || 0), 0);
+  const totalExpectedToDate = Number(expectedMtd[currentIndex]) ||
+    expectedToDate.reduce((a, b) => a + (Number(b) || 0), 0);
+  const totalExpectedMonth = expectedPadded.reduce((a, b) => a + (Number(b) || 0), 0);
+  const deviation = totalExpectedToDate > 0 ? ((totalReal - totalExpectedToDate) / totalExpectedToDate) * 100 : 0;
+  const elapsedDays = currentIndex + 1;
 
   const kpiRealEl = document.getElementById("monthlyKpiReal");
+  const kpiExpectedMtdEl = document.getElementById("monthlyKpiExpectedMtd");
   const kpiExpEl = document.getElementById("monthlyKpiExp");
   const kpiDevEl = document.getElementById("monthlyKpiDev");
   const progressEl = document.getElementById("monthlyProgressFill");
@@ -3059,14 +5692,15 @@ function renderMonthlyChart() {
   const bottomRightEl = document.getElementById("monthlyBottomRight");
 
   if (kpiRealEl) kpiRealEl.textContent = formatKwhPtBR(totalReal);
-  if (kpiExpEl) kpiExpEl.textContent = formatKwhPtBR(totalExpected);
+  if (kpiExpectedMtdEl) kpiExpectedMtdEl.textContent = formatKwhPtBR(totalExpectedToDate);
+  if (kpiExpEl) kpiExpEl.textContent = formatKwhPtBR(totalExpectedMonth);
   if (kpiDevEl) {
     kpiDevEl.textContent = `${deviation >= 0 ? "+" : ""}${deviation.toFixed(1)}%`;
     kpiDevEl.style.color = deviation >= 0 ? "#7FD055" : "#ff6b6b";
   }
-  if (progressEl) progressEl.style.width = `${((daysWithGeneration / daily.length) * 100).toFixed(1)}%`;
-  if (bottomLeftEl) bottomLeftEl.textContent = `${daysWithGeneration} dias com geração de ${daily.length}`;
-  if (bottomRightEl) bottomRightEl.textContent = "Mês atual";
+  if (progressEl) progressEl.style.width = `${((elapsedDays / daily.length) * 100).toFixed(1)}%`;
+  if (bottomLeftEl) bottomLeftEl.textContent = `Ate ${currentLabel}: real produzido x esperado acumulado`;
+  if (bottomRightEl) bottomRightEl.textContent = `Expectativa mensal: ${formatKwhPtBR(totalExpectedMonth)}`;
 
   const ctx = canvas.getContext("2d");
 
@@ -3164,7 +5798,13 @@ function renderMonthlyChart() {
               const expected = Number(expectedPadded[idx] ?? 0);
               const deviation = expected > 0 ? ((real - expected) / expected) * 100 : 0;
               const sign = deviation > 0 ? "+" : "";
-              return `Desvio: ${sign}${deviation.toFixed(1)}%`;
+              const expectedAccum = expectedPadded
+                .slice(0, idx + 1)
+                .reduce((a, b) => a + (Number(b) || 0), 0);
+              return [
+                `Desvio diario: ${sign}${deviation.toFixed(1)}%`,
+                `Esperado acumulado: ${formatKwhPtBR(expectedAccum)}`
+              ];
             }
           }
         }
@@ -3269,14 +5909,16 @@ async function refreshStringsForRealInverter(inverterRealId) {
   const grid = document.querySelector(`.strings-grid[data-inverter-real-id="${inverterRealId}"]`);
   if (!grid) return;
 
-  const reqSeq = ++STRINGS_REFRESH_SEQ;
+  const prev = STRINGS_REFRESH_SEQ_MAP.get(String(inverterRealId)) ?? 0;
+  const reqSeq = prev + 1;
+  STRINGS_REFRESH_SEQ_MAP.set(String(inverterRealId), reqSeq);
 
   const [cfg, rt] = await Promise.all([
     fetchInverterStrings(PLANT_ID, inverterRealId),
     fetchInverterStringsRealtime(PLANT_ID, inverterRealId)
   ]);
 
-  if (reqSeq !== STRINGS_REFRESH_SEQ) return;
+  if (reqSeq !== STRINGS_REFRESH_SEQ_MAP.get(String(inverterRealId))) return;
 
   const merged = mergeStringsPayload(cfg, rt, inverterRealId);
   renderStringsGrid(grid, merged);
@@ -3291,6 +5933,15 @@ async function refreshOpenStringsPanels() {
   const trackedId = OPEN_INVERTER_REAL_ID;
   if (trackedId != null) {
     await refreshStringsForRealInverter(trackedId);
+    // Garante que o painel continue visualmente aberto após eventual DOM rebuild
+    const panel = document.getElementById(`strings-${trackedId}`);
+    const row = document.querySelector(`.inverter-toggle[data-inverter-real-id="${trackedId}"]`);
+    if (panel && row && !panel.classList.contains("open")) {
+      row.classList.add("open");
+      panel.classList.add("open");
+      panel.style.opacity = "1";
+      panel.style.maxHeight = panel.scrollHeight + "px";
+    }
     return;
   }
 
@@ -3327,7 +5978,7 @@ async function refreshRealtimeEverything() {
       renderPlantName(realtime);
       if (realtime) {
         const rated = asNumber(
-          realtime.rated_power_kw ?? realtime.rated_power_ac_kw ?? realtime.rated_power_kwp,
+          realtime.rated_power_ac_kw ?? realtime.rated_power_kw ?? realtime.rated_power_kwp,
           PLANT_STATE.rated_power_kwp
         );
         const active = asNumber(
@@ -3342,7 +5993,8 @@ async function refreshRealtimeEverything() {
           rated_power_kwp: rated,
           active_power_kw: active,
           capacity_percent: rated > 0 ? (active / rated) * 100 : PLANT_STATE.capacity_percent,
-          pr_percent: prPct != null ? prPct : PLANT_STATE.pr_percent
+          pr_percent: prPct != null ? prPct : PLANT_STATE.pr_percent,
+          capacity_ac: realtime.capacity_ac != null ? Number(realtime.capacity_ac) : PLANT_STATE.capacity_ac,
         };
       }
     } catch (e) {
@@ -3370,6 +6022,7 @@ async function refreshRealtimeEverything() {
 
     if (invertersRes.status === "fulfilled") {
       INVERTERS_REALTIME = invertersRes.value;
+      window.INVERTERS_REALTIME = INVERTERS_REALTIME;
       INVERTER_EXTRAS_BY_ID = new Map();
       dedupInvertersById(INVERTERS_REALTIME).forEach(inv => {
         const id = getInverterRealId(inv);
@@ -3387,6 +6040,7 @@ async function refreshRealtimeEverything() {
       ensureInverterRowsFromRealtime(INVERTERS_REALTIME);
       renderInvertersRows(INVERTERS_REALTIME);
       refreshInverterStatusChips(INVERTERS_REALTIME);
+      refreshCabineMapCards(INVERTERS_REALTIME);
     } else {
       console.error("[refreshRealtimeEverything][inverters] erro", invertersRes.reason);
     }
@@ -3394,9 +6048,11 @@ async function refreshRealtimeEverything() {
     if (relayRes.status === "fulfilled") {
       const relayItem = relayRes.value;
       RELAY_REALTIME = relayItem;
+      window.RELAY_REALTIME = RELAY_REALTIME;
       PLANT_CATALOG.hasRelay = !!relayItem;
       setRelaySectionVisible(RELAY_SUPPORTED !== false);
       if (RELAY_SUPPORTED !== false) renderRelayCard(relayItem);
+      updateCabineRelayNode(relayItem);
     } else {
       console.error("[refreshRealtimeEverything][relay] erro", relayRes.reason);
     }
@@ -3404,8 +6060,10 @@ async function refreshRealtimeEverything() {
     if (multimeterRes.status === "fulfilled") {
       const multimeterItem = multimeterRes.value;
       MULTIMETER_REALTIME = multimeterItem;
+      window.MULTIMETER_REALTIME = MULTIMETER_REALTIME;
       setMultimeterSectionVisible(MULTIMETER_SUPPORTED !== false);
       if (MULTIMETER_SUPPORTED !== false) renderMultimeterCard(multimeterItem);
+      updateCabineMeterNode(multimeterItem);
     } else {
       console.error("[refreshRealtimeEverything][multimeter] erro", multimeterRes.reason);
     }
@@ -3968,9 +6626,19 @@ function openCommandDevicePicker() {
 }
 
 function handleInitialPlantAction() {
-  const action = new URLSearchParams(window.location.search).get("action");
+  const params = new URLSearchParams(window.location.search);
+  const action = params.get("action");
   if (action === "command") {
     setTimeout(openCommandDevicePicker, 120);
+  }
+  // Deep-link to specific device (from robot assistant diagnostics)
+  const deviceId = params.get("device_id");
+  if (deviceId) {
+    setTimeout(() => {
+      if (typeof openCabineDetailForInverter === "function") {
+        openCabineDetailForInverter(deviceId);
+      }
+    }, 600);
   }
 }
 
@@ -3984,19 +6652,544 @@ window.PlantActions = {
 // ======================================================
 // INIT
 // ======================================================
+/* ================================================================
+   ROBOT ASSISTENTE (insights analíticos) — plant.js
+   ================================================================ */
+const _ROBOT_STATE = {
+  issues: [], currentIndex: 0, isTyping: false,
+  typingTimer: null, cycleTimer: null, dismissTimer: null,
+  reportOpen: false, bubbleVisible: false,
+  lastState: null, lastIssueHash: null, userRead: false,
+  avatarTimer: null, avatarState: null,
+};
+const _ROBOT_TYPE_SPEED      = 40;
+const _ROBOT_MAX_CHARS       = 110;
+const _ROBOT_DISMISS_DELAY   = 12000;
+const _ROBOT_AVATAR_GIF_MS   = 10000;
+const _ROBOT_AVATAR_MAP = {
+  critical: { gif: "img/roboaiotiredgif.gif",  png: "img/roboaiotired.png"  },
+  warning:  { gif: "img/roboaiotiidlegif.gif", png: "img/roboaiotiidle.png" },
+  gray:     { gif: "img/roboaiotioffgif.gif",  png: "img/roboaiotioff.png"  },
+  ok:       { gif: null,                        png: "img/roboaiotiok.png"   },
+};
+
+const _ROBOT_NOTIF_PREFS_KEY = "robot_notif_prefs";
+const _ROBOT_CAT_OPEN_KEY    = "robot_cat_open";
+
+const _ROBOT_CATEGORY_META = {
+  temp_sustained:  { label: "Temperatura elevada",        order: 0 },
+  plant_shutdown:  { label: "Usina desligada",            order: 1 },
+  pr_declining:    { label: "PR em queda",                order: 2 },
+  sub_performance: { label: "Sub-performance",            order: 3 },
+  inv_clipping:    { label: "Clipping",                   order: 4 },
+  string_zero:     { label: "String zerada",              order: 5 },
+  string_low:      { label: "String abaixo da m\u00e9dia", order: 6 },
+};
+
+const _ROBOT_CATEGORY_ICONS = {
+  temp_sustained:  "fa-temperature-high",
+  plant_shutdown:  "fa-power-off",
+  pr_declining:    "fa-arrow-trend-down",
+  sub_performance: "fa-chart-bar",
+  inv_clipping:    "fa-bolt",
+  string_zero:     "fa-circle-xmark",
+  string_low:      "fa-battery-quarter",
+};
+
+function _robotGetOpenCats() {
+  try { return JSON.parse(localStorage.getItem(_ROBOT_CAT_OPEN_KEY) || "[]"); }
+  catch (_) { return []; }
+}
+
+function _robotToggleCat(type) {
+  let open = _robotGetOpenCats();
+  if (open.includes(type)) open = open.filter(t => t !== type);
+  else open.push(type);
+  localStorage.setItem(_ROBOT_CAT_OPEN_KEY, JSON.stringify(open));
+  return open.includes(type);
+}
+
+function _pRobotGetNotifPrefs() {
+  try {
+    return JSON.parse(localStorage.getItem(_ROBOT_NOTIF_PREFS_KEY) || "{}");
+  } catch (_) { return {}; }
+}
+
+function _pRobotSaveNotifPrefs(prefs) {
+  localStorage.setItem(_ROBOT_NOTIF_PREFS_KEY, JSON.stringify(prefs));
+  const user = JSON.parse(localStorage.getItem("user") || "{}");
+  if (user.id) {
+    const hdrs = { "Content-Type": "application/json" };
+    if (user.customer_id) hdrs["X-Customer-Id"] = user.customer_id;
+    if (user.is_superuser === true) hdrs["X-Is-Superuser"] = "true";
+    if (user.username) hdrs["X-Username"] = user.username;
+    fetch(`${API_BASE}/users/notif-prefs`, {
+      method: "POST", headers: hdrs,
+      body: JSON.stringify({ prefs })
+    }).catch(() => {});
+  }
+}
+
+function _pRobotIsMuted() {
+  const prefs = _pRobotGetNotifPrefs();
+  return prefs.muted === true;
+}
+
+function _pRobotIsTypeEnabled(type) {
+  const prefs = _pRobotGetNotifPrefs();
+  if (prefs.muted === true) return false;
+  if (prefs.disabled_types && prefs.disabled_types.includes(type)) return false;
+  return true;
+}
+
+function _robotApiFetch(path) {
+  const user = JSON.parse(localStorage.getItem("user") || "{}");
+  const headers = {};
+  if (user.customer_id) headers["X-Customer-Id"] = user.customer_id;
+  if (user.is_superuser === true) headers["X-Is-Superuser"] = "true";
+  return fetch(`${API_BASE}${path}`, { headers, cache: "no-store" });
+}
+
+async function _robotFetchDiag() {
+  try {
+    const res = await _robotApiFetch("/diagnostics/summary");
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (data && data.body) return typeof data.body === "string" ? JSON.parse(data.body) : data.body;
+    return data;
+  } catch (e) { console.error("[ROBOT]", e); return null; }
+}
+
+function _robotIssuesHash(issues) {
+  return issues.map(i => `${i.plant_id}:${i.type}:${i.device_id||i.device_name||""}`).join("|");
+}
+
+function _robotFormatTs(ts) {
+  if (!ts) return "";
+  try {
+    const d = new Date(ts);
+    if (isNaN(d)) return "";
+    return `${String(d.getDate()).padStart(2,"0")}/${String(d.getMonth()+1).padStart(2,"0")} ${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`;
+  } catch (_) { return ""; }
+}
+
+function _robotIssueToText(issue) {
+  if (!issue) return "Sem anomalias\ndetectadas \u2713";
+  const plant  = issue.plant_name  || "Usina";
+  const device = issue.device_name ? ` \u2022 ${issue.device_name}` : "";
+  const msg    = issue.message     || "Insight detectado";
+  const ts     = _robotFormatTs(issue.ts);
+  const prefix = {
+    temp_sustained:"\ud83c\udf21", pr_declining:"\ud83d\udcc9", plant_shutdown:"\u26d4",
+    inv_clipping:"\u26a1", string_low:"\ud83d\udd0b", string_zero:"\u274c", sub_performance:"\ud83d\udcca"
+  }[issue.type] || "\ud83d\udcca";
+  return `${prefix} ${plant}${device}\n${msg}${ts ? "\n\ud83d\udd52 " + ts : ""}`;
+}
+
+function _robotBuildUrl(issue) {
+  if (!issue.plant_id) return null;
+  let url = "plant.html?plant_id=" + encodeURIComponent(issue.plant_id);
+  if (issue.device_id) url += "&device_id=" + encodeURIComponent(issue.device_id);
+  const invTypes = ["temp_sustained","inv_clipping","string_low","string_zero","sub_performance"];
+  if (issue.device_type === "inverter" || invTypes.includes(issue.type)) url += "#sec-inverters";
+  return url;
+}
+
+function _robotGetState(issues) {
+  if (!issues || !issues.length) return "ok";
+  const nonShutdown = issues.filter(i => i.type !== "plant_shutdown");
+  // Só plant_shutdown → usina desligada → robô cinza/off
+  if (nonShutdown.length === 0) return "gray";
+  // Demais: vermelho (critical) ou amarelo (warning)
+  if (nonShutdown.some(i => i.severity === "critical")) return "critical";
+  return "warning";
+}
+
+function _robotTypewrite(text, onDone) {
+  const textEl = document.getElementById("robotBubbleText");
+  const cursorEl = document.getElementById("robotBubbleCursor");
+  if (!textEl || !cursorEl) return;
+  if (_ROBOT_STATE.typingTimer) { clearInterval(_ROBOT_STATE.typingTimer); _ROBOT_STATE.typingTimer = null; }
+  _ROBOT_STATE.isTyping = true;
+  cursorEl.classList.remove("hidden");
+  textEl.textContent = "";
+  const txt = text.length > _ROBOT_MAX_CHARS ? text.slice(0, _ROBOT_MAX_CHARS) + "..." : text;
+  let ci = 0;
+  _ROBOT_STATE.typingTimer = setInterval(() => {
+    if (ci < txt.length) { textEl.textContent = txt.slice(0, ++ci); }
+    else {
+      clearInterval(_ROBOT_STATE.typingTimer); _ROBOT_STATE.typingTimer = null;
+      _ROBOT_STATE.isTyping = false; cursorEl.classList.add("hidden");
+      if (onDone) onDone();
+    }
+  }, _ROBOT_TYPE_SPEED);
+}
+
+function _robotSetBubbleOk() {
+  const textEl = document.getElementById("robotBubbleText");
+  const cursorEl = document.getElementById("robotBubbleCursor");
+  if (textEl) textEl.textContent = "Ok!";
+  if (cursorEl) cursorEl.classList.add("hidden");
+  _robotUpdateExpandBtn(false);
+  _ROBOT_STATE.userRead = true;
+}
+
+function _robotDismissBubble() {
+  _robotSetBubbleOk();
+  if (_ROBOT_STATE.dismissTimer) { clearTimeout(_ROBOT_STATE.dismissTimer); _ROBOT_STATE.dismissTimer = null; }
+}
+
+function _robotScheduleDismiss() {
+  if (_ROBOT_STATE.dismissTimer) clearTimeout(_ROBOT_STATE.dismissTimer);
+  _ROBOT_STATE.dismissTimer = setTimeout(() => {
+    if (!_ROBOT_STATE.reportOpen && _ROBOT_STATE.bubbleVisible) {
+      _robotShowBubble(false);
+      if (_ROBOT_STATE.dismissTimer) { clearTimeout(_ROBOT_STATE.dismissTimer); _ROBOT_STATE.dismissTimer = null; }
+    }
+  }, _ROBOT_DISMISS_DELAY);
+}
+
+function _robotUpdateAvatar(state, overrideSrc) {
+  const img = document.getElementById("robotImg");
+  if (!img) return;
+  if (_ROBOT_STATE.avatarTimer) { clearTimeout(_ROBOT_STATE.avatarTimer); _ROBOT_STATE.avatarTimer = null; }
+  if (overrideSrc) {
+    if (!img.src.endsWith(overrideSrc)) img.src = overrideSrc;
+    _ROBOT_STATE.avatarState = state + "_override";
+    return;
+  }
+  const map = _ROBOT_AVATAR_MAP[state] || _ROBOT_AVATAR_MAP.ok;
+  if (map.gif && _ROBOT_STATE.avatarState !== state) {
+    img.src = map.gif;
+    _ROBOT_STATE.avatarState = state;
+    _ROBOT_STATE.avatarTimer = setTimeout(() => {
+      _ROBOT_STATE.avatarTimer = null;
+      img.src = map.png;
+      img.classList.remove("robot-squish");
+      void img.offsetWidth;
+      img.classList.add("robot-squish");
+      img.addEventListener("animationend", () => img.classList.remove("robot-squish"), { once: true });
+    }, _ROBOT_AVATAR_GIF_MS);
+  } else if (!map.gif && _ROBOT_STATE.avatarState !== state) {
+    img.src = map.png;
+    _ROBOT_STATE.avatarState = state;
+  }
+}
+
+function _robotUpdateBubble(state) {
+  const el = document.getElementById("robotBubble");
+  if (!el) return;
+  el.classList.remove("state-ok","state-warning","state-critical","state-gray");
+  el.classList.add("state-" + state);
+}
+
+function _robotShowBubble(show) {
+  const el = document.getElementById("robotBubble");
+  if (el) el.classList.toggle("visible", !!show);
+  _ROBOT_STATE.bubbleVisible = !!show;
+}
+
+function _robotUpdateBadge(n) {
+  const el = document.getElementById("robotBadge");
+  if (!el) return;
+  if (n > 0) { el.textContent = n > 99 ? "99+" : n; el.classList.remove("hidden"); }
+  else el.classList.add("hidden");
+}
+
+function _robotUpdateExpandBtn(show) {
+  const el = document.getElementById("robotBubbleExpand");
+  if (el) el.classList.toggle("visible", !!show);
+}
+
+function _robotStartCycle() {
+  if (_ROBOT_STATE.cycleTimer) { clearTimeout(_ROBOT_STATE.cycleTimer); _ROBOT_STATE.cycleTimer = null; }
+  const issues = _ROBOT_STATE.issues;
+  if (!issues.length) return;
+  if (_ROBOT_STATE.reportOpen || _ROBOT_STATE.userRead) return;
+  _robotTypewrite(_robotIssueToText(issues[0]), () => _robotScheduleDismiss());
+}
+
+function _robotRenderReport(issues) {
+  const list = document.getElementById("robotReportList");
+  if (!list) return;
+  if (!issues || !issues.length) {
+    list.innerHTML = '<div class="robot-report-empty">Sem anomalias\ndetectadas \u2713</div>';
+    _pRobotRenderPrefsFooter();
+    return;
+  }
+
+  const groups = {};
+  issues.forEach(iss => {
+    if (!groups[iss.type]) groups[iss.type] = [];
+    groups[iss.type].push(iss);
+  });
+
+  const types = Object.keys(groups).sort((a, b) => {
+    const oa = (_ROBOT_CATEGORY_META[a] || { order: 99 }).order;
+    const ob = (_ROBOT_CATEGORY_META[b] || { order: 99 }).order;
+    return oa - ob;
+  });
+
+  const openCats = _robotGetOpenCats();
+
+  const html = types.map(type => {
+    const meta   = _ROBOT_CATEGORY_META[type] || { label: "Outros" };
+    const icon   = _ROBOT_CATEGORY_ICONS[type] || "fa-list";
+    const items  = groups[type];
+    const isOpen = openCats.includes(type);
+    const worst  = items.some(i => i.severity === "critical") ? "critical"
+                 : items.some(i => i.severity === "warning")  ? "warning" : "info";
+
+    const rows = items.map(iss => {
+      const sc = "sev-" + (iss.severity || "info");
+      const deviceUrl = _robotBuildUrl(iss);
+      let deviceLine = iss.device_name || "";
+      if (iss.cabin_name) deviceLine += (deviceLine ? " \u2022 " : "") + iss.cabin_name;
+      const tsStr = _robotFormatTs(iss.ts);
+      return `<div class="robot-cat-item" data-href="${deviceUrl || ''}">
+        <span class="robot-issue-dot ${sc}"></span>
+        <div class="robot-cat-item-body">
+          <div class="robot-cat-item-plant">${iss.plant_name || "\u2014"}${tsStr ? ` <span class="robot-issue-ts">${tsStr}</span>` : ""}</div>
+          <div class="robot-cat-item-msg">${iss.message || "\u2014"}</div>
+          ${deviceLine ? `<div class="robot-cat-item-device">${deviceLine}</div>` : ""}
+        </div>
+        ${deviceUrl ? '<i class="fa-solid fa-arrow-up-right-from-square robot-cat-item-go"></i>' : ''}
+      </div>`;
+    }).join("");
+
+    return `<div class="robot-cat-block ${isOpen ? "is-open" : ""}" data-cat="${type}">
+      <button type="button" class="robot-cat-header" data-cat="${type}">
+        <i class="fa-solid ${icon} robot-cat-icon sev-icon-${worst}"></i>
+        <span class="robot-cat-label">${meta.label}</span>
+        <span class="robot-cat-count">${items.length}</span>
+        <i class="fa-solid fa-chevron-down robot-cat-chevron"></i>
+      </button>
+      <div class="robot-cat-items">${rows}</div>
+    </div>`;
+  }).join("");
+
+  list.innerHTML = html;
+
+  list.querySelectorAll(".robot-cat-header").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const type  = btn.dataset.cat;
+      const block = list.querySelector(`.robot-cat-block[data-cat="${type}"]`);
+      const nowOpen = _robotToggleCat(type);
+      if (block) block.classList.toggle("is-open", nowOpen);
+    });
+  });
+
+  list.querySelectorAll(".robot-cat-item[data-href]").forEach(item => {
+    if (item.dataset.href) {
+      item.style.cursor = "pointer";
+      item.addEventListener("click", () => { window.location.href = item.dataset.href; });
+    }
+  });
+
+  _pRobotRenderPrefsFooter();
+}
+
+function _robotToggleReport(forceOpen) {
+  const panel = document.getElementById("robotReport");
+  const badge = document.getElementById("robotBadge");
+  if (!panel) return;
+  const open = forceOpen !== undefined ? forceOpen : !_ROBOT_STATE.reportOpen;
+  if (open) {
+    _robotRenderReport(_ROBOT_STATE.issues);
+    _pRobotRenderPrefsFooter();
+    panel.classList.remove("hidden");
+    if (badge) badge.classList.add("hidden");
+    _ROBOT_STATE.reportOpen = true;
+    if (_ROBOT_STATE.cycleTimer) { clearTimeout(_ROBOT_STATE.cycleTimer); _ROBOT_STATE.cycleTimer = null; }
+    if (_ROBOT_STATE.dismissTimer) { clearTimeout(_ROBOT_STATE.dismissTimer); _ROBOT_STATE.dismissTimer = null; }
+  } else {
+    panel.classList.add("hidden");
+    if (badge && _ROBOT_STATE.issues.length > 0) badge.classList.remove("hidden");
+    _ROBOT_STATE.reportOpen = false;
+    _robotDismissBubble();
+    _robotUpdateAvatar("ok", "img/roboaiotiok.png");
+  }
+}
+
+async function _robotRefresh() {
+  if (_pRobotIsMuted()) {
+    _pRobotApplyMutedState();
+    return;
+  }
+  _pRobotRemoveMutedState();
+  const data = await _robotFetchDiag();
+  if (!data) return;
+  const issues = (Array.isArray(data.issues) ? data.issues : [])
+    .filter(i => _pRobotIsTypeEnabled(i.type));
+  const newHash = _robotIssuesHash(issues);
+  const issuesChanged = newHash !== _ROBOT_STATE.lastIssueHash;
+  _ROBOT_STATE.lastIssueHash = newHash;
+  _ROBOT_STATE.issues = issues;
+  const state = _robotGetState(issues);
+
+  _robotUpdateBubble(state);
+  _robotUpdateBadge(issues.length);
+  _robotUpdateExpandBtn(issues.length > 1);
+
+  if (!issues.length) {
+    _ROBOT_STATE.currentIndex = 0;
+    if (!_ROBOT_STATE.bubbleVisible || _ROBOT_STATE.lastState !== "ok") {
+      _ROBOT_STATE.userRead = false;
+      _robotUpdateAvatar("ok");
+      _robotShowBubble(true);
+      _robotTypewrite("Sem anomalias\ndetectadas \u2713", () => _robotScheduleDismiss());
+    }
+    _ROBOT_STATE.lastState = "ok";
+    return;
+  }
+
+  _ROBOT_STATE.lastState = state;
+  _robotShowBubble(true);
+  if (_ROBOT_STATE.reportOpen) _robotRenderReport(issues);
+
+  if (issuesChanged) {
+    _ROBOT_STATE.userRead = false;
+    _ROBOT_STATE.currentIndex = 0;
+    _robotUpdateAvatar(state);
+    _robotStartCycle();
+  }
+}
+
+function _pRobotApplyMutedState() {
+  _robotShowBubble(false);
+  _robotUpdateBadge(0);
+  const img = document.getElementById("robotImg");
+  if (img) img.src = "img/roboaiotipeek.png";
+  const container = document.getElementById("robotAssistant");
+  if (container) container.classList.add("robot-muted-peek");
+  const panel = document.getElementById("robotReport");
+  if (panel) panel.classList.add("hidden");
+  _ROBOT_STATE.reportOpen = false;
+}
+
+function _pRobotRemoveMutedState() {
+  const container = document.getElementById("robotAssistant");
+  if (container) container.classList.remove("robot-muted-peek");
+}
+
+const _ROBOT_TYPE_LABELS = {
+  temp_sustained:  '<i class="fa-solid fa-temperature-high"></i> Temperatura elevada',
+  plant_shutdown:  '<i class="fa-solid fa-power-off"></i> Usina desligada',
+  pr_declining:    '<i class="fa-solid fa-arrow-trend-down"></i> PR em queda',
+  sub_performance: '<i class="fa-solid fa-chart-bar"></i> Sub-performance',
+  inv_clipping:    '<i class="fa-solid fa-bolt"></i> Clipping',
+  string_zero:     '<i class="fa-solid fa-circle-xmark"></i> String zerada',
+  string_low:      '<i class="fa-solid fa-battery-quarter"></i> String abaixo da m\u00e9dia',
+};
+
+function _pRobotRenderPrefsFooter() {
+  const panel = document.getElementById("robotReport");
+  if (!panel) return;
+  let footer = panel.querySelector(".robot-prefs-footer");
+  if (!footer) {
+    footer = document.createElement("div");
+    footer.className = "robot-prefs-footer";
+    panel.appendChild(footer);
+  }
+  const prefs = _pRobotGetNotifPrefs();
+  const isMuted = prefs.muted === true;
+  const disabled = prefs.disabled_types || [];
+
+  footer.innerHTML = `
+    <div class="robot-prefs-section">
+      <div class="robot-prefs-title">Prefer\u00eancias de notifica\u00e7\u00e3o</div>
+      <label class="robot-prefs-toggle">
+        <input type="checkbox" id="robotPrefMuteAll" ${isMuted ? "checked" : ""}>
+        <span>Silenciar todas as notifica\u00e7\u00f5es</span>
+      </label>
+      <div class="robot-prefs-types ${isMuted ? "robot-prefs-types--disabled" : ""}" id="robotPrefTypesList">
+        ${Object.entries(_ROBOT_TYPE_LABELS).map(([type, label]) => `
+          <label class="robot-prefs-toggle robot-prefs-toggle--sub">
+            <input type="checkbox" class="robot-pref-type-cb"
+                   data-type="${type}"
+                   ${disabled.includes(type) ? "" : "checked"}
+                   ${isMuted ? "disabled" : ""}>
+            <span>${label}</span>
+          </label>`).join("")}
+      </div>
+    </div>`;
+
+  const muteAll = footer.querySelector("#robotPrefMuteAll");
+  muteAll?.addEventListener("change", () => {
+    const p = _pRobotGetNotifPrefs();
+    p.muted = muteAll.checked;
+    _pRobotSaveNotifPrefs(p);
+    _pRobotRenderPrefsFooter();
+    if (p.muted) {
+      _pRobotApplyMutedState();
+    } else {
+      _pRobotRemoveMutedState();
+      _robotRefresh();
+    }
+  });
+
+  footer.querySelectorAll(".robot-pref-type-cb").forEach(cb => {
+    cb.addEventListener("change", () => {
+      const p = _pRobotGetNotifPrefs();
+      let dis = p.disabled_types || [];
+      const type = cb.dataset.type;
+      if (cb.checked) {
+        dis = dis.filter(t => t !== type);
+      } else {
+        if (!dis.includes(type)) dis.push(type);
+      }
+      p.disabled_types = dis;
+      _pRobotSaveNotifPrefs(p);
+    });
+  });
+}
+
+function _wireRobotPlant() {
+  if (!document.getElementById("robotAssistant")) return;
+  const avatar    = document.getElementById("robotAvatar");
+  const expandBtn = document.getElementById("robotBubbleExpand");
+  const closeBtn  = document.getElementById("robotReportClose");
+  const bubble    = document.getElementById("robotBubble");
+
+  if (avatar) avatar.addEventListener("click", () => _robotToggleReport());
+  if (expandBtn) expandBtn.addEventListener("click", e => { e.stopPropagation(); _robotToggleReport(true); });
+  if (closeBtn) closeBtn.addEventListener("click", () => _robotToggleReport(false));
+  if (bubble) bubble.addEventListener("click", () => {
+    if (_ROBOT_STATE.issues.length > 1) _robotToggleReport(true);
+    else if (_ROBOT_STATE.issues.length === 1) {
+      const url = _robotBuildUrl(_ROBOT_STATE.issues[0]);
+      if (url) window.location.href = url;
+    } else {
+      _robotDismissBubble();
+    }
+  });
+  document.addEventListener("click", e => {
+    const el = document.getElementById("robotAssistant");
+    if (_ROBOT_STATE.reportOpen && el && !el.contains(e.target)) _robotToggleReport(false);
+  });
+
+  // Initial fetch + periodic refresh
+  _robotRefresh().catch(e => console.warn("[ROBOT]", e));
+  setInterval(() => _robotRefresh().catch(e => console.warn("[ROBOT]", e)), 30000);
+}
+
 document.addEventListener("DOMContentLoaded", async () => {
   document.body.classList.add("plant-enter");
+  const expectedMtdPlaceholder = document.getElementById("monthlyKpiExpectedMtd");
+  if (expectedMtdPlaceholder) expectedMtdPlaceholder.textContent = "-";
   setTimeout(() => document.body.classList.remove("plant-enter"), 500);
   setupInverterToggles();
   setupWeatherExpand();
   wireDailyChartZoomControlsOnce();
   initTrackersPanel();
   setupDeviceNav();
+  initInvViewToggle();
   setupPlantAlarmMenu();
   renderAlarmMenuButton();
   renderRelayCommandBar(null);
   renderMultimeterCommandBar(null);
   wireDeviceCommandButtons(document);
+  _wireRobotPlant();
   document.addEventListener("click", () => closeAllDeviceCommandMenus());
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape") closeAllDeviceCommandMenus();
@@ -4010,6 +7203,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
 
   try {
+    void fetchPlantCapabilities(PLANT_ID);
     const refreshPromise = refreshRealtimeEverything();
 
     const [dailyRaw, monthlyRaw] = await Promise.all([
