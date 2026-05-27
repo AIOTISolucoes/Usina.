@@ -153,7 +153,7 @@ async function loadWizardOptions() {
     const level2Names = level1.flatMap((i) => (i.children || []).map((c) => c.name))
     populate("f-class2", level2Names)
   } catch (_err) {
-    // silently fail — selects keep "Selecionar..." only
+    console.warn("[loadWizardOptions] falha ao carregar opções:", _err?.message || _err)
   }
 }
 
