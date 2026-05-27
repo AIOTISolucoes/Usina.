@@ -127,7 +127,12 @@ async function loadWizardOptions() {
   function populate(selectId, names) {
     const el = document.getElementById(selectId)
     if (!el) return
+    // clear all options except the first placeholder ("Selecionar...")
+    while (el.options.length > 1) el.remove(1)
+    const seen = new Set()
     names.forEach((name) => {
+      if (seen.has(name)) return
+      seen.add(name)
       const opt = document.createElement("option")
       opt.value = name
       opt.textContent = name
