@@ -3224,10 +3224,11 @@ function buildUnifilarOverviewHTML(groups, relayData, multimeterData) {
     ?? (relayItem?.device_id != null ? String(relayItem.device_id) : null)
     ?? (relayItem?.relay_id  != null ? String(relayItem.relay_id)  : null);
 
-  // DJMT state: based on command state (not relay online status — relay is a separate device)
-  // Default "on" = closed (null = unknown/yellow), "off" = tripped/open
-  const djmtCmdState = relayDevId ? getDevicePersistentState("relay", relayDevId, null) : null;
-  const djmtTripped  = djmtCmdState === "off" ? true : djmtCmdState === "on" ? false : null;
+  // DJMT state: independent of relay — based on whether the plant has active power
+  // Green (closed) = plant producing, Yellow (unknown) = no data, Red (open) = commanded off
+  const djmtBkId     = getBreaker('djmt', null, null)?.id;
+  const djmtCmdState = djmtBkId ? getDevicePersistentState("breaker", String(djmtBkId), null) : null;
+  const djmtTripped  = djmtCmdState === "off" ? true : anyOn ? false : null;
   const djmtOff      = djmtCmdState === "off"; // propagate to downstream wires
 
   // DJBT wire cascade: if no inverters are active, mark as idle
@@ -3268,12 +3269,10 @@ function buildUnifilarOverviewHTML(groups, relayData, multimeterData) {
 
       <!-- DJMT + Relé de Proteção ao lado -->
       <div class="unif-djmt-row">
-        <div class="unif-spine-device unif-spine-dj${canCmd && relayDevId ? ' is-clickable' : ''}"
-             id="unifNodeDjmt"
-             ${canCmd && relayDevId ? `data-dj-relay-id="${relayDevId}"` : ''}>
+        <div class="unif-spine-device unif-spine-dj"
+             id="unifNodeDjmt">
           ${unifSVGDisjuntor(djmtTripped, 'large')}
           <span class="unif-node-lbl unif-lbl-dj">${cabinMapEscape(getBreakerName('djmt', null, null, 'DJMT'))}</span>
-          ${canCmd && relayDevId ? '<span class="unif-dj-hint">Comandar</span>' : ''}
         </div>
         ${hasRelay ? `
         <div class="unif-relay-arm">
@@ -3658,14 +3657,7 @@ function buildUnifilarOverview() {
     });
   });
 
-  // ── Click: DJMT → command console do relé ──
-  el.querySelectorAll("[data-dj-relay-id]").forEach(btn => {
-    btn.addEventListener("click", (e) => {
-      e.stopPropagation();
-      const id = btn.dataset.djRelayId;
-      if (id && _canSendCommand()) openCommandConsole({ deviceType: "relay", deviceId: id });
-    });
-  });
+  // DJMT: não é mais clicável (não é o relé — relé tem seu próprio ícone ao lado)
 }
 
 function refreshCabineMapCards(invertersRaw) {
