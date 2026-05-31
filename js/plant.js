@@ -382,7 +382,25 @@ let PLANT_CAPABILITIES = {
   relayDeviceId: null,
   transformerDeviceId: null,
   multimeterDeviceId: null,
+  breakers: [],          // [{id, level, name, cabin_id, device_id}]
 };
+
+/* ── Breaker helpers ── */
+function getBreaker(level, cabinId, deviceId) {
+  const bk = PLANT_CAPABILITIES.breakers;
+  if (!bk || !bk.length) return null;
+  if (level === 'djmt') return bk.find(b => b.level === 'djmt') || null;
+  if (level === 'djbt') return bk.find(b => b.level === 'djbt' && b.cabin_id === cabinId) || null;
+  if (level === 'djinv') return bk.find(b => b.level === 'djinv' && b.device_id === deviceId) || null;
+  return null;
+}
+function hasBreaker(level, cabinId, deviceId) {
+  return getBreaker(level, cabinId, deviceId) != null;
+}
+function getBreakerName(level, cabinId, deviceId, fallback) {
+  const b = getBreaker(level, cabinId, deviceId);
+  return b?.name || fallback;
+}
 
 const API_BASE = "https://jgeg9i0js1.execute-api.us-east-1.amazonaws.com";
 const PLANT_REFRESH_INTERVAL_MS = 10000;
@@ -1428,6 +1446,7 @@ async function fetchPlantCapabilities(plantId) {
     PLANT_CAPABILITIES.relayDeviceId       = data.relay_device_id != null ? String(data.relay_device_id) : null;
     PLANT_CAPABILITIES.transformerDeviceId = data.transformer_device_id != null ? String(data.transformer_device_id) : null;
     PLANT_CAPABILITIES.multimeterDeviceId  = data.multimeter_device_id != null ? String(data.multimeter_device_id) : null;
+    PLANT_CAPABILITIES.breakers            = Array.isArray(data.breakers) ? data.breakers : [];
   } catch (e) {
     console.warn('[fetchPlantCapabilities]', e);
   }
@@ -3013,7 +3032,7 @@ function openBulkCommandConsole() {
         <div class="bulk-cmd-title-wrap">
           ${unifSVGDisjuntor(null, 'large')}
           <div>
-            <div class="bulk-cmd-title">DJBT — Disjuntor Geral</div>
+            <div class="bulk-cmd-title">${cabinMapEscape(getBreakerName('djbt', null, null, 'DJBT'))} — Disjuntor Geral</div>
             <div class="bulk-cmd-subtitle">Todos os inversores</div>
           </div>
         </div>
@@ -3253,7 +3272,7 @@ function buildUnifilarOverviewHTML(groups, relayData, multimeterData) {
              id="unifNodeDjmt"
              ${canCmd && relayDevId ? `data-dj-relay-id="${relayDevId}"` : ''}>
           ${unifSVGDisjuntor(djmtTripped, 'large')}
-          <span class="unif-node-lbl unif-lbl-dj">DJMT</span>
+          <span class="unif-node-lbl unif-lbl-dj">${cabinMapEscape(getBreakerName('djmt', null, null, 'DJMT'))}</span>
           ${canCmd && relayDevId ? '<span class="unif-dj-hint">Comandar</span>' : ''}
         </div>
         ${hasRelay ? `
@@ -3302,7 +3321,7 @@ function buildUnifilarOverviewHTML(groups, relayData, multimeterData) {
              id="unifDjGeral"
              ${canCmd ? 'onclick="typeof openBulkCommandConsole===\'function\'&&openBulkCommandConsole()"' : ''}>
           ${unifSVGDisjuntor(anyOn ? false : null, 'large')}
-          <span class="unif-node-lbl unif-lbl-dj">DJBT</span>
+          <span class="unif-node-lbl unif-lbl-dj">${cabinMapEscape(getBreakerName('djbt', groups.length === 1 ? groups[0]?.id : null, null, 'DJBT'))}</span>
           ${canCmd ? '<span class="unif-dj-hint">Comandar</span>' : ''}
         </div>
         ${hasMultimeter ? `
