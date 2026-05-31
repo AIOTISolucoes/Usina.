@@ -3269,10 +3269,12 @@ function buildUnifilarOverviewHTML(groups, relayData, multimeterData) {
 
       <!-- DJMT + Relé de Proteção ao lado -->
       <div class="unif-djmt-row">
-        <div class="unif-spine-device unif-spine-dj"
-             id="unifNodeDjmt">
+        <div class="unif-spine-device unif-spine-dj${canCmd ? ' is-clickable' : ''}"
+             id="unifNodeDjmt"
+             ${canCmd && djmtBkId ? `data-dj-breaker-id="${djmtBkId}"` : ''}>
           ${unifSVGDisjuntor(djmtTripped, 'large')}
           <span class="unif-node-lbl unif-lbl-dj">${cabinMapEscape(getBreakerName('djmt', null, null, 'DJMT'))}</span>
+          ${canCmd ? '<span class="unif-dj-hint">Comandar</span>' : ''}
         </div>
         ${hasRelay ? `
         <div class="unif-relay-arm">
@@ -3657,7 +3659,14 @@ function buildUnifilarOverview() {
     });
   });
 
-  // DJMT: não é mais clicável (não é o relé — relé tem seu próprio ícone ao lado)
+  // ── Click: DJMT → command console do disjuntor geral (breaker) ──
+  el.querySelectorAll("[data-dj-breaker-id]").forEach(btn => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const id = btn.dataset.djBreakerId;
+      if (id && _canSendCommand()) openCommandConsole({ deviceType: "breaker", deviceId: id });
+    });
+  });
 }
 
 function refreshCabineMapCards(invertersRaw) {
