@@ -5016,7 +5016,7 @@ function renderInvertersRows(inverters) {
 // ✅ MERGE: config(/strings) + realtime(/strings/realtime)
 // ======================================================
 function mergeStringsPayload(configPayload, realtimePayload, inverterRealId) {
-  const maxStrings = 30;
+  const maxStrings = 40;
 
   const cfgList = configPayload?.strings ?? [];
   const rtList = realtimePayload?.items ?? realtimePayload?.strings ?? [];
