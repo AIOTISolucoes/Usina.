@@ -4560,10 +4560,6 @@ function _hasRestrictedPlantAccess() {
 
 function _applyPartnerRestrictions() {
   if (!_hasRestrictedPlantAccess()) return;
-  ["btnAlarms", "btnEvents", "btnDataStudio"].forEach(id => {
-    const el = document.getElementById(id);
-    if (el) el.style.display = "none";
-  });
 }
 
 document.addEventListener("DOMContentLoaded", async () => {
@@ -4584,11 +4580,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   _applyPartnerRestrictions();
 
   const savedView = localStorage.getItem("currentView") || "overview";
-  if (_hasRestrictedPlantAccess() && savedView !== "overview") {
-    showView("overview");
-  } else {
-    showView(savedView);
-  }
+  showView(savedView);
   syncTopSummaryLayout();
 
   wirePortfolioControls();
