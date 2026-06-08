@@ -385,6 +385,11 @@ function computeGlobalChipsFromPlants(plantsRaw) {
 function refreshTopChipsGlobalFromPlants(plants) {
   const r = computeGlobalChipsFromPlants(plants);
 
+  if (r.total === 0 && lastValidPlants.length > 0) {
+    console.warn("[INV CHIPS - GLOBAL] skipped: computed all zeros");
+    return;
+  }
+
   setChipCount("countGen", r.gen, `Gerando (global): ${r.gen} de ${r.total}`);
   setChipCount("countNoComm", r.noComm, `Sem comunicação (global): ${r.noComm} de ${r.total}`);
   setChipCount("countOff", r.off, `Off (global): ${r.off} de ${r.total}`);
@@ -600,6 +605,11 @@ function refreshTopChipsGlobalFromSummary(summary) {
   const noComm = Number(summary?.no_comm ?? summary?.noComm ?? 0) || 0;
   const off = Number(summary?.off ?? 0) || 0;
   const total = Number(summary?.total ?? (gen + noComm + off) ?? 0) || 0;
+
+  if (total === 0 && lastValidPlants.length > 0) {
+    console.warn("[INV CHIPS - GLOBAL SUMMARY] skipped: summary returned all zeros");
+    return;
+  }
 
   setChipCount("countGen", gen, `Gerando (global): ${gen} de ${total}`);
   setChipCount("countNoComm", noComm, `Sem comunicação (global): ${noComm} de ${total}`);
@@ -4499,13 +4509,17 @@ async function refreshDashboard() {
   populateEventsPlantSelect(lastValidPlants);
 
   try {
-    alarms = await fetchActiveAlarms();
+    const freshAlarms = await fetchActiveAlarms();
+    if (Array.isArray(freshAlarms)) {
+      alarms = freshAlarms;
+    }
   } catch (err) {
     console.error("Erro ao buscar alarmes ativos:", err);
-    alarms = [];
   }
 
-  lastAlarmSeverityByPlant = buildPlantAlarmSeverityMap(alarms);
+  if (alarms.length > 0 || lastAlarmSeverityByPlant.size === 0) {
+    lastAlarmSeverityByPlant = buildPlantAlarmSeverityMap(alarms);
+  }
 
   // Ícone de alarme na sidebar pisca vermelho se houver qualquer alarme ativo
   const alarmBtn = document.getElementById("btnAlarms");
