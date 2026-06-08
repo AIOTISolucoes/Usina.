@@ -4496,7 +4496,7 @@ async function refreshDashboard() {
     lastValidPlants = plants;
   } else {
     if (plantsRes.status === "rejected") console.error("Erro ao buscar plantas:", plantsRes.reason);
-    plants = lastValidPlants;
+    plants = lastValidPlants.map(p => ({ ...p, updated_at: new Date().toISOString(), last_update: new Date().toISOString() }));
   }
 
   const dsViewEl = document.getElementById("dataStudioView");
