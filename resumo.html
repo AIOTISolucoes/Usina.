@@ -13,6 +13,10 @@
     <script src="https://cdn.jsdelivr.net/npm/hammerjs@2.0.8/hammer.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>
 
+    <meta name="theme-color" content="#7FD055" />
+    <link rel="manifest" href="manifest.json" />
+    <link rel="icon" type="image/png" sizes="192x192" href="img/icon-192.png" />
+    <link rel="apple-touch-icon" href="img/icon-192.png" />
     <link rel="stylesheet" href="css/style.css" />
     <link rel="stylesheet" href="css/layout.css" />
   </head>
@@ -120,7 +124,8 @@
           <svg class="psf-ring-svg" viewBox="0 0 70 70">
             <circle class="psf-ring-bg" cx="35" cy="35" r="30"/>
             <circle class="psf-ring-fill" id="psfRingFill" cx="35" cy="35" r="30"
-              stroke-dasharray="0 188.5"/>
+              stroke-dasharray="0 188.5"
+              stroke-dashoffset="47.1"/>
           </svg>
           <span class="psf-ring-label" id="psfCapacityPct">—</span>
         </div>
@@ -778,13 +783,56 @@
 
     <!-- Painel de relatório (também sai para a direita no desktop) -->
     <div class="robot-report hidden" id="robotReport">
+      <div class="robot-report-resize" id="robotReportResizeLeft"></div>
+      <div class="robot-report-resize-top" id="robotReportResizeTop"></div>
       <div class="robot-report-header">
-        <span class="robot-report-title">
-          <i class="fa-solid fa-clipboard-list"></i> Diagnóstico
-        </span>
+        <div class="robot-report-tabs">
+          <button class="robot-tab active" data-tab="diag">
+            <i class="fa-solid fa-clipboard-list"></i> Diagnóstico
+          </button>
+          <button class="robot-tab" data-tab="ronda">
+            <i class="fa-solid fa-route"></i> Ronda Diária
+          </button>
+          <button class="robot-tab" data-tab="report">
+            <i class="fa-solid fa-file-lines"></i> Relatório
+          </button>
+        </div>
         <button class="robot-report-close" id="robotReportClose">×</button>
       </div>
       <div class="robot-report-list" id="robotReportList"></div>
+      <div class="robot-ronda-content hidden" id="robotRondaContent"></div>
+      <div class="robot-report-content hidden" id="robotReportContent"></div>
+    </div>
+    <div class="ronda-fullpanel hidden" id="rondaFullPanel">
+      <div class="ronda-fullpanel-header">
+        <div class="ronda-fullpanel-title">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#39e58c" stroke-width="2"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
+          <span>Ronda Diária</span>
+          <span class="ronda-fullpanel-plant" id="rondaFullPlantName"></span>
+        </div>
+        <div class="ronda-fullpanel-actions">
+          <input type="date" class="ronda-date-picker ronda-full-date" id="rondaFullDatePicker">
+          <button class="ronda-btn report-btn-pdf" id="rondaFullDownloadPdf"><i class="fa-solid fa-file-pdf"></i> PDF</button>
+          <button class="ronda-fullpanel-close" id="rondaFullClose"><i class="fa-solid fa-xmark"></i></button>
+        </div>
+      </div>
+      <div class="ronda-fullpanel-body" id="rondaFullBody"></div>
+    </div>
+
+    <div class="ronda-fullpanel hidden" id="reportFullPanel">
+      <div class="ronda-fullpanel-header">
+        <div class="ronda-fullpanel-title">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#39e58c" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+          <span>Relatório de Performance</span>
+          <span class="ronda-fullpanel-plant" id="reportFullPlantName"></span>
+        </div>
+        <div class="ronda-fullpanel-actions">
+          <button class="ronda-btn report-btn-pdf" id="reportFullPdf"><i class="fa-solid fa-file-pdf"></i> PDF</button>
+          <!-- CSV removido, só PDF -->
+          <button class="ronda-fullpanel-close" id="reportFullClose"><i class="fa-solid fa-xmark"></i></button>
+        </div>
+      </div>
+      <div class="ronda-fullpanel-body" id="reportFullBody"></div>
     </div>
 
     <!-- Avatar -->
@@ -797,5 +845,6 @@
 
   </div>
 
+  <script src="js/pwa.js"></script>
   </body>
   </html>
