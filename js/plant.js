@@ -379,10 +379,12 @@ let PLANT_CAPABILITIES = {
   hasRelay: null,
   hasTransformer: null,
   hasMultimeter: null,
+  hasTracker: null,
+  hasWeatherStation: null,
   relayDeviceId: null,
   transformerDeviceId: null,
   multimeterDeviceId: null,
-  breakers: [],          // [{id, level, name, cabin_id, device_id}]
+  breakers: [],
 };
 
 /* ── Breaker helpers ── */
@@ -1354,6 +1356,8 @@ async function acknowledgePlantAlarm(alarm) {
 }
 
 async function fetchTrackersRealtime(plantId) {
+  if (PLANT_CAPABILITIES.hasTracker === false) return { items: [], plant_center: null, plant_bounds: null };
+
   const res = await fetch(`${API_BASE}/plants/${plantId}/trackers/realtime`, {
     headers: buildAuthHeaders()
   });
@@ -1399,6 +1403,7 @@ async function fetchMonthlyEnergy(plantId) {
 }
 
 async function safeFetchRelayIfSupported(plantId) {
+  if (PLANT_CAPABILITIES.hasRelay === false) return null;
   if (RELAY_SUPPORTED === false) return null;
 
   const url = `${API_BASE}/plants/${plantId}/relay/realtime`;
@@ -1420,6 +1425,7 @@ async function safeFetchRelayIfSupported(plantId) {
 }
 
 async function safeFetchMultimeterIfSupported(plantId) {
+  if (PLANT_CAPABILITIES.hasMultimeter === false) return null;
   if (MULTIMETER_SUPPORTED === false) return null;
 
   const url = `${API_BASE}/plants/${plantId}/multimeter/realtime`;
@@ -1447,9 +1453,11 @@ async function fetchPlantCapabilities(plantId) {
     });
     if (!res.ok) return;
     const data = normalizeApiBody(await res.json());
-    PLANT_CAPABILITIES.hasRelay       = !!data.has_relay;
-    PLANT_CAPABILITIES.hasTransformer = !!data.has_transformer;
-    PLANT_CAPABILITIES.hasMultimeter  = !!data.has_multimeter;
+    PLANT_CAPABILITIES.hasRelay          = !!data.has_relay;
+    PLANT_CAPABILITIES.hasTransformer    = !!data.has_transformer;
+    PLANT_CAPABILITIES.hasMultimeter     = !!data.has_multimeter;
+    PLANT_CAPABILITIES.hasTracker        = !!data.has_tracker;
+    PLANT_CAPABILITIES.hasWeatherStation = !!data.has_weather_station;
     PLANT_CAPABILITIES.relayDeviceId       = data.relay_device_id != null ? String(data.relay_device_id) : null;
     PLANT_CAPABILITIES.transformerDeviceId = data.transformer_device_id != null ? String(data.transformer_device_id) : null;
     PLANT_CAPABILITIES.multimeterDeviceId  = data.multimeter_device_id != null ? String(data.multimeter_device_id) : null;
@@ -3221,14 +3229,9 @@ function buildUnifilarOverviewHTML(groups, relayData, multimeterData) {
 
   const canCmd = _canSendCommand();
 
-  // Capabilities (null = unknown → show by default)
-  const hasRelay       = PLANT_CAPABILITIES.hasRelay !== false;
-  const hasTransformer = PLANT_CAPABILITIES.hasTransformer !== false;
-  // Show multimeter if catalog confirmed it exists (regardless of realtime),
-  // OR catalog not yet loaded and there's realtime data (backward compat)
-  const hasMultimeter  = PLANT_CAPABILITIES.hasMultimeter === true
-    || (PLANT_CAPABILITIES.hasMultimeter !== false && meterItem != null);
-  // Fallback to realtime payload device_id when catalog not yet loaded
+  const hasRelay       = PLANT_CAPABILITIES.hasRelay === true;
+  const hasTransformer = PLANT_CAPABILITIES.hasTransformer === true;
+  const hasMultimeter  = PLANT_CAPABILITIES.hasMultimeter === true;
   const relayDevId = PLANT_CAPABILITIES.relayDeviceId
     ?? (relayItem?.device_id != null ? String(relayItem.device_id) : null)
     ?? (relayItem?.relay_id  != null ? String(relayItem.relay_id)  : null);
@@ -3390,6 +3393,25 @@ function initInvViewToggle() {
   switchView(false);
 }
 
+let _unifPdfLoaded = false;
+async function _loadUnifilarPdfBtn() {
+  if (_unifPdfLoaded) return;
+  _unifPdfLoaded = true;
+  const pdfBtn = document.getElementById("unifilarPdfBtn");
+  if (!pdfBtn || !PLANT_ID) return;
+  try {
+    const res = await fetch(`${API_BASE}/plants/${PLANT_ID}/unifilar-pdf`, {
+      headers: buildAuthHeaders()
+    });
+    if (!res.ok) return;
+    const data = await res.json();
+    const body = data.body ? (typeof data.body === "string" ? JSON.parse(data.body) : data.body) : data;
+    if (!body.url) return;
+    pdfBtn.style.display = "";
+    pdfBtn.onclick = () => window.open(body.url, "_blank");
+  } catch (err) { console.warn("[PDF] error:", err); }
+}
+
 function initUnifilarControls() {
   const btn = document.getElementById("unifilarBtnOverview");
   if (!btn || btn.dataset.unifCtrl) return;
@@ -3400,6 +3422,8 @@ function initUnifilarControls() {
   document.getElementById("unifilarPrev")?.addEventListener("click",        () => navigateUnifCabin(-1));
   document.getElementById("unifilarNext")?.addEventListener("click",        () => navigateUnifCabin(1));
   document.getElementById("unifilarCollapseBtn")?.addEventListener("click", toggleUnifSidePanel);
+
+  _loadUnifilarPdfBtn();
 
   const searchEl = document.getElementById("unifilarSearch");
   if (searchEl) {
@@ -4545,34 +4569,22 @@ function ensureDeviceMiniHeaders() {
   const relayHeader = document.querySelector("#relaySection .device-mini-header");
   const multimeterHeader = document.querySelector("#multimeterSection .device-mini-header");
 
-  const applyHeader = (headerEl) => {
+  const applyHeader = (headerEl, sectionId) => {
     if (!headerEl) return;
-    let spans = headerEl.querySelectorAll("span");
-
-    if (spans.length < 7) {
-      headerEl.innerHTML = `
-        <span></span>
-        <span></span>
-        <span>ACTIVE POWER</span>
-        <span>APPARENT POWER</span>
-        <span>REACTIVE POWER</span>
-        <span>ÚLTIMA LEITURA</span>
-        <span>${_canSendCommand() ? "COMANDOS" : ""}</span>
-      `;
-      spans = headerEl.querySelectorAll("span");
-    } else {
-      spans[0].textContent = "";
-      spans[1].textContent = "";
-      spans[2].textContent = "ACTIVE POWER";
-      spans[3].textContent = "APPARENT POWER";
-      spans[4].textContent = "REACTIVE POWER";
-      spans[5].textContent = "ÚLTIMA LEITURA";
-      spans[6].textContent = _canSendCommand() ? "COMANDOS" : "";
-    }
+    if (sectionId) headerEl.id = sectionId + "MiniHeaderRow";
+    headerEl.innerHTML = `
+      <span></span>
+      <span></span>
+      <span data-col="active">ACTIVE POWER</span>
+      <span data-col="apparent">APPARENT POWER</span>
+      <span data-col="reactive">REACTIVE POWER</span>
+      <span data-col="timestamp">ÚLTIMA LEITURA</span>
+      <span data-col="commands">${_canSendCommand() ? "COMANDOS" : ""}</span>
+    `;
   };
 
-  applyHeader(relayHeader);
-  applyHeader(multimeterHeader);
+  applyHeader(relayHeader, "relay");
+  applyHeader(multimeterHeader, "multimeter");
 }
 
 function pickDeviceMetricValue(primary, secondary, keys) {
@@ -4958,9 +4970,35 @@ function renderMultimeterCard(item) {
   }
 
   activePowerEl.textContent = formatMetricValue(activePower, "kW", 1);
-  apparentPowerEl.textContent = formatMetricValue(apparentPower, "kVA", 1);
   reactivePowerEl.textContent = formatMetricValue(reactivePower, "kvar", 1);
   tsEl.textContent = fmtDatePtBR(lastUpdate);
+
+  const hasApparent = apparentPower != null;
+  apparentPowerEl.textContent = hasApparent ? formatMetricValue(apparentPower, "kVA", 1) : "";
+  apparentPowerEl.style.display = hasApparent ? "" : "none";
+
+  const hdr = document.getElementById("multimeterMiniHeaderRow");
+  const apparentHdr = hdr?.querySelector('[data-col="apparent"]');
+  if (apparentHdr) apparentHdr.style.display = hasApparent ? "" : "none";
+
+  const cols = hasApparent
+    ? "14px minmax(250px,1.45fr) minmax(150px,0.95fr) minmax(150px,0.95fr) minmax(150px,0.95fr) minmax(190px,1fr) 88px"
+    : "14px minmax(250px,1.45fr) minmax(150px,0.95fr) minmax(150px,0.95fr) minmax(190px,1fr) 88px";
+  row.style.gridTemplateColumns = cols;
+  if (hdr) hdr.style.gridTemplateColumns = cols;
+
+  if (!hasApparent) {
+    reactivePowerEl.style.gridColumn = "4";
+    tsEl.style.gridColumn = "5";
+    const cmdWrap = document.getElementById("multimeterCommandBarWrap");
+    if (cmdWrap) cmdWrap.style.gridColumn = "6";
+  } else {
+    reactivePowerEl.style.gridColumn = "5";
+    tsEl.style.gridColumn = "6";
+    const cmdWrap = document.getElementById("multimeterCommandBarWrap");
+    if (cmdWrap) cmdWrap.style.gridColumn = "7";
+  }
+
   renderMultimeterDetailsPanel(item);
 }
 
@@ -5653,7 +5691,7 @@ function renderDailyChart() {
         yIrr: {
           position: "right",
           min: 0,
-          max: 1200,
+          max: powerAxisMax,
           ticks: { color: "#ffd84d", callback: v => `${v} W/m²` },
           grid: { drawOnChartArea: false }
         }
@@ -6181,8 +6219,9 @@ async function refreshRealtimeEverything() {
       RELAY_REALTIME = relayItem;
       window.RELAY_REALTIME = RELAY_REALTIME;
       PLANT_CATALOG.hasRelay = !!relayItem;
-      setRelaySectionVisible(RELAY_SUPPORTED !== false);
-      if (RELAY_SUPPORTED !== false) renderRelayCard(relayItem);
+      const showRelay = PLANT_CAPABILITIES.hasRelay === true;
+      setRelaySectionVisible(showRelay);
+      if (showRelay) renderRelayCard(relayItem);
       updateCabineRelayNode(relayItem);
     } else {
       console.error("[refreshRealtimeEverything][relay] erro", relayRes.reason);
@@ -6192,8 +6231,9 @@ async function refreshRealtimeEverything() {
       const multimeterItem = multimeterRes.value;
       MULTIMETER_REALTIME = multimeterItem;
       window.MULTIMETER_REALTIME = MULTIMETER_REALTIME;
-      setMultimeterSectionVisible(MULTIMETER_SUPPORTED !== false);
-      if (MULTIMETER_SUPPORTED !== false) renderMultimeterCard(multimeterItem);
+      const showMeter = PLANT_CAPABILITIES.hasMultimeter === true;
+      setMultimeterSectionVisible(showMeter);
+      if (showMeter) renderMultimeterCard(multimeterItem);
       updateCabineMeterNode(multimeterItem);
     } else {
       console.error("[refreshRealtimeEverything][multimeter] erro", multimeterRes.reason);
@@ -6204,26 +6244,30 @@ async function refreshRealtimeEverything() {
       TRACKERS_DATA = Array.isArray(trackersPayload?.items) ? trackersPayload.items : [];
       TRACKERS_PLANT_CENTER = trackersPayload?.plant_center ?? null;
       TRACKERS_PLANT_BOUNDS = trackersPayload?.plant_bounds ?? null;
-      const hasTrackers = Array.isArray(TRACKERS_DATA) && TRACKERS_DATA.some(
-        (t) => Number.isFinite(Number(t.latitude)) && Number.isFinite(Number(t.longitude))
-      );
-      if (hasTrackers) {
-        TRACKERS_LAST_HAS_DATA = true;
-      }
 
-      if (!TRACKERS_USER_OPENED) {
-        setTrackersSectionVisible(hasTrackers);
+      const catalogHasTracker = PLANT_CAPABILITIES.hasTracker === true;
+      if (!catalogHasTracker) {
+        setTrackersSectionVisible(false);
       } else {
-        setTrackersSectionVisible(TRACKERS_LAST_HAS_DATA);
-      }
+        const hasTrackerData = TRACKERS_DATA.some(
+          (t) => Number.isFinite(Number(t.latitude)) && Number.isFinite(Number(t.longitude))
+        );
+        if (hasTrackerData) TRACKERS_LAST_HAS_DATA = true;
 
-      if (TRACKERS_LAST_HAS_DATA) {
-        const trackersSection = document.getElementById("trackersSection");
-        const trackersVisible =
-          trackersSection &&
-          !trackersSection.classList.contains("trackers-hidden") &&
-          !trackersSection.classList.contains("is-collapsed");
-        if (trackersVisible && hasTrackers) renderTrackersPanel();
+        if (!TRACKERS_USER_OPENED) {
+          setTrackersSectionVisible(hasTrackerData);
+        } else {
+          setTrackersSectionVisible(TRACKERS_LAST_HAS_DATA);
+        }
+
+        if (TRACKERS_LAST_HAS_DATA) {
+          const trackersSection = document.getElementById("trackersSection");
+          const trackersVisible =
+            trackersSection &&
+            !trackersSection.classList.contains("trackers-hidden") &&
+            !trackersSection.classList.contains("is-collapsed");
+          if (trackersVisible && hasTrackerData) renderTrackersPanel();
+        }
       }
     } else {
       TRACKERS_DATA = [];
@@ -8157,7 +8201,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
 
   try {
-    void fetchPlantCapabilities(PLANT_ID);
+    await fetchPlantCapabilities(PLANT_ID);
     const refreshPromise = refreshRealtimeEverything();
 
     const [dailyRaw, monthlyRaw] = await Promise.all([
@@ -8176,6 +8220,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
 
     await refreshPromise;
+    if (DAILY) renderDailyChart();
     handleInitialPlantAction();
 
     setInterval(() => {

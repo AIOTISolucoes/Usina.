@@ -6365,6 +6365,23 @@ body.plant-map-mode .cabine-map-stage {
   width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
 }
 .unif-leg-dot--online  { background: #7fd055; box-shadow: 0 0 5px rgba(127,208,85,.8); }
+
+/* Botão PDF na topbar do unifilar */
+.unif-pdf-btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 5px 14px; border-radius: 7px;
+  font-size: 12px; font-weight: 600;
+  font-family: var(--font-display); letter-spacing: .04em;
+  color: #ef4444; background: rgba(239,68,68,.10);
+  border: 1px solid rgba(239,68,68,.25);
+  cursor: pointer; transition: background .2s, box-shadow .2s;
+  flex-shrink: 0;
+}
+.unif-pdf-btn:hover {
+  background: rgba(239,68,68,.20);
+  box-shadow: 0 0 10px rgba(239,68,68,.15);
+}
+.unif-pdf-btn i { font-size: 13px; }
 .unif-leg-dot--alarm   { background: #ef9f27; box-shadow: 0 0 5px rgba(239,159,39,.8); }
 .unif-leg-dot--offline { background: rgba(100,120,110,.5); border: 1px solid rgba(100,120,110,.3); }
 

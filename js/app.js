@@ -63,6 +63,10 @@ function _canAckAlarmUI() {
   const u = _getUser();
   return u.is_superuser === true || u.role_key === "admin_customer" || u.role_key === "operator";
 }
+function _canSendCommand() {
+  const u = _getUser();
+  return u.is_superuser === true || u.role_key === "admin_customer" || u.role_key === "operator";
+}
 
 // =============================================================================
 // CONFIGURAÇÃO GLOBAL E ESTADO
@@ -2269,7 +2273,11 @@ function _plantBlockHTML(plantId, plantName, plantColor, plantIdx) {
           </select>
         </div>
 
-        <div class="ds-v2-found-count" id="dsFoundCount_${pid}">0 medidas encontradas</div>
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+          <div class="ds-v2-found-count" id="dsFoundCount_${pid}" style="flex:1;min-width:120px;">0 medidas encontradas</div>
+          <button class="ds-v2-select-all-btn" data-action="selectAllTags" data-plant="${pid}" type="button">Selecionar todas</button>
+          <button class="ds-v2-select-all-btn" data-action="deselectAllTags" data-plant="${pid}" type="button" style="display:none;">Desmarcar todas</button>
+        </div>
         <div class="ds-v2-context-info hidden" id="dsContextInfo_${pid}"></div>
 
         <div class="ds-v2-catalog-table-wrap">
@@ -2476,6 +2484,7 @@ function applyTagFiltersForPlant(plantId) {
   updateContextInfoForPlant(plantId);
   updateFoundCountForPlant(plantId, filtered.length);
   renderDataStudioTagsTableForPlant(plantId, filtered);
+  dsUpdateSelectAllButtons(plantId);
   return filtered;
 }
 
@@ -2503,6 +2512,59 @@ function populateContextSelectForPlant(plantId, tags) {
 
   sel.value = contexts.includes(prev) ? prev : "all";
   if (ps) ps.selectedContext = sel.value || "all";
+}
+
+// --- Select all / deselect all ---
+
+function dsSelectAllTagsForPlant(plantId) {
+  const ps = DATASTUDIO_PLANTS[String(plantId)];
+  if (!ps) return;
+  const visible = Array.isArray(ps.availableTags) ? ps.availableTags : [];
+  let added = 0;
+  for (const tag of visible) {
+    if (ps.selectedTags.length >= 50) break;
+    const pathname = dsSafeTrim(tag?.pathname || tag?.path_name || tag?.tag);
+    if (!pathname) continue;
+    if (isTagSelectedForPlant(plantId, tag)) continue;
+    ps.selectedTags.push({
+      id: tag?.id ?? null, tag_id: tag?.id ?? null,
+      device_type: tag?.device_type ?? null, device_id: tag?.device_id ?? null,
+      point_name: tag?.point_name ?? null,
+      power_plant_id: tag?.power_plant_id ?? null,
+      power_plant_name: tag?.power_plant_name ?? null,
+      context: dsSafeTrim(tag?.context) || "PLANT",
+      pathname, source: dsSafeTrim(tag?.source) || "historico",
+      data_kind: dsSafeTrim(tag?.data_kind) || "analog",
+      unit: tag?.unit ?? null, description: tag?.description ?? null
+    });
+    added++;
+  }
+  if (added) {
+    updateStageUIForPlant(plantId);
+    renderDataStudioTagsTableForPlant(plantId, visible);
+  }
+  dsUpdateSelectAllButtons(plantId);
+}
+
+function dsDeselectAllTagsForPlant(plantId) {
+  const ps = DATASTUDIO_PLANTS[String(plantId)];
+  if (!ps) return;
+  const visible = Array.isArray(ps.availableTags) ? ps.availableTags : [];
+  const visibleKeys = new Set(visible.map(t => selectedTagKey(t)).filter(Boolean));
+  ps.selectedTags = ps.selectedTags.filter(t => !visibleKeys.has(selectedTagKey(t)));
+  updateStageUIForPlant(plantId);
+  renderDataStudioTagsTableForPlant(plantId, visible);
+  dsUpdateSelectAllButtons(plantId);
+}
+
+function dsUpdateSelectAllButtons(plantId) {
+  const ps = DATASTUDIO_PLANTS[String(plantId)];
+  const visible = Array.isArray(ps?.availableTags) ? ps.availableTags : [];
+  const allSelected = visible.length > 0 && visible.every(t => isTagSelectedForPlant(plantId, t));
+  const btnSel = document.querySelector(`[data-action="selectAllTags"][data-plant="${plantId}"]`);
+  const btnDes = document.querySelector(`[data-action="deselectAllTags"][data-plant="${plantId}"]`);
+  if (btnSel) btnSel.style.display = allSelected ? "none" : "";
+  if (btnDes) btnDes.style.display = allSelected ? "" : "none";
 }
 
 // --- Per-plant tag selection ---
@@ -4145,6 +4207,12 @@ function _wireDataStudioPlantBlocksDelegation() {
       case "confirmCatalog":
         confirmCatalogSelectionForPlant(plantId);
         break;
+      case "selectAllTags":
+        dsSelectAllTagsForPlant(plantId);
+        break;
+      case "deselectAllTags":
+        dsDeselectAllTagsForPlant(plantId);
+        break;
       case "removeTag": {
         const path = target.dataset.path;
         if (path) {
@@ -5284,12 +5352,13 @@ function closePlantEditModal() {
   _PLANT_EDIT_ID = null;
 }
 
+let _pemCabinsCache = [];
+
 async function _pemLoadDevices(plantId) {
   const list = document.getElementById("pemDevicesList");
   if (!list) return;
   list.innerHTML = `<div class="plant-edit-empty">Carregando…</div>`;
   try {
-    // Carregar device types para o select (uma vez)
     const selEl = document.getElementById("pemDeviceTypeSelect");
     if (selEl && selEl.options.length <= 1) {
       try {
@@ -5303,22 +5372,45 @@ async function _pemLoadDevices(plantId) {
         });
       } catch(_) {}
     }
-    // Carregar dispositivos
-    const res   = await apiFetch(`/plants/${plantId}/devices/options`);
-    const data  = await res.json();
-    const items = data?.items || [];
+
+    const [devRes, cabRes] = await Promise.all([
+      apiFetch(`/plants/${plantId}/devices/options`),
+      apiFetch(`/plants/${plantId}/cabin-groups`)
+    ]);
+    const devData = await devRes.json();
+    const cabData = await cabRes.json();
+    const items  = devData?.items || [];
+    _pemCabinsCache = cabData?.items || [];
+
     if (!items.length) { list.innerHTML = `<div class="plant-edit-empty">Nenhum dispositivo.</div>`; return; }
     const canCmd = _canSendCommand();
-    list.innerHTML = items.map(d => `
+
+    const cabinOptions = (currentCabinId) => {
+      let html = `<option value="">Sem cabine</option>`;
+      for (const c of _pemCabinsCache) {
+        const sel = c.id === currentCabinId ? " selected" : "";
+        html += `<option value="${c.id}"${sel}>${c.name}</option>`;
+      }
+      return html;
+    };
+
+    list.innerHTML = items.map(d => {
+      const isInverter = (d.device_type || "").toLowerCase() === "inverter";
+      const cabinSelect = isInverter && _pemCabinsCache.length
+        ? `<select class="pem-cabin-select pem-ctrl" data-device-id="${d.device_id}"
+             title="Cabine">${cabinOptions(d.cabin_id)}</select>`
+        : "";
+      return `
       <div class="plant-edit-device-row" data-device-id="${d.device_id}">
         <div class="plant-edit-device-info">
           <span class="plant-edit-device-type">${d.device_type || "—"}</span>
-          <span class="plant-edit-device-meta">#${d.device_id}</span>
+          <span class="plant-edit-device-meta">#${d.device_id}${d.cabin_name ? ` · ${d.cabin_name}` : ""}</span>
         </div>
         <div class="plant-edit-inline">
           <input class="plant-edit-device-name" type="text"
             value="${(d.device_name || "").replace(/"/g,'&quot;')}"
             placeholder="Nome do dispositivo"/>
+          ${cabinSelect}
           <button class="plant-edit-device-save" type="button" title="Salvar nome">
             <i class="fa-solid fa-check"></i>
           </button>
@@ -5329,14 +5421,19 @@ async function _pemLoadDevices(plantId) {
           </button>
         </div>
         <div class="plant-edit-device-feedback" id="pem-devfb-${d.device_id}"></div>
-      </div>`).join("");
+      </div>`;
+    }).join("");
+
     _pemWireCommandButtons(list);
+
     list.querySelectorAll(".plant-edit-device-row").forEach(row => {
       const did     = row.dataset.deviceId;
       const inp     = row.querySelector(".plant-edit-device-name");
       const saveBtn = row.querySelector(".plant-edit-device-save");
       const delBtn  = row.querySelector(".pem-del-device-btn");
+      const cabSel  = row.querySelector(".pem-cabin-select");
       const fb      = row.querySelector(".plant-edit-device-feedback");
+
       saveBtn?.addEventListener("click", async () => {
         const n = inp.value.trim();
         if (!n) { fb.textContent = "Nome vazio."; fb.className = "plant-edit-device-feedback err"; return; }
@@ -5351,6 +5448,24 @@ async function _pemLoadDevices(plantId) {
         } catch(e) { fb.textContent = e.message || "Erro."; fb.className = "plant-edit-device-feedback err"; }
         finally    { saveBtn.disabled = false; }
       });
+
+      cabSel?.addEventListener("change", async () => {
+        const cabinId = cabSel.value ? parseInt(cabSel.value) : null;
+        fb.textContent = "Vinculando…"; fb.className = "plant-edit-device-feedback";
+        try {
+          const r = await apiFetch(`/plants/${_PLANT_EDIT_ID}/devices/${did}/cabin`, {
+            method: "PATCH", headers: {"Content-Type":"application/json"},
+            body: JSON.stringify({cabin_id: cabinId})
+          });
+          if (!r.ok) throw new Error((await r.json())?.error || `HTTP ${r.status}`);
+          const cabName = cabinId ? _pemCabinsCache.find(c => c.id === cabinId)?.name : null;
+          const meta = row.querySelector(".plant-edit-device-meta");
+          if (meta) meta.textContent = `#${did}${cabName ? ` · ${cabName}` : ""}`;
+          fb.textContent = cabinId ? `✓ Vinculado à ${cabName}` : "✓ Desvinculado";
+          fb.className = "plant-edit-device-feedback ok";
+        } catch(e) { fb.textContent = e.message || "Erro."; fb.className = "plant-edit-device-feedback err"; }
+      });
+
       delBtn?.addEventListener("click", async () => {
         if (!confirm(`Excluir dispositivo #${did}? Esta ação desativa o dispositivo.`)) return;
         delBtn.disabled = true; fb.textContent = "Excluindo…"; fb.className = "plant-edit-device-feedback";
@@ -5379,12 +5494,57 @@ async function _pemLoadCabins(plantId) {
     const items = data?.items || [];
     if (!items.length) { list.innerHTML = `<div class="plant-edit-empty">Nenhuma cabine.</div>`; return; }
     list.innerHTML = items.map(c => `
-      <div class="plant-edit-device-row">
+      <div class="plant-edit-device-row" data-cabin-id="${c.id}">
         <div class="plant-edit-device-info">
-          <span class="plant-edit-device-type">${c.name}</span>
           <span class="plant-edit-device-meta">${c.inverter_count} inv.</span>
         </div>
+        <div class="plant-edit-inline">
+          <input class="plant-edit-device-name" type="text"
+            value="${(c.name || "").replace(/"/g,'&quot;')}"
+            placeholder="Nome da cabine"/>
+          <button class="plant-edit-device-save" type="button" title="Salvar nome">
+            <i class="fa-solid fa-check"></i>
+          </button>
+          <button class="pem-del-cabin-btn" type="button" title="Excluir cabine">
+            <i class="fa-solid fa-trash"></i>
+          </button>
+        </div>
+        <div class="plant-edit-device-feedback" id="pem-cabfb-${c.id}"></div>
       </div>`).join("");
+
+    list.querySelectorAll(".plant-edit-device-row").forEach(row => {
+      const cid     = row.dataset.cabinId;
+      const inp     = row.querySelector(".plant-edit-device-name");
+      const saveBtn = row.querySelector(".plant-edit-device-save");
+      const delBtn  = row.querySelector(".pem-del-cabin-btn");
+      const fb      = row.querySelector(".plant-edit-device-feedback");
+
+      saveBtn?.addEventListener("click", async () => {
+        const n = inp.value.trim();
+        if (!n) { fb.textContent = "Nome vazio."; fb.className = "plant-edit-device-feedback err"; return; }
+        saveBtn.disabled = true; fb.textContent = "Salvando…"; fb.className = "plant-edit-device-feedback";
+        try {
+          const r = await apiFetch(`/plants/${_PLANT_EDIT_ID}/cabin-groups/${cid}`, {
+            method: "PATCH", headers: {"Content-Type":"application/json"},
+            body: JSON.stringify({name: n})
+          });
+          if (!r.ok) throw new Error((await r.json())?.error || `HTTP ${r.status}`);
+          fb.textContent = "✓ Salvo!"; fb.className = "plant-edit-device-feedback ok";
+        } catch(e) { fb.textContent = e.message || "Erro."; fb.className = "plant-edit-device-feedback err"; }
+        finally    { saveBtn.disabled = false; }
+      });
+
+      delBtn?.addEventListener("click", async () => {
+        if (!confirm(`Excluir cabine #${cid}? Inversores vinculados serão desvinculados.`)) return;
+        delBtn.disabled = true; fb.textContent = "Excluindo…"; fb.className = "plant-edit-device-feedback";
+        try {
+          const r = await apiFetch(`/plants/${_PLANT_EDIT_ID}/cabin-groups/${cid}`, { method: "DELETE" });
+          if (!r.ok) throw new Error((await r.json())?.error || `HTTP ${r.status}`);
+          fb.textContent = "✓ Removida!"; fb.className = "plant-edit-device-feedback ok";
+          setTimeout(() => row.remove(), 900);
+        } catch(e) { fb.textContent = e.message || "Erro."; fb.className = "plant-edit-device-feedback err"; delBtn.disabled = false; }
+      });
+    });
   } catch(e) {
     console.error("[_pemLoadCabins]", e);
     list.innerHTML = `<div class="plant-edit-empty plant-edit-empty--error">Erro ao carregar cabines.</div>`;
@@ -5395,23 +5555,49 @@ async function pemAddDevice() {
   if (!_PLANT_EDIT_ID) return;
   const selEl  = document.getElementById("pemDeviceTypeSelect");
   const nameEl = document.getElementById("pemDeviceNameInput");
+  const qtyEl  = document.getElementById("pemDeviceQtyInput");
   const fb     = document.getElementById("pemAddDeviceFeedback");
   const dtId   = selEl?.value;
-  const name   = nameEl?.value?.trim();
+  const displayBase = nameEl?.value?.trim() || "";
+  const qty    = Math.max(1, Math.min(100, parseInt(qtyEl?.value) || 1));
   if (!dtId) { fb.textContent = "Selecione o tipo."; fb.className = "plant-edit-feedback err"; return; }
-  if (!name) { fb.textContent = "Nome obrigatório."; fb.className = "plant-edit-feedback err"; return; }
-  fb.textContent = "Adicionando…"; fb.className = "plant-edit-feedback";
-  try {
-    const r = await apiFetch(`/plants/${_PLANT_EDIT_ID}/devices`, {
-      method: "POST", headers: {"Content-Type":"application/json"},
-      body: JSON.stringify({device_type_id: parseInt(dtId), name, display_name: name})
-    });
-    const d = await r.json();
-    if (!r.ok) throw new Error(d?.error || `HTTP ${r.status}`);
-    fb.textContent = `✓ Dispositivo #${d.device_id} adicionado.`; fb.className = "plant-edit-feedback ok";
-    if (nameEl) nameEl.value = "";
-    _pemLoadDevices(_PLANT_EDIT_ID);
-  } catch(e) { fb.textContent = e.message || "Erro."; fb.className = "plant-edit-feedback err"; }
+
+  fb.textContent = qty > 1 ? `Adicionando 0/${qty}…` : "Adicionando…";
+  fb.className = "plant-edit-feedback";
+
+  const created = [];
+  const errors = [];
+  for (let i = 0; i < qty; i++) {
+    const dname = displayBase ? (qty > 1 ? `${displayBase} ${i + 1}` : displayBase) : undefined;
+    try {
+      const payload = {device_type_id: parseInt(dtId)};
+      if (dname) payload.display_name = dname;
+      const r = await apiFetch(`/plants/${_PLANT_EDIT_ID}/devices`, {
+        method: "POST", headers: {"Content-Type":"application/json"},
+        body: JSON.stringify(payload)
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d?.error || `HTTP ${r.status}`);
+      created.push(d.device_id);
+      if (qty > 1) fb.textContent = `Adicionando ${i + 1}/${qty}…`;
+    } catch(e) {
+      errors.push(`${dname || `#${i+1}`}: ${e.message}`);
+    }
+  }
+
+  if (errors.length) {
+    fb.textContent = `${created.length} criados, ${errors.length} erro(s): ${errors[0]}`;
+    fb.className = "plant-edit-feedback err";
+  } else if (qty === 1) {
+    fb.textContent = `✓ Dispositivo #${created[0]} adicionado.`;
+    fb.className = "plant-edit-feedback ok";
+  } else {
+    fb.textContent = `✓ ${created.length} dispositivos adicionados.`;
+    fb.className = "plant-edit-feedback ok";
+  }
+  if (nameEl) nameEl.value = "";
+  if (qtyEl) qtyEl.value = "1";
+  _pemLoadDevices(_PLANT_EDIT_ID);
 }
 
 async function pemAddCabin() {
@@ -5801,11 +5987,11 @@ document.addEventListener("DOMContentLoaded",()=>{
 // ─────────────────────────────────────────────────
 // CRIAR USINA
 // ─────────────────────────────────────────────────
-function openPlantCreateModal() {
+async function openPlantCreateModal() {
   const modal = document.getElementById("plantCreateModal");
   if (!modal) return;
   ["plantCreateNameInput","plantCreateDcInput","plantCreateAcInput",
-   "plantCreateLocationInput","plantCreateCustomerInput"].forEach(id => {
+   "plantCreateLocationInput"].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.value = "";
   });
@@ -5814,7 +6000,22 @@ function openPlantCreateModal() {
 
   const _u = JSON.parse(localStorage.getItem("user") || "{}");
   const customerSection = document.getElementById("plantCreateCustomerSection");
-  if (customerSection) customerSection.style.display = _u.is_superuser ? "" : "none";
+  const custSelect = document.getElementById("plantCreateCustomerInput");
+  if (customerSection) {
+    customerSection.style.display = _u.is_superuser ? "" : "none";
+    if (_u.is_superuser && custSelect) {
+      custSelect.innerHTML = `<option value="">Carregando...</option>`;
+      try {
+        const res = await apiFetch("/plants/customers");
+        const data = await res.json();
+        const items = data?.items || [];
+        custSelect.innerHTML = `<option value="">Selecione o cliente</option>` +
+          items.map(c => `<option value="${c.id}">${c.name} (${c.plant_count} usinas)</option>`).join("");
+      } catch(e) {
+        custSelect.innerHTML = `<option value="">Erro ao carregar</option>`;
+      }
+    }
+  }
 
   modal.classList.remove("hidden");
   modal.setAttribute("aria-hidden", "false");
@@ -5866,9 +6067,10 @@ async function createNewPlant() {
       fb.textContent = `✓ Usina "${data.plant_name}" criada (ID ${data.plant_id}).`;
       fb.className = "plant-edit-feedback ok";
     }
-    setTimeout(async () => {
+    setTimeout(() => {
       closePlantCreateModal();
-      try { await loadPortfolio(); } catch(_) {}
+      openPlantEditModal(data.plant_id, data.plant_name, payload.capacity_dc || 0);
+      switchPlantEditTab("devices");
     }, 1200);
   } catch(e) {
     if (fb) { fb.textContent = e.message || "Erro ao criar usina."; fb.className = "plant-edit-feedback err"; }
@@ -7748,7 +7950,10 @@ function _explorerExportCsv() {
   const csvLines = [cols.join(sep)];
   result.rows.forEach(row => {
     csvLines.push(cols.map(c => {
-      let v = String(row[c] ?? "");
+      let v = row[c];
+      if (v == null) return "";
+      if (typeof v === "number") return String(v).replace(".", ",");
+      v = String(v);
       if (v.includes(sep) || v.includes('"') || v.includes("\n")) v = '"' + v.replace(/"/g, '""') + '"';
       return v;
     }).join(sep));
@@ -7817,8 +8022,113 @@ function _explorerRenderLegend(items) {
 let _ticketsInited = false;
 let _tkCurrentFilter = "all";
 let _tkViewingId = null;
+const TK_SEEN_KEY = "tk_last_seen";
+let _tkBadgeInterval = null;
+let _tkPrevUnseen = 0;
+
+function _tkGetLastSeen() {
+  return localStorage.getItem(TK_SEEN_KEY) || "2000-01-01T00:00:00Z";
+}
+function _tkMarkSeen() {
+  localStorage.setItem(TK_SEEN_KEY, new Date().toISOString());
+  _tkPrevUnseen = 0;
+  const b = document.getElementById("tkBadge");
+  if (b) b.style.display = "none";
+  const btn = document.getElementById("btnTickets");
+  if (btn) btn.classList.remove("tk-btn-pulse");
+  _tkUpdateBellPanel([]);
+}
+
+function _tkPlaySound() {
+  try {
+    const ac = new (window.AudioContext || window.webkitAudioContext)();
+    const notes = [880, 1108.73, 1318.51];
+    notes.forEach((freq, i) => {
+      const osc = ac.createOscillator();
+      const gain = ac.createGain();
+      osc.type = "sine";
+      osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0.15, ac.currentTime + i * 0.12);
+      gain.gain.exponentialRampToValueAtTime(0.001, ac.currentTime + i * 0.12 + 0.3);
+      osc.connect(gain);
+      gain.connect(ac.destination);
+      osc.start(ac.currentTime + i * 0.12);
+      osc.stop(ac.currentTime + i * 0.12 + 0.3);
+    });
+  } catch (e) { /* silent */ }
+}
+
+function _tkUpdateBellPanel(items) {
+  const badge = document.getElementById("notifBellBadge");
+  const list = document.getElementById("notifPanelList");
+  const platformUnseen = (typeof _notifAllUpdates !== "undefined" ? _notifAllUpdates : []).filter(u => {
+    const lastSeen = parseInt(localStorage.getItem("platform_last_seen_update") || "0");
+    return u.id > lastSeen;
+  }).length;
+  const totalUnseen = items.length + platformUnseen;
+
+  if (badge) {
+    if (totalUnseen > 0) {
+      badge.textContent = totalUnseen > 9 ? "9+" : totalUnseen;
+      badge.style.display = "";
+    } else {
+      badge.style.display = "none";
+    }
+  }
+
+  if (list && items.length > 0) {
+    const ticketHtml = items.map(t => {
+      const preview = t.last_comment ? t.last_comment.substring(0, 80) + (t.last_comment.length > 80 ? "…" : "") : "";
+      const statusLabel = {open: "Aberto", in_progress: "Em Andamento", resolved: "Resolvido"}[t.status] || t.status;
+      const who = t.username ? `<span class="notif-item-date">${_tkEsc(t.username)}</span>` : "";
+      return `<div class="notif-item unread" style="cursor:pointer;" onclick="document.getElementById('btnTickets')?.click();">
+        <div class="notif-item-title"><i class="fa-solid fa-headset" style="margin-right:6px;color:#39e58c;"></i>Ticket #${t.id} — ${_tkEsc(t.title)}</div>
+        <div class="notif-item-desc">${preview ? _tkEsc(preview) : statusLabel}</div>
+        ${who}
+      </div>`;
+    }).join("");
+
+    const existingTickets = list.querySelectorAll('.tk-notif-section');
+    existingTickets.forEach(el => el.remove());
+
+    list.insertAdjacentHTML("afterbegin",
+      `<div class="tk-notif-section">${ticketHtml}</div>`
+    );
+  }
+}
+
+async function _tkPollUnseen() {
+  try {
+    const since = _tkGetLastSeen();
+    const res = await apiFetch(`/tickets/unseen?since=${encodeURIComponent(since)}`);
+    if (!res.ok) return;
+    const data = await res.json();
+    const count = data.unseen || 0;
+    const items = data.items || [];
+
+    const b = document.getElementById("tkBadge");
+    const btn = document.getElementById("btnTickets");
+
+    if (count > 0) {
+      if (b) { b.textContent = count > 9 ? "9+" : count; b.style.display = "flex"; }
+      if (btn) btn.classList.add("tk-btn-pulse");
+      _tkUpdateBellPanel(items);
+      if (count > _tkPrevUnseen) _tkPlaySound();
+    } else {
+      if (b) b.style.display = "none";
+      if (btn) btn.classList.remove("tk-btn-pulse");
+    }
+    _tkPrevUnseen = count;
+  } catch (e) { /* silent */ }
+}
+function _tkStartPolling() {
+  if (_tkBadgeInterval) return;
+  _tkPollUnseen();
+  _tkBadgeInterval = setInterval(_tkPollUnseen, 30000);
+}
 
 function initTicketsOnce() {
+  _tkMarkSeen();
   if (_ticketsInited) { tkLoadList(); return; }
   _ticketsInited = true;
 
@@ -8007,11 +8317,23 @@ async function tkOpenDetail(id) {
 
     if (user.is_superuser) {
       document.getElementById("tkStatusSelect")?.addEventListener("change", async function() {
-        await apiFetch(`/tickets/${this.dataset.id}`, {
-          method: "PUT",
-          headers: {"Content-Type": "application/json"},
-          body: JSON.stringify({status: this.value})
-        });
+        const sel = this;
+        const newStatus = sel.value;
+        const tid = sel.dataset.id;
+        sel.disabled = true;
+        try {
+          const r = await apiFetch(`/tickets/${tid}`, {
+            method: "PUT",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({status: newStatus})
+          });
+          if (r.ok) {
+            const lbl = {open: "Aberto", in_progress: "Em Andamento", resolved: "Resolvido"}[newStatus] || newStatus;
+            sel.style.borderColor = "rgba(57,229,140,0.5)";
+            setTimeout(() => { sel.style.borderColor = ""; }, 1500);
+          }
+        } catch (e) { console.warn("[status update]", e); }
+        sel.disabled = false;
       });
     }
 
@@ -8315,4 +8637,5 @@ function _notifEsc(s) {
 
 document.addEventListener("DOMContentLoaded", () => {
   setTimeout(initPlatformUpdates, 1500);
+  setTimeout(_tkStartPolling, 2000);
 });

@@ -50,8 +50,9 @@
           <button id="btnExplorer" class="sidebar-btn" type="button" title="Explorador de Dados" aria-label="Explorador de Dados">
             <i class="fa-solid fa-database"></i>
           </button>
-          <button id="btnTickets" class="sidebar-btn" type="button" title="Suporte / Tickets" aria-label="Suporte / Tickets">
+          <button id="btnTickets" class="sidebar-btn" type="button" title="Suporte / Tickets" aria-label="Suporte / Tickets" style="position:relative;">
             <i class="fa-solid fa-headset"></i>
+            <span id="tkBadge" class="tk-badge" style="display:none;"></span>
           </button>
           <button id="btnSwagger" class="sidebar-btn" type="button" title="API Explorer" aria-label="API Explorer">
             <i class="fa-solid fa-code"></i>
@@ -809,8 +810,10 @@
         </div>
 
         <div class="plant-edit-section" id="plantCreateCustomerSection" style="display:none">
-          <label for="plantCreateCustomerInput">Customer ID (superuser)</label>
-          <input type="number" id="plantCreateCustomerInput" placeholder="ID do cliente" min="1" step="1" />
+          <label for="plantCreateCustomerInput">Cliente</label>
+          <select id="plantCreateCustomerInput" class="pem-ctrl">
+            <option value="">Carregando...</option>
+          </select>
         </div>
 
         <div id="plantCreateFeedback" class="plant-edit-feedback" aria-live="polite"></div>
@@ -884,7 +887,8 @@
               <select id="pemDeviceTypeSelect" class="pem-ctrl">
                 <option value="">Tipo...</option>
               </select>
-              <input type="text" id="pemDeviceNameInput" class="pem-ctrl" placeholder="Nome do dispositivo" />
+              <input type="text" id="pemDeviceNameInput" class="pem-ctrl" placeholder="Display name (opcional)" />
+              <input type="number" id="pemDeviceQtyInput" class="pem-ctrl pem-ctrl--qty" placeholder="Qtd" min="1" max="100" value="1" />
               <button type="button" class="pem-action-btn pem-action-btn--add" onclick="pemAddDevice()">
                 <i class="fa-solid fa-plus"></i> Adicionar
               </button>

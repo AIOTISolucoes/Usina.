@@ -825,7 +825,7 @@ def build_intraday_shape(labels_hhmm):
         center = 11.5 * 60
         spread = 210.0
         x = (minutes - center) / spread
-        w = max(0.0, 1.0 - (x * x))
+        w = max(0.0, 1.0 - (x ** 4))
         weights.append(w)
 
     total = sum(weights)
@@ -984,25 +984,26 @@ def get_monthly_real_and_expected(cur, plant_id: int, month_start, month_end):
             AND d.date_day >= %(month_start)s::date
             AND d.date_day <= %(month_end)s::date
         ),
-        expected_daily AS (
+        month_expected AS (
             SELECT
-                e.date_day::date AS ref_day,
-                COALESCE(e.expected_day_kwh, 0)::double precision AS expected_kwh
-            FROM public.pvsyst_expected_daily e
-            WHERE e.power_plant_id = %(plant_id)s
-            AND EXTRACT(month FROM e.date_day) = EXTRACT(month FROM %(month_start)s::date)
+                m.month_num,
+                (m.expected_month_kwh / EXTRACT(day FROM (DATE_TRUNC('month', %(month_start)s::date) + INTERVAL '1 month' - INTERVAL '1 day'))::int)::double precision AS expected_day_kwh
+            FROM public.pvsyst_simulation_monthly m
+            JOIN public.pvsyst_simulation s ON s.id = m.simulation_id
+            WHERE s.power_plant_id = %(plant_id)s
+            AND s.is_active = true
+            AND m.month_num = EXTRACT(month FROM %(month_start)s::date)::int
+            LIMIT 1
         )
         SELECT
             gs.day::date AS day,
             to_char(gs.day::date, 'DD') AS label,
             COALESCE(r.real_kwh, 0) AS real_kwh,
             COALESCE(r.irradiation_daily_kwh_m2, 0) AS irradiation_daily_kwh_m2,
-            COALESCE(ed.expected_kwh, 0) AS expected_kwh
+            COALESCE(me.expected_day_kwh, 0) AS expected_kwh
         FROM generate_series(%(month_start)s::date, %(month_end)s::date, interval '1 day') AS gs(day)
         LEFT JOIN real_daily r ON r.day = gs.day
-        LEFT JOIN expected_daily ed
-        ON EXTRACT(month FROM ed.ref_day) = EXTRACT(month FROM gs.day)
-        AND EXTRACT(day FROM ed.ref_day) = EXTRACT(day FROM gs.day)
+        LEFT JOIN month_expected me ON me.month_num = EXTRACT(month FROM gs.day)::int
         ORDER BY gs.day;
     """).format(fct_power_plant_metrics_daily=q(RT_SCHEMA, "fct_power_plant_metrics_daily")), {
         "plant_id": int(plant_id),
@@ -3708,7 +3709,7 @@ def handle_get_daily_round(cur, plant_id: int, ctx: dict, params: dict):
 
 def handle_get_report(cur, plant_id: int, ctx: dict, params: dict):
     print(f"[report] START plant_id={plant_id}")
-    cur.execute("SET LOCAL statement_timeout = '45000ms';")
+    cur.execute("SET LOCAL statement_timeout = '28000ms';")
 
     if not ensure_plant_access(cur, int(plant_id), ctx):
         return http_response(403, {"error": "sem permissão para esta usina"})
@@ -4036,48 +4037,50 @@ def handle_get_report(cur, plant_id: int, ctx: dict, params: dict):
 
     # ── 5. String box heatmap (per-day, per-string, 6h-18h) ──
     string_box_heatmap = []
+    str_max_days = 3
+    str_start = max(start_date, end_date - timedelta(days=str_max_days - 1))
     try:
         cur.execute("SAVEPOINT sp_report_strings")
-        cur.execute("SET LOCAL statement_timeout = '12000ms'")
-        cur.execute(sql.SQL("""
-            SELECT
-                s.device_id,
-                d.name AS inverter_name,
-                s.string_index,
-                date_trunc('day', s."timestamp" AT TIME ZONE %(tz)s)::date AS d,
-                round(avg(s.string_current)::numeric, 2) AS avg_current,
-                count(*) AS samples,
-                count(*) FILTER (WHERE s.string_current < 0.1) AS zero_samples
-            FROM {stg_str} s
-            JOIN public.device d ON d.id = s.device_id
-            WHERE s.power_plant_id = %(plant_id)s
-              AND s."timestamp" >= (%(sun_start)s AT TIME ZONE %(tz)s)
-              AND s."timestamp" <  (%(sun_end)s AT TIME ZONE %(tz)s)
-              AND d.is_active = true
-            GROUP BY s.device_id, d.name, s.string_index, date_trunc('day', s."timestamp" AT TIME ZONE %(tz)s)
-            ORDER BY s.device_id, s.string_index, d
-        """).format(stg_str=q(RT_SCHEMA, "stg_inverter_string")), {
-            "plant_id": plant_id,
-            "sun_start": f"{start_date}T06:00:00",
-            "sun_end": f"{end_date + timedelta(days=1)}T18:00:00",
-            "tz": tz,
-        })
-        str_rows = cur.fetchall() or []
-
         inv_str_map = {}
-        for r in str_rows:
-            did = r["device_id"]
-            si = r["string_index"]
-            day = str(r["d"])
-            avg_c = float(r["avg_current"]) if r.get("avg_current") is not None else 0
-
-            if did not in inv_str_map:
-                inv_str_map[did] = {"device_id": did, "inverter_name": r.get("inverter_name"), "strings_map": {}}
-            if si not in inv_str_map[did]["strings_map"]:
-                inv_str_map[did]["strings_map"][si] = []
-            inv_str_map[did]["strings_map"][si].append({
-                "date": day, "avg_current": avg_c,
+        str_total_rows = 0
+        current_day = str_start
+        while current_day <= end_date:
+            cur.execute("SET LOCAL statement_timeout = '8000ms'")
+            cur.execute(sql.SQL("""
+                SELECT
+                    s.device_id,
+                    d.name AS inverter_name,
+                    s.string_index,
+                    round(avg(s.string_current)::numeric, 2) AS avg_current,
+                    count(*) AS samples,
+                    count(*) FILTER (WHERE s.string_current < 0.1) AS zero_samples
+                FROM {stg_str} s
+                JOIN public.device d ON d.id = s.device_id
+                WHERE s.power_plant_id = %(plant_id)s
+                  AND s."timestamp" >= (%(sun_start)s AT TIME ZONE %(tz)s)
+                  AND s."timestamp" <  (%(sun_end)s AT TIME ZONE %(tz)s)
+                  AND d.is_active = true
+                GROUP BY s.device_id, d.name, s.string_index
+                ORDER BY s.device_id, s.string_index
+            """).format(stg_str=q(RT_SCHEMA, "stg_inverter_string")), {
+                "plant_id": plant_id,
+                "sun_start": f"{current_day}T06:00:00",
+                "sun_end": f"{current_day}T18:00:00",
+                "tz": tz,
             })
+            day_rows = cur.fetchall() or []
+            str_total_rows += len(day_rows)
+            day_str = str(current_day)
+            for r in day_rows:
+                did = r["device_id"]
+                si = r["string_index"]
+                avg_c = float(r["avg_current"]) if r.get("avg_current") is not None else 0
+                if did not in inv_str_map:
+                    inv_str_map[did] = {"device_id": did, "inverter_name": r.get("inverter_name"), "strings_map": {}}
+                if si not in inv_str_map[did]["strings_map"]:
+                    inv_str_map[did]["strings_map"][si] = []
+                inv_str_map[did]["strings_map"][si].append({"date": day_str, "avg_current": avg_c})
+            current_day += timedelta(days=1)
 
         for did, inv_data in inv_str_map.items():
             all_daily_avgs = {}
@@ -4126,11 +4129,11 @@ def handle_get_report(cur, plant_id: int, ctx: dict, params: dict):
             })
 
         cur.execute("RELEASE SAVEPOINT sp_report_strings")
-        print(f"[report] 5-strings OK rows={len(str_rows)}")
+        print(f"[report] 5-strings OK days={str_max_days} rows={str_total_rows}")
     except Exception as e:
         print(f"[report] 5-strings TIMEOUT/ERROR: {e!r}")
         cur.execute("ROLLBACK TO SAVEPOINT sp_report_strings")
-        cur.execute("SET LOCAL statement_timeout = '45000ms'")
+        cur.execute("SET LOCAL statement_timeout = '28000ms'")
 
     # ── 6. Alarms summary grouped by device ──
     cur.execute(sql.SQL("""
@@ -4489,17 +4492,22 @@ def handle_get_datastudio_export(cur, ctx: dict, params: dict):
             except Exception:
                 v = None
 
+            if v is not None:
+                v_str = str(v).replace(".", ",")
+            else:
+                v_str = ""
+
             ts_raw = row.get("ts")
             if isinstance(ts_raw, datetime):
                 if ts_raw.tzinfo is None:
                     ts_raw = ts_raw.replace(tzinfo=_tz.utc)
-                ts_local = ts_raw.astimezone(local_tz).strftime("%Y-%m-%d %H:%M:%S")
+                ts_local = ts_raw.astimezone(local_tz).strftime("%d/%m/%Y %H:%M")
             elif ts_raw is not None:
                 try:
                     dt = datetime.fromisoformat(str(ts_raw))
                     if dt.tzinfo is None:
                         dt = dt.replace(tzinfo=_tz.utc)
-                    ts_local = dt.astimezone(local_tz).strftime("%Y-%m-%d %H:%M:%S")
+                    ts_local = dt.astimezone(local_tz).strftime("%d/%m/%Y %H:%M")
                 except Exception:
                     ts_local = str(ts_raw)
             else:
@@ -4523,7 +4531,7 @@ def handle_get_datastudio_export(cur, ctx: dict, params: dict):
                 item.get("unit"),
                 item.get("data_kind"),
                 ts_local,
-                v
+                v_str
             ])
 
     elapsed_ms = round((time.perf_counter() - t0) * 1000, 2)
@@ -5019,6 +5027,45 @@ def _lambda_handler_impl(event, context):
             finally:
                 cur.close()
                 end_request(conn)
+
+    # ========================================================
+    # GET /plants/{plant_id}/unifilar-pdf
+    # ========================================================
+    if method == "GET" and plant_id and is_path(path, "/unifilar-pdf"):
+        conn = get_conn()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        try:
+            bucket = os.getenv("OS_S3_BUCKET", "").strip()
+            if not bucket:
+                return http_response(404, {"error": "storage não configurado"})
+
+            cur.execute("SELECT name FROM public.power_plant WHERE id = %s", (int(plant_id),))
+            row = cur.fetchone()
+            if not row or not row.get("name"):
+                return http_response(404, {"error": "usina não encontrada"})
+
+            s3_key = f"unifilares/{row['name']}.pdf"
+            s3c = boto3.client("s3", region_name=os.getenv("AWS_REGION", "us-east-1"))
+
+            s3c.head_object(Bucket=bucket, Key=s3_key)
+
+            url = s3c.generate_presigned_url(
+                "get_object",
+                Params={"Bucket": bucket, "Key": s3_key},
+                ExpiresIn=3600,
+            )
+            return http_response(200, {"url": url})
+        except ClientError as ce:
+            if ce.response["Error"]["Code"] in ("404", "NoSuchKey", "403"):
+                return http_response(404, {"error": "PDF não encontrado"})
+            print("[/unifilar-pdf] S3 error:", repr(ce))
+            return http_response(500, {"error": "Erro ao acessar storage"})
+        except Exception as e:
+            print("[/unifilar-pdf] ERROR:", repr(e))
+            return http_response(500, {"error": "Erro interno"})
+        finally:
+            cur.close()
+            end_request(conn)
 
     # ========================================================
     # GET /plants/{plant_id}/inverters/realtime
@@ -5572,7 +5619,7 @@ def _lambda_handler_impl(event, context):
             try:
                 effective_customer_id = resolve_customer_id_for_plant(cur, int(plant_id), ctx)
 
-                if int(plant_id) == 13 and int(effective_customer_id or 0) == 2 and labels:
+                if plant_has_active_pvsyst(cur, int(plant_id)) and labels:
                     cur.execute("SELECT (now() AT TIME ZONE 'America/Fortaleza')::date AS local_date")
                     local_row = cur.fetchone() or {}
                     local_date = local_row.get("local_date") or datetime.utcnow().date()
@@ -5670,6 +5717,35 @@ def _lambda_handler_impl(event, context):
             end_request(conn)
 
     # ========================================================
+    # GET /plants/customers  (listar clientes — somente superuser)
+    # ========================================================
+    if method == "GET" and is_path(path, "/plants/customers"):
+        if not ctx.get("is_superuser"):
+            return http_response(403, {"error": "somente superuser"})
+        conn = get_conn()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        try:
+            cur.execute("""
+                SELECT c.id, c.name,
+                       COUNT(pp.id) FILTER (WHERE pp.is_active = true) AS plant_count
+                FROM public.customer c
+                LEFT JOIN public.power_plant pp ON pp.customer_id = c.id
+                GROUP BY c.id, c.name
+                ORDER BY c.name;
+            """)
+            rows = cur.fetchall() or []
+            return http_response(200, {"items": [
+                {"id": int(r["id"]), "name": r["name"],
+                 "plant_count": int(r["plant_count"] or 0)} for r in rows
+            ]})
+        except Exception as e:
+            print("[GET /customers] ERROR:", repr(e))
+            return http_response(500, {"error": "Internal Server Error"})
+        finally:
+            cur.close()
+            end_request(conn)
+
+    # ========================================================
     # POST /plants  (criar nova usina)
     # ========================================================
     if method == "POST" and is_path(path, "/plants"):
@@ -5693,7 +5769,7 @@ def _lambda_handler_impl(event, context):
         else:
             target_customer_id = ctx["customer_id"]
 
-        capacity_dc = None
+        capacity_dc = 0
         raw_dc = body.get("capacity_dc")
         if raw_dc not in (None, ""):
             try:
@@ -5703,7 +5779,7 @@ def _lambda_handler_impl(event, context):
             except (ValueError, TypeError):
                 return http_response(400, {"error": "capacity_dc deve ser numérico"})
 
-        capacity_ac = None
+        capacity_ac = 0
         raw_ac = body.get("capacity_ac")
         if raw_ac not in (None, ""):
             try:
@@ -5712,7 +5788,6 @@ def _lambda_handler_impl(event, context):
                 pass
 
         location = str(body.get("location") or "").strip() or None
-        timezone = str(body.get("timezone") or "America/Fortaleza").strip()
 
         conn = get_conn()
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
@@ -5723,11 +5798,11 @@ def _lambda_handler_impl(event, context):
 
             cur.execute("""
                 INSERT INTO public.power_plant
-                    (name, display_name, customer_id, capacity_dc, capacity_ac, location, timezone, is_active, created_at, updated_at)
+                    (name, display_name, customer_id, capacity_dc, capacity_ac, location, is_active, updated_at)
                 VALUES
                     (%(name)s, %(display_name)s, %(customer_id)s,
-                    %(capacity_dc)s, %(capacity_ac)s, %(location)s, %(timezone)s,
-                    true, NOW(), NOW())
+                    %(capacity_dc)s, %(capacity_ac)s, %(location)s,
+                    true, NOW())
                 RETURNING id AS plant_id, name, display_name, customer_id, capacity_dc, capacity_ac, location, is_active;
             """, {
                 "name": plant_name,
@@ -5736,7 +5811,6 @@ def _lambda_handler_impl(event, context):
                 "capacity_dc": capacity_dc,
                 "capacity_ac": capacity_ac,
                 "location": location,
-                "timezone": timezone,
             })
             row = cur.fetchone()
             conn.commit()
@@ -5751,7 +5825,7 @@ def _lambda_handler_impl(event, context):
             conn.rollback()
             print("[POST /plants] ERROR:", repr(e))
             print(traceback.format_exc())
-            return http_response(500, {"error": "Internal Server Error"})
+            return http_response(500, {"error": f"Erro ao criar usina: {repr(e)}"})
         finally:
             cur.close()
             end_request(conn)
@@ -6620,10 +6694,14 @@ def _lambda_handler_impl(event, context):
                 COALESCE(NULLIF(BTRIM(d.display_name), ''), d.name) AS label,
                 dt.name AS device_type,
                 d.device_type_id,
+                d.cabin_id,
+                c.name AS cabin_name,
                 d.is_active
                 FROM public.device d
                 LEFT JOIN public.device_type dt
                 ON dt.id = d.device_type_id
+                LEFT JOIN public.cabin c
+                ON c.id = d.cabin_id
                 WHERE d.power_plant_id = %(plant_id)s
                 AND d.is_active = true
                 ORDER BY d.device_type_id, d.id;
@@ -6638,6 +6716,8 @@ def _lambda_handler_impl(event, context):
                 "device_type": r.get("device_type"),
                 "label": r.get("label"),
                 "device_type_id": r.get("device_type_id"),
+                "cabin_id": int(r["cabin_id"]) if r.get("cabin_id") is not None else None,
+                "cabin_name": r.get("cabin_name"),
                 "is_active": bool(r["is_active"]) if r.get("is_active") is not None else None,
             } for r in rows]
 
@@ -6677,6 +6757,8 @@ def _lambda_handler_impl(event, context):
             has_relay = False
             has_transformer = False
             has_multimeter = False
+            has_tracker = False
+            has_weather_station = False
             relay_device_id = None
             transformer_device_id = None
             multimeter_device_id = None
@@ -6696,6 +6778,10 @@ def _lambda_handler_impl(event, context):
                     if not has_multimeter:
                         multimeter_device_id = did
                     has_multimeter = True
+                elif any(x in dt for x in ("tracker", "rastreador")):
+                    has_tracker = True
+                elif any(x in dt for x in ("weather", "estação meteorológica", "estacao", "meteorolog")):
+                    has_weather_station = True
 
             # Breakers (disjuntores) cadastrados para esta planta
             breakers_list = []
@@ -6725,6 +6811,8 @@ def _lambda_handler_impl(event, context):
                 "has_relay": has_relay,
                 "has_transformer": has_transformer,
                 "has_multimeter": has_multimeter,
+                "has_tracker": has_tracker,
+                "has_weather_station": has_weather_station,
                 "relay_device_id": relay_device_id,
                 "transformer_device_id": transformer_device_id,
                 "multimeter_device_id": multimeter_device_id,
@@ -7240,15 +7328,24 @@ def _lambda_handler_impl(event, context):
             end_request(conn)
 
     # POST /plants/{plant_id}/devices  (adicionar dispositivo)
+    _DEVICE_NAME_PREFIX = {
+        1: "Inversor", 2: "Rele de Protecao", 3: "Multimedidor",
+        4: "Estacao Solarimetrica", 5: "Logger", 7: "Tracker",
+        9: "RSU", 10: "Multimedidor",
+    }
+    _DEVICE_DISPLAY_PREFIX = {
+        1: "Inversor ", 2: "Relay ", 3: "Multimeter ",
+        4: "Weather ", 5: "Logger ", 7: "Tracker ",
+        9: "RSU ", 10: "Multimeter ",
+    }
     if method == "POST" and plant_id and is_path(path, "/devices") and not path_contains(path, "/devices/"):
         body = parse_json_body(event)
         if not body or not isinstance(body, dict):
             return http_response(400, {"error": "JSON invalido"})
         device_type_id = body.get("device_type_id")
-        display_name   = str(body.get("display_name") or "").strip()
-        name           = str(body.get("name") or display_name).strip()
-        if not device_type_id or not name:
-            return http_response(400, {"error": "device_type_id e name sao obrigatorios"})
+        if not device_type_id:
+            return http_response(400, {"error": "device_type_id obrigatorio"})
+        display_name = str(body.get("display_name") or "").strip() or None
         conn = get_conn()
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         try:
@@ -7258,13 +7355,32 @@ def _lambda_handler_impl(event, context):
                 return http_response(403, {"error": "sem permissao"})
             if not can_edit_device(ctx):
                 return http_response(403, {"error": "sem permissao para adicionar dispositivo"})
+            dt_id = int(device_type_id)
             cur.execute("""
+                SELECT COUNT(*) AS cnt FROM public.device
+                WHERE power_plant_id = %(pid)s AND device_type_id = %(dtid)s
+            """, {"pid": int(plant_id), "dtid": dt_id})
+            next_num = (cur.fetchone()["cnt"] or 0) + 1
+            prefix = _DEVICE_NAME_PREFIX.get(dt_id, f"Device{dt_id}_")
+            auto_name = f"{prefix}{next_num}"
+            if not display_name:
+                disp_prefix = _DEVICE_DISPLAY_PREFIX.get(dt_id, f"Device {dt_id} ")
+                display_name = f"{disp_prefix}{next_num:02d}"
+            insert_params = {"plant_id": int(plant_id), "dt_id": dt_id,
+                "name": auto_name, "dname": display_name}
+            insert_sql = """
                 INSERT INTO public.device
                 (power_plant_id, device_type_id, name, display_name, is_active, created_at, updated_at)
                 VALUES (%(plant_id)s, %(dt_id)s, %(name)s, %(dname)s, true, NOW(), NOW())
                 RETURNING id AS device_id, name, display_name;
-            """, {"plant_id": int(plant_id), "dt_id": int(device_type_id),
-                "name": name, "dname": display_name or name})
+            """
+            try:
+                cur.execute(insert_sql, insert_params)
+            except psycopg2.errors.UniqueViolation:
+                conn.rollback()
+                cur.execute("SELECT setval(pg_get_serial_sequence('public.device','id'), (SELECT MAX(id) FROM public.device))")
+                conn.commit()
+                cur.execute(insert_sql, insert_params)
             row = cur.fetchone()
             conn.commit()
             return http_response(201, {"ok": True, "device_id": int(row["device_id"]),
@@ -7272,7 +7388,7 @@ def _lambda_handler_impl(event, context):
         except Exception as e:
             conn.rollback()
             print("[POST /devices] ERROR:", repr(e))
-            return http_response(500, {"error": "Internal Server Error"})
+            return http_response(500, {"error": f"Erro ao criar dispositivo: {repr(e)}"})
         finally:
             cur.close()
             end_request(conn)
@@ -7345,6 +7461,76 @@ def _lambda_handler_impl(event, context):
         except Exception as e:
             conn.rollback()
             print("[POST /cabin-groups] ERROR:", repr(e))
+            return http_response(500, {"error": "Internal Server Error"})
+        finally:
+            cur.close()
+            end_request(conn)
+
+    # PATCH /plants/{plant_id}/cabin-groups/{cabin_id}  (renomear cabine)
+    if method == "PATCH" and plant_id and is_path(path, "/cabin-groups"):
+        parts = [p for p in path.strip("/").split("/") if p]
+        cabin_id_str = parts[-1] if len(parts) >= 2 and parts[-1].isdigit() else None
+        if not cabin_id_str:
+            return http_response(400, {"error": "cabin_id ausente na URL"})
+        body = parse_json_body(event)
+        if not body or not isinstance(body, dict):
+            return http_response(400, {"error": "JSON invalido"})
+        new_name = str(body.get("name") or "").strip()
+        if not new_name:
+            return http_response(400, {"error": "name obrigatorio"})
+        conn = get_conn()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        try:
+            auth_error = require_current_user(cur, ctx)
+            if auth_error: return auth_error
+            if not ensure_plant_access(cur, int(plant_id), ctx):
+                return http_response(403, {"error": "sem permissao"})
+            if not can_edit_plant(ctx):
+                return http_response(403, {"error": "sem permissao para editar cabine"})
+            cur.execute("""
+                UPDATE public.cabin
+                SET name = %(name)s, code = %(code)s, updated_at = NOW()
+                WHERE id = %(cid)s
+                RETURNING id, name, code;
+            """, {"name": new_name, "code": new_name, "cid": int(cabin_id_str)})
+            row = cur.fetchone()
+            if not row:
+                return http_response(404, {"error": "cabine nao encontrada"})
+            conn.commit()
+            return http_response(200, {"ok": True, "id": int(row["id"]), "name": row["name"]})
+        except Exception as e:
+            conn.rollback()
+            print("[PATCH /cabin-groups] ERROR:", repr(e))
+            return http_response(500, {"error": "Internal Server Error"})
+        finally:
+            cur.close()
+            end_request(conn)
+
+    # DELETE /plants/{plant_id}/cabin-groups/{cabin_id}  (excluir cabine)
+    if method == "DELETE" and plant_id and is_path(path, "/cabin-groups"):
+        parts = [p for p in path.strip("/").split("/") if p]
+        cabin_id_str = parts[-1] if len(parts) >= 2 and parts[-1].isdigit() else None
+        if not cabin_id_str:
+            return http_response(400, {"error": "cabin_id ausente na URL"})
+        conn = get_conn()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        try:
+            auth_error = require_current_user(cur, ctx)
+            if auth_error: return auth_error
+            if not ensure_plant_access(cur, int(plant_id), ctx):
+                return http_response(403, {"error": "sem permissao"})
+            if not can_edit_plant(ctx):
+                return http_response(403, {"error": "sem permissao para excluir cabine"})
+            cur.execute("""
+                UPDATE public.device SET cabin_id = NULL, updated_at = NOW()
+                WHERE cabin_id = %(cid)s AND power_plant_id = %(pid)s;
+            """, {"cid": int(cabin_id_str), "pid": int(plant_id)})
+            cur.execute("DELETE FROM public.cabin WHERE id = %(cid)s;", {"cid": int(cabin_id_str)})
+            conn.commit()
+            return http_response(200, {"ok": True})
+        except Exception as e:
+            conn.rollback()
+            print("[DELETE /cabin-groups] ERROR:", repr(e))
             return http_response(500, {"error": "Internal Server Error"})
         finally:
             cur.close()
@@ -7726,6 +7912,72 @@ def _lambda_handler_impl(event, context):
             conn.rollback()
             print("[POST /tickets] ERROR:", repr(e), traceback.format_exc())
             return http_response(500, {"error": str(e)})
+        finally:
+            cur.close()
+            end_request(conn)
+
+    # GET /tickets/unseen — contagem + detalhes de tickets com atividade nova
+    if method == "GET" and is_path(path, "/tickets/unseen"):
+        conn = get_conn()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        try:
+            since = (params.get("since") or "").strip()
+            qvals = {}
+
+            if ctx["is_superuser"]:
+                if since:
+                    qvals["since"] = since
+                    cur.execute("""
+                        SELECT t.id, t.title, t.status, t.username, t.updated_at,
+                               (SELECT c.text FROM app.ticket_comments c
+                                WHERE c.ticket_id = t.id ORDER BY c.created_at DESC LIMIT 1) AS last_comment
+                        FROM app.tickets t
+                        WHERE t.updated_at > %(since)s AND t.status != 'resolved'
+                        ORDER BY t.updated_at DESC LIMIT 10;
+                    """, qvals)
+                else:
+                    cur.execute("""
+                        SELECT t.id, t.title, t.status, t.username, t.updated_at,
+                               (SELECT c.text FROM app.ticket_comments c
+                                WHERE c.ticket_id = t.id ORDER BY c.created_at DESC LIMIT 1) AS last_comment
+                        FROM app.tickets t
+                        WHERE t.status != 'resolved'
+                        ORDER BY t.updated_at DESC LIMIT 10;
+                    """)
+            else:
+                qvals["cid"] = ctx["customer_id"]
+                if since:
+                    qvals["since"] = since
+                    cur.execute("""
+                        SELECT t.id, t.title, t.status, t.updated_at,
+                               (SELECT c.text FROM app.ticket_comments c
+                                WHERE c.ticket_id = t.id AND c.is_admin = true
+                                ORDER BY c.created_at DESC LIMIT 1) AS last_comment
+                        FROM app.tickets t
+                        WHERE t.customer_id = %(cid)s
+                        AND EXISTS (
+                            SELECT 1 FROM app.ticket_comments c
+                            WHERE c.ticket_id = t.id AND c.is_admin = true
+                            AND c.created_at > %(since)s
+                        )
+                        ORDER BY t.updated_at DESC LIMIT 10;
+                    """, qvals)
+                else:
+                    cur.execute("""
+                        SELECT t.id, t.title, t.status, t.updated_at,
+                               (SELECT c.text FROM app.ticket_comments c
+                                WHERE c.ticket_id = t.id AND c.is_admin = true
+                                ORDER BY c.created_at DESC LIMIT 1) AS last_comment
+                        FROM app.tickets t
+                        WHERE t.customer_id = %(cid)s AND t.status != 'resolved'
+                        ORDER BY t.updated_at DESC LIMIT 10;
+                    """, qvals)
+
+            rows = cur.fetchall() or []
+            return http_response(200, {"unseen": len(rows), "items": rows})
+        except Exception as e:
+            print("[GET /tickets/unseen] ERROR:", repr(e))
+            return http_response(500, {"error": "Internal Server Error"})
         finally:
             cur.close()
             end_request(conn)
