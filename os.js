@@ -2524,9 +2524,8 @@ async function loadRespUsers() {
   }
 
   try {
-    const date = document.getElementById("respDatePicker")?.value || new Date().toISOString().split("T")[0]
-    const data = await apiJson(`/users?date=${encodeURIComponent(date)}`)
-    const users = Array.isArray(data?.users) ? data.users : Array.isArray(data) ? data : []
+    const data = await apiJson(`/workers`)
+    const users = Array.isArray(data?.items) ? data.items : Array.isArray(data?.users) ? data.users : Array.isArray(data) ? data : []
     KB.respUsers = users
     filterRespTable(document.getElementById("respSearchInput")?.value || "")
   } catch (error) {
