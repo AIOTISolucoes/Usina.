@@ -5046,6 +5046,55 @@ function updatePortfolioCardAlarms() {
 // âmbar = só avisos. Tooltip lista os acontecimentos; clique
 // abre o relatório do robô.
 // ======================================================
+let _issuePopEl = null;
+
+function _ensureIssuePop() {
+  if (_issuePopEl) return _issuePopEl;
+  _issuePopEl = document.createElement("div");
+  _issuePopEl.className = "plant-issue-pop hidden";
+  document.body.appendChild(_issuePopEl);
+  _issuePopEl.addEventListener("mouseleave", () => _issuePopEl.classList.add("hidden"));
+  window.addEventListener("scroll", () => _issuePopEl.classList.add("hidden"), { passive: true });
+  return _issuePopEl;
+}
+
+function _showIssuePop(badge, plantName, plantIssues) {
+  if (!plantIssues || !plantIssues.length) return;
+  const pop = _ensureIssuePop();
+  const sevMeta = s => (String(s || "").toLowerCase() === "critical")
+    ? ["crítico", "#ff4d4f"]
+    : ["aviso", "#ffb020"];
+
+  pop.innerHTML = `
+    <div class="plant-issue-pop__title">
+      <i class="fa-solid fa-triangle-exclamation"></i>
+      ${plantName || "Usina"} · ${plantIssues.length} acontecimento${plantIssues.length > 1 ? "s" : ""}
+    </div>
+    ${plantIssues.map(i => {
+      const [lbl, color] = sevMeta(i.severity);
+      return `
+      <div class="plant-issue-pop__item">
+        <span class="plant-issue-pop__dot" style="background:${color};box-shadow:0 0 6px ${color};"></span>
+        <div class="plant-issue-pop__body">
+          <div class="plant-issue-pop__msg">${i.message || i.type || "acontecimento"}</div>
+          <div class="plant-issue-pop__meta">${i.device_name ? i.device_name + " · " : ""}<span style="color:${color};">${lbl}</span></div>
+        </div>
+      </div>`;
+    }).join("")}
+    <div class="plant-issue-pop__hint">clique no badge para abrir o relatório completo</div>`;
+
+  pop.classList.remove("hidden");
+  const r = badge.getBoundingClientRect();
+  const w = pop.offsetWidth || 272;
+  const h = pop.offsetHeight || 0;
+  let left = Math.min(r.right - w, window.innerWidth - w - 8);
+  if (left < 8) left = 8;
+  let top = r.bottom + 8;
+  if (top + h > window.innerHeight - 8) top = Math.max(8, r.top - h - 8);
+  pop.style.left = left + "px";
+  pop.style.top = top + "px";
+}
+
 function updatePlantCardIssueBadges() {
   const grid = document.getElementById("portfolioCardView");
   if (!grid) return;
@@ -5069,9 +5118,6 @@ function updatePlantCardIssueBadges() {
     }
 
     const hasCritical = plantIssues.some(i => (i.severity || "").toLowerCase() === "critical");
-    const tooltip = plantIssues
-      .map(i => `• ${i.device_name ? i.device_name + ": " : ""}${i.message || i.type || "acontecimento"}`)
-      .join("\n");
 
     if (!badge) {
       badge = document.createElement("div");
@@ -5083,10 +5129,21 @@ function updatePlantCardIssueBadges() {
         e.stopPropagation();
         try { robotToggleReport(true); } catch (_) {}
       });
+      badge.addEventListener("mouseenter", () => {
+        _showIssuePop(badge, badge._plantName, badge._issues || []);
+      });
+      badge.addEventListener("mouseleave", () => {
+        setTimeout(() => {
+          if (_issuePopEl && !_issuePopEl.matches(":hover") && !badge.matches(":hover")) {
+            _issuePopEl.classList.add("hidden");
+          }
+        }, 160);
+      });
       card.appendChild(badge);
     }
+    badge._issues = plantIssues;
+    badge._plantName = card.dataset.plantName || "";
     badge.classList.toggle("is-critical", hasCritical);
-    badge.title = tooltip;
     const countEl = badge.querySelector(".plant-card__issue-count");
     if (countEl) countEl.textContent = plantIssues.length > 1 ? String(plantIssues.length) : "";
   });

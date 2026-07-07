@@ -2956,6 +2956,76 @@ tbody tr:hover td {
   50%      { transform: scale(1.10); filter: brightness(1.35); }
 }
 
+/* Popover de acontecimentos (hover no badge) */
+.plant-issue-pop {
+  position: fixed;
+  z-index: 3000;
+  width: 272px;
+  max-height: 320px;
+  overflow-y: auto;
+  background: linear-gradient(160deg, rgba(8,20,12,0.98) 0%, rgba(4,12,7,0.99) 100%);
+  border: 1px solid rgba(255,77,79,0.30);
+  border-radius: 12px;
+  padding: 10px 12px 8px;
+  box-shadow: 0 10px 34px rgba(0,0,0,0.6), 0 0 18px rgba(255,77,79,0.08);
+  backdrop-filter: blur(6px);
+  animation: issuePopIn 0.16s ease-out;
+}
+
+.plant-issue-pop.hidden { display: none; }
+
+.plant-issue-pop__title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: #ff8a8c;
+  margin-bottom: 6px;
+}
+
+.plant-issue-pop__item {
+  display: flex;
+  gap: 8px;
+  padding: 7px 0;
+  border-top: 1px solid rgba(255,255,255,0.05);
+}
+
+.plant-issue-pop__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-top: 4px;
+  flex-shrink: 0;
+}
+
+.plant-issue-pop__msg {
+  font-size: 12px;
+  color: rgba(255,255,255,0.88);
+  line-height: 1.35;
+}
+
+.plant-issue-pop__meta {
+  font-size: 10.5px;
+  color: rgba(255,255,255,0.45);
+  margin-top: 2px;
+}
+
+.plant-issue-pop__hint {
+  font-size: 10px;
+  color: rgba(255,255,255,0.32);
+  margin-top: 8px;
+  text-align: center;
+  font-style: italic;
+}
+
+@keyframes issuePopIn {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: none; }
+}
+
 /* === PLANT EDIT BUTTON === */
 .plant-card__edit-btn {
   position: absolute;
