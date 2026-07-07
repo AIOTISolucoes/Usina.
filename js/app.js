@@ -5037,6 +5037,61 @@ function updatePortfolioCardAlarms() {
   });
 }
 
+// ======================================================
+// BADGE DE ACONTECIMENTOS NO CARD
+// Mostra um sinal de exclamação pulsando no topo do card
+// para TODA issue que o robô detectou naquela usina
+// (usina desligada/potência 0, temperatura alta, PR caindo,
+// clipping, mudanças de estado etc.). Vermelho = tem crítico;
+// âmbar = só avisos. Tooltip lista os acontecimentos; clique
+// abre o relatório do robô.
+// ======================================================
+function updatePlantCardIssueBadges() {
+  const grid = document.getElementById("portfolioCardView");
+  if (!grid) return;
+  const issues = Array.isArray(ROBOT_STATE?.issues) ? ROBOT_STATE.issues : [];
+  const byPlant = new Map();
+  issues.forEach(i => {
+    const pid = String(i.plant_id ?? "");
+    if (!pid) return;
+    if (!byPlant.has(pid)) byPlant.set(pid, []);
+    byPlant.get(pid).push(i);
+  });
+
+  grid.querySelectorAll(".plant-card[data-plant-id]").forEach(card => {
+    const pid = String(card.dataset.plantId);
+    const plantIssues = byPlant.get(pid) || [];
+    let badge = card.querySelector(".plant-card__issue-badge");
+
+    if (!plantIssues.length) {
+      if (badge) badge.remove();
+      return;
+    }
+
+    const hasCritical = plantIssues.some(i => (i.severity || "").toLowerCase() === "critical");
+    const tooltip = plantIssues
+      .map(i => `• ${i.device_name ? i.device_name + ": " : ""}${i.message || i.type || "acontecimento"}`)
+      .join("\n");
+
+    if (!badge) {
+      badge = document.createElement("div");
+      badge.className = "plant-card__issue-badge";
+      badge.setAttribute("role", "button");
+      badge.setAttribute("aria-label", "Acontecimentos da usina");
+      badge.innerHTML = `<i class="fa-solid fa-exclamation"></i><span class="plant-card__issue-count"></span>`;
+      badge.addEventListener("click", (e) => {
+        e.stopPropagation();
+        try { robotToggleReport(true); } catch (_) {}
+      });
+      card.appendChild(badge);
+    }
+    badge.classList.toggle("is-critical", hasCritical);
+    badge.title = tooltip;
+    const countEl = badge.querySelector(".plant-card__issue-count");
+    if (countEl) countEl.textContent = plantIssues.length > 1 ? String(plantIssues.length) : "";
+  });
+}
+
 function renderPortfolioCards(plants) {
   const grid = document.getElementById("portfolioCardView");
   if (!grid) return;
@@ -5206,6 +5261,9 @@ function renderPortfolioCards(plants) {
   if (chartTargets.length > 0) {
     _startMiniChartBatch(chartTargets, renderGen);
   }
+
+  // Reaplica os badges de acontecimentos (o re-render zera o grid)
+  try { updatePlantCardIssueBadges(); } catch (_) {}
 }
 
 /**
@@ -6644,6 +6702,7 @@ async function robotRefresh() {
   robotUpdateBubble(state);
   robotUpdateBadge(issues.length);
   robotUpdateExpandBtn(issues.length > 1);
+  try { updatePlantCardIssueBadges(); } catch (_) {}
 
   if (!issues.length) {
     ROBOT_STATE.currentIndex = 0;

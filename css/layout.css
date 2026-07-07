@@ -2913,6 +2913,49 @@ tbody tr:hover td {
 .pcc-leg--irr::before   { background: rgba(255,200,50,0.85); }
 .pcc-leg--pr::before    { background: rgba(80,200,255,0.75); }
 
+/* === BADGE DE ACONTECIMENTOS DA USINA (issues do robô no card) === */
+.plant-card__issue-badge {
+  position: absolute;
+  top: 10px;
+  right: 42px;
+  z-index: 9;
+  min-width: 26px;
+  height: 26px;
+  padding: 0 7px;
+  border-radius: 13px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #ffb020;
+  background: radial-gradient(circle, rgba(255,176,32,0.20) 0%, rgba(255,176,32,0.06) 100%);
+  border: 1px solid rgba(255,176,32,0.65);
+  box-shadow: 0 0 10px rgba(255,176,32,0.35);
+  cursor: pointer;
+  animation: issueBadgePulse 1.8s ease-in-out infinite;
+}
+
+.plant-card__issue-badge.is-critical {
+  color: #ff4d4f;
+  background: radial-gradient(circle, rgba(255,77,79,0.24) 0%, rgba(255,77,79,0.07) 100%);
+  border-color: rgba(255,77,79,0.75);
+  box-shadow: 0 0 12px rgba(255,77,79,0.45);
+}
+
+.plant-card__issue-count {
+  font-size: 11px;
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.plant-card__issue-count:empty { display: none; }
+
+@keyframes issueBadgePulse {
+  0%, 100% { transform: scale(1);    filter: brightness(1); }
+  50%      { transform: scale(1.10); filter: brightness(1.35); }
+}
+
 /* === PLANT EDIT BUTTON === */
 .plant-card__edit-btn {
   position: absolute;
