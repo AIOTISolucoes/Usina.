@@ -2970,6 +2970,26 @@ tbody tr:hover td {
   box-shadow: 0 10px 34px rgba(0,0,0,0.6), 0 0 18px rgba(255,77,79,0.08);
   backdrop-filter: blur(6px);
   animation: issuePopIn 0.16s ease-out;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255,77,79,0.30) transparent;
+}
+
+.plant-issue-pop::-webkit-scrollbar {
+  width: 5px;
+}
+
+.plant-issue-pop::-webkit-scrollbar-track {
+  background: transparent;
+  margin: 8px 0;
+}
+
+.plant-issue-pop::-webkit-scrollbar-thumb {
+  background: rgba(255,77,79,0.28);
+  border-radius: 8px;
+}
+
+.plant-issue-pop::-webkit-scrollbar-thumb:hover {
+  background: rgba(255,77,79,0.50);
 }
 
 .plant-issue-pop.hidden { display: none; }
