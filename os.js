@@ -81,8 +81,10 @@ const KB = {
   opts: null,
   classifications: null,
   osNotes: { workOrderId: null, loading: false, items: [], error: null },
-  osNoteDrafts: { comment: "", feedback: "" }
+  osNoteDrafts: { comment: "", feedback: "", feedbackRating: 0 }
 }
+
+const OS_RATING_LABELS = { 1: "Muito Ruim", 2: "Ruim", 3: "Médio", 4: "Bom", 5: "Ótimo" }
 
 document.addEventListener("DOMContentLoaded", () => {
   initUser()
@@ -707,7 +709,7 @@ function closeDetail() {
   KB.currentOs = null
   KB.currentOsDetail = null
   KB.osNotes = { workOrderId: null, loading: false, items: [], error: null }
-  KB.osNoteDrafts = { comment: "", feedback: "" }
+  KB.osNoteDrafts = { comment: "", feedback: "", feedbackRating: 0 }
 }
 
 function openDeleteModal() {
@@ -921,6 +923,10 @@ function renderOsDetail(detail) {
         </div>
       </div>
       <div id="osdFeedbackList" class="osd-note-list"></div>
+      <div class="osd-rating" id="osdFeedbackRating">
+        ${[1, 2, 3, 4, 5].map((n) => `<button type="button" class="osd-star ${KB.osNoteDrafts.feedbackRating >= n ? "active" : ""}" data-rating="${n}" title="${OS_RATING_LABELS[n]}"><i class="fa-solid fa-star"></i></button>`).join("")}
+        <span class="osd-rating-label" id="osdFeedbackRatingLabel">${KB.osNoteDrafts.feedbackRating ? OS_RATING_LABELS[KB.osNoteDrafts.feedbackRating] : "Avalie a execução"}</span>
+      </div>
       <textarea id="osdFeedbackInput" class="osd-textarea osd-note-input" placeholder="Escreva o feedback da execução...">${esc(KB.osNoteDrafts.feedback || "")}</textarea>
       <div class="osd-note-actions">
         <button type="button" id="osdFeedbackBtn" class="wz-btn-primary osd-note-btn"><i class="fa-solid fa-clipboard-check"></i> Registrar feedback</button>
@@ -959,6 +965,12 @@ function renderOsDetail(detail) {
   document.getElementById("osdCommentBtn")?.addEventListener("click", () => submitWorkOrderNote("comment"))
   document.getElementById("osdFeedbackInput")?.addEventListener("input", (event) => { KB.osNoteDrafts.feedback = event.target.value })
   document.getElementById("osdCommentInput")?.addEventListener("input", (event) => { KB.osNoteDrafts.comment = event.target.value })
+  document.querySelectorAll("#osdFeedbackRating .osd-star").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      KB.osNoteDrafts.feedbackRating = Number(btn.dataset.rating) || 0
+      updateFeedbackRatingWidget()
+    })
+  })
   loadWorkOrderNotes(detail)
 }
 
@@ -1077,15 +1089,38 @@ function fmtNoteDateTime(value) {
   return date.toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" })
 }
 
+function updateFeedbackRatingWidget() {
+  const rating = KB.osNoteDrafts.feedbackRating || 0
+  document.querySelectorAll("#osdFeedbackRating .osd-star").forEach((btn) => {
+    btn.classList.toggle("active", Number(btn.dataset.rating) <= rating)
+  })
+  const label = document.getElementById("osdFeedbackRatingLabel")
+  if (label) label.textContent = rating ? OS_RATING_LABELS[rating] : "Avalie a execução"
+}
+
+function renderNoteStars(rating) {
+  const value = Number(rating) || 0
+  if (!value) return ""
+  const stars = [1, 2, 3, 4, 5]
+    .map((n) => `<i class="fa-solid fa-star ${n <= value ? "on" : ""}"></i>`)
+    .join("")
+  return `<div class="osd-note-stars">${stars}<span>${OS_RATING_LABELS[value] || ""}</span></div>`
+}
+
 function renderWorkOrderNoteItem(note) {
   const author = noteAuthorLabel(note)
+  const isFeedback = note.note_type === "feedback"
+  const user = getCurrentUser()
+  const mine = !isFeedback && note.created_by_user_id && user?.id &&
+    String(note.created_by_user_id) === String(user.id)
   return `
-    <div class="osd-note-item ${note.note_type === "feedback" ? "feedback" : ""}">
+    <div class="osd-note-item ${isFeedback ? "feedback" : "chat"} ${mine ? "mine" : ""}">
       <div class="osd-note-head">
         <span class="osd-note-author"><span class="osd-note-avatar">${avatarInitials(author)}</span>${esc(author)}</span>
         <span class="osd-note-date">${esc(fmtNoteDateTime(note.created_at))}</span>
       </div>
-      <div class="osd-note-text">${esc(note.content || "")}</div>
+      ${isFeedback ? renderNoteStars(note.rating) : ""}
+      ${note.content ? `<div class="osd-note-text">${esc(note.content)}</div>` : ""}
     </div>
   `
 }
@@ -1099,8 +1134,14 @@ async function submitWorkOrderNote(noteType) {
   const btnId = noteType === "feedback" ? "osdFeedbackBtn" : "osdCommentBtn"
   const input = document.getElementById(inputId)
   const content = (input?.value || "").trim()
-  if (!content) {
-    showToast(noteType === "feedback" ? "Escreva o feedback antes de registrar" : "Escreva o comentário antes de enviar", "error")
+  const rating = noteType === "feedback" ? (KB.osNoteDrafts.feedbackRating || 0) : 0
+
+  if (noteType === "feedback" && !rating) {
+    showToast("Selecione uma avaliação (estrelas) para o feedback", "error")
+    return
+  }
+  if (noteType === "comment" && !content) {
+    showToast("Escreva o comentário antes de enviar", "error")
     return
   }
 
@@ -1113,12 +1154,22 @@ async function submitWorkOrderNote(noteType) {
     await apiJson(`/work-orders/${workOrderId}/notes`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ content, note_type: noteType, created_by_user_id: user?.id || null })
+      body: JSON.stringify({
+        content,
+        note_type: noteType,
+        created_by_user_id: user?.id || null,
+        rating: rating || null
+      })
     })
 
     if (input) input.value = ""
-    if (noteType === "feedback") KB.osNoteDrafts.feedback = ""
-    else KB.osNoteDrafts.comment = ""
+    if (noteType === "feedback") {
+      KB.osNoteDrafts.feedback = ""
+      KB.osNoteDrafts.feedbackRating = 0
+      updateFeedbackRatingWidget()
+    } else {
+      KB.osNoteDrafts.comment = ""
+    }
     showToast(noteType === "feedback" ? "Feedback registrado" : "Comentário adicionado", "success")
 
     KB.osNotes = { workOrderId: null, loading: false, items: [], error: null }
