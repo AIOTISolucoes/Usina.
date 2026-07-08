@@ -6518,13 +6518,17 @@ async function refreshRealtimeEverything() {
         const prPct = normalizePercentMaybe(
           realtime.performance_ratio ?? realtime.pr_daily_pct ?? realtime.pr_percent
         );
+        // % de capacidade sobre a capacity AC (o que a usina entrega);
+        // rated DC so como fallback se nao houver capacity_ac
+        const capAc = realtime.capacity_ac != null ? Number(realtime.capacity_ac) : PLANT_STATE.capacity_ac;
+        const capBase = (capAc != null && capAc > 0) ? capAc : rated;
         PLANT_STATE = {
           ...PLANT_STATE,
           rated_power_kwp: rated,
           active_power_kw: active,
-          capacity_percent: rated > 0 ? (active / rated) * 100 : PLANT_STATE.capacity_percent,
+          capacity_percent: capBase > 0 ? (active / capBase) * 100 : PLANT_STATE.capacity_percent,
           pr_percent: prPct != null ? prPct : PLANT_STATE.pr_percent,
-          capacity_ac: realtime.capacity_ac != null ? Number(realtime.capacity_ac) : PLANT_STATE.capacity_ac,
+          capacity_ac: capAc,
         };
       }
     } else {
