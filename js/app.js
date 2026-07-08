@@ -1810,7 +1810,10 @@ function updateSummaryUI(plants) {
     totalCapacityAc += Number(p?.capacity_ac ?? 0) || 0;
   });
 
-  const loadPct = totalRatedPower > 0 ? (totalActivePower / totalRatedPower) * 100 : 0;
+  // % de carga sobre a capacidade AC (o que a usina consegue entregar);
+  // rated DC so como fallback se nao houver capacity_ac cadastrada
+  const capacityBase = totalCapacityAc > 0 ? totalCapacityAc : totalRatedPower;
+  const loadPct = capacityBase > 0 ? (totalActivePower / capacityBase) * 100 : 0;
 
   const elActive = document.querySelector("#activePower");
   const elRated = document.querySelector("#ratedPower");
