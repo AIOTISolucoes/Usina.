@@ -387,6 +387,7 @@ let DAILY = null;
 let MONTHLY = null;
 let DAILY_CHART_POWER_SOURCE = "inverter"; // "inverter" | "meter"
 let DAILY_CHART_IRR_SOURCE = "poa";        // "poa" | "ghi"
+let DAILY_CHART_EXPECTED_SOURCE = "pvsyst"; // "pvsyst" | "capacity" (linha reta no capacity AC)
 let ACTIVE_ALARMS = [];
 let PLANT_ALARMS_MENU_OPEN = false;
 let INVERTERS_REALTIME = [];
@@ -5887,6 +5888,18 @@ function renderDailyChart() {
   const irrData = useGhi ? DAILY.irradianceGhi : DAILY.irradiance;
   const irrLabel = useGhi ? "Irradiância GHI" : "Irradiância POA";
 
+  // Expectativa: curva PVSyst (quando a usina tem no banco) ou linha reta
+  // no capacity AC. Sem PVSyst, o capacity AC vira a expectativa padrão.
+  const hasPvsystExpected = Array.isArray(DAILY.expectedPower)
+    && DAILY.expectedPower.some(v => v != null && Number(v) > 0);
+  const capacityAc = asNumber(PLANT_STATE.capacity_ac, 0);
+  const useCapacityExpected = capacityAc > 0
+    && (DAILY_CHART_EXPECTED_SOURCE === "capacity" || !hasPvsystExpected);
+  const expectedData = useCapacityExpected
+    ? DAILY.labels.map(() => capacityAc)
+    : (Array.isArray(DAILY.expectedPower) ? DAILY.expectedPower : []);
+  const expectedLabel = useCapacityExpected ? "Capacity AC" : "Esperado";
+
   const greenGradient = ctx.createLinearGradient(0, 0, 0, 320);
   greenGradient.addColorStop(0, powerColorRgba[0]);
   greenGradient.addColorStop(0.6, powerColorRgba[1]);
@@ -5902,11 +5915,11 @@ function renderDailyChart() {
       labels: DAILY.labels,
       datasets: [
         {
-          label: "Esperado",
-          data: Array.isArray(DAILY.expectedPower) ? DAILY.expectedPower : [],
+          label: expectedLabel,
+          data: expectedData,
           borderColor: "rgba(205, 213, 225, 0.70)",
           fill: false,
-          tension: 0.28,
+          tension: useCapacityExpected ? 0 : 0.28,
           pointRadius: 0,
           borderWidth: 1.5,
           borderDash: [6, 6],
@@ -5962,6 +5975,7 @@ function renderDailyChart() {
               const label = item?.dataset?.label || "";
               const value = Number(item?.raw ?? 0);
               if (label === "Esperado") return `Esperado: ${formatKwPtBR(value)}`;
+              if (label === "Capacity AC") return `Capacity AC: ${formatKwPtBR(value)}`;
               if (label.includes("Potência") || label === "Multimedidor") return `${label}: ${formatKwPtBR(value)}`;
               if (label.includes("Irradiância")) return `${label}: ${formatWm2PtBR(value)}`;
               return `${label}: ${formatNumberPtBR(value)}`;
@@ -6018,6 +6032,20 @@ function _updateDailyChartToggles() {
   if (meterBtn) meterBtn.classList.toggle("active", DAILY_CHART_POWER_SOURCE === "meter");
   if (poaBtn) poaBtn.classList.toggle("active", DAILY_CHART_IRR_SOURCE === "poa");
   if (ghiBtn) ghiBtn.classList.toggle("active", DAILY_CHART_IRR_SOURCE === "ghi");
+
+  // Toggle da expectativa (PVSyst x Capacity AC): so aparece quando as
+  // duas opcoes existem; sem PVSyst o capacity AC ja e o padrao
+  const expWrap = document.getElementById("dailyExpToggleWrap");
+  const expPvBtn = document.getElementById("dailyToggleExpPvsyst");
+  const expCapBtn = document.getElementById("dailyToggleExpCap");
+  const hasPvsystExpected = Array.isArray(DAILY?.expectedPower)
+    && DAILY.expectedPower.some(v => v != null && Number(v) > 0);
+  const capOk = asNumber(PLANT_STATE.capacity_ac, 0) > 0;
+  const effCapacity = capOk && (DAILY_CHART_EXPECTED_SOURCE === "capacity" || !hasPvsystExpected);
+
+  if (expWrap) expWrap.style.display = (hasPvsystExpected && capOk) ? "" : "none";
+  if (expPvBtn) expPvBtn.classList.toggle("active", hasPvsystExpected && !effCapacity);
+  if (expCapBtn) expCapBtn.classList.toggle("active", effCapacity);
 }
 
 function dailyChartSetPowerSource(source) {
@@ -6028,6 +6056,12 @@ function dailyChartSetPowerSource(source) {
 
 function dailyChartSetIrrSource(source) {
   DAILY_CHART_IRR_SOURCE = source;
+  _updateDailyChartToggles();
+  _showChartLoader("dailyChartLoader", () => renderDailyChart());
+}
+
+function dailyChartSetExpectedSource(source) {
+  DAILY_CHART_EXPECTED_SOURCE = source;
   _updateDailyChartToggles();
   _showChartLoader("dailyChartLoader", () => renderDailyChart());
 }
