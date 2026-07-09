@@ -389,6 +389,7 @@ let DAILY_CHART_POWER_SOURCE = "inverter"; // "inverter" | "meter"
 let DAILY_CHART_IRR_SOURCE = "poa";        // "poa" | "ghi"
 let DAILY_CHART_EXPECTED_SOURCE = "pvsyst"; // "pvsyst" | "capacity" (linha reta no capacity AC)
 let ACTIVE_ALARMS = [];
+let _plantAlarmSoundPrimed = false;
 let PLANT_ALARMS_MENU_OPEN = false;
 let INVERTERS_REALTIME = [];
 let RELAY_REALTIME = null;
@@ -6570,7 +6571,13 @@ async function refreshRealtimeEverything() {
     }
 
     if (alarmsRes.status === "fulfilled") {
+      const _prevAlarmCount = ACTIVE_ALARMS.length;
       ACTIVE_ALARMS = Array.isArray(alarmsRes.value) ? alarmsRes.value : [];
+      // Som quando surge alarme novo (não toca no primeiro carregamento)
+      if (_plantAlarmSoundPrimed && ACTIVE_ALARMS.length > _prevAlarmCount) {
+        try { window.NotifySound?.play("critical"); } catch (_) {}
+      }
+      _plantAlarmSoundPrimed = true;
       renderAlarms(ACTIVE_ALARMS);
       renderAlarmMenuButton();
     } else {

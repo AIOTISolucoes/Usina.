@@ -6786,8 +6786,19 @@ async function robotRefresh() {
     ROBOT_STATE.currentIndex = 0;
     robotUpdateAvatar(state);
     robotStartCycle();
+
+    // Som de notificação — só após o primeiro refresh (não toca no load)
+    if (_robotSoundPrimed) {
+      try {
+        const hasCritical = issues.some(i => (i.severity || "").toLowerCase() === "critical");
+        window.NotifySound?.play(hasCritical ? "critical" : "warning");
+      } catch (_) {}
+    }
   }
+  _robotSoundPrimed = true;
 }
+
+let _robotSoundPrimed = false;
 
 function _robotApplyMutedState() {
   robotShowBubble(false);
@@ -8324,6 +8335,8 @@ function _tkMarkSeen() {
 }
 
 function _tkPlaySound() {
+  // Centralizado: respeita a preferência de mudo e o desbloqueio de áudio
+  if (window.NotifySound) { try { NotifySound.play("ticket"); } catch (_) {} return; }
   try {
     const ac = new (window.AudioContext || window.webkitAudioContext)();
     const notes = [880, 1108.73, 1318.51];
