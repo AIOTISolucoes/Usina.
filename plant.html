@@ -236,6 +236,14 @@
                 GHI
               </button>
             </div>
+            <div id="dailyExpToggleWrap" class="chart-toggle-group" style="display:none">
+              <button id="dailyToggleExpPvsyst" class="chart-toggle-btn active" type="button" onclick="dailyChartSetExpectedSource('pvsyst')">
+                Exp. PVSyst
+              </button>
+              <button id="dailyToggleExpCap" class="chart-toggle-btn" type="button" onclick="dailyChartSetExpectedSource('capacity')">
+                Cap. AC
+              </button>
+            </div>
           </div>
         </div>
         <div class="chart-toolbar" aria-label="Controles de zoom do gráfico diário">
@@ -780,7 +788,9 @@
 </svg>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="js/notify_sound.js"></script>
 <script src="js/plant.js"></script>
+<script src="js/help_tour.js"></script>
 <script src="js/pwa.js"></script>
 </body>
 </html>

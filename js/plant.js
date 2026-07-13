@@ -387,7 +387,9 @@ let DAILY = null;
 let MONTHLY = null;
 let DAILY_CHART_POWER_SOURCE = "inverter"; // "inverter" | "meter"
 let DAILY_CHART_IRR_SOURCE = "poa";        // "poa" | "ghi"
+let DAILY_CHART_EXPECTED_SOURCE = "pvsyst"; // "pvsyst" | "capacity" (linha reta no capacity AC)
 let ACTIVE_ALARMS = [];
+let _plantAlarmSoundPrimed = false;
 let PLANT_ALARMS_MENU_OPEN = false;
 let INVERTERS_REALTIME = [];
 let RELAY_REALTIME = null;
@@ -5887,6 +5889,18 @@ function renderDailyChart() {
   const irrData = useGhi ? DAILY.irradianceGhi : DAILY.irradiance;
   const irrLabel = useGhi ? "Irradiância GHI" : "Irradiância POA";
 
+  // Expectativa: curva PVSyst (quando a usina tem no banco) ou linha reta
+  // no capacity AC. Sem PVSyst, o capacity AC vira a expectativa padrão.
+  const hasPvsystExpected = Array.isArray(DAILY.expectedPower)
+    && DAILY.expectedPower.some(v => v != null && Number(v) > 0);
+  const capacityAc = asNumber(PLANT_STATE.capacity_ac, 0);
+  const useCapacityExpected = capacityAc > 0
+    && (DAILY_CHART_EXPECTED_SOURCE === "capacity" || !hasPvsystExpected);
+  const expectedData = useCapacityExpected
+    ? DAILY.labels.map(() => capacityAc)
+    : (Array.isArray(DAILY.expectedPower) ? DAILY.expectedPower : []);
+  const expectedLabel = useCapacityExpected ? "Capacity AC" : "Esperado";
+
   const greenGradient = ctx.createLinearGradient(0, 0, 0, 320);
   greenGradient.addColorStop(0, powerColorRgba[0]);
   greenGradient.addColorStop(0.6, powerColorRgba[1]);
@@ -5902,11 +5916,11 @@ function renderDailyChart() {
       labels: DAILY.labels,
       datasets: [
         {
-          label: "Esperado",
-          data: Array.isArray(DAILY.expectedPower) ? DAILY.expectedPower : [],
+          label: expectedLabel,
+          data: expectedData,
           borderColor: "rgba(205, 213, 225, 0.70)",
           fill: false,
-          tension: 0.28,
+          tension: useCapacityExpected ? 0 : 0.28,
           pointRadius: 0,
           borderWidth: 1.5,
           borderDash: [6, 6],
@@ -5962,6 +5976,7 @@ function renderDailyChart() {
               const label = item?.dataset?.label || "";
               const value = Number(item?.raw ?? 0);
               if (label === "Esperado") return `Esperado: ${formatKwPtBR(value)}`;
+              if (label === "Capacity AC") return `Capacity AC: ${formatKwPtBR(value)}`;
               if (label.includes("Potência") || label === "Multimedidor") return `${label}: ${formatKwPtBR(value)}`;
               if (label.includes("Irradiância")) return `${label}: ${formatWm2PtBR(value)}`;
               return `${label}: ${formatNumberPtBR(value)}`;
@@ -6018,6 +6033,20 @@ function _updateDailyChartToggles() {
   if (meterBtn) meterBtn.classList.toggle("active", DAILY_CHART_POWER_SOURCE === "meter");
   if (poaBtn) poaBtn.classList.toggle("active", DAILY_CHART_IRR_SOURCE === "poa");
   if (ghiBtn) ghiBtn.classList.toggle("active", DAILY_CHART_IRR_SOURCE === "ghi");
+
+  // Toggle da expectativa (PVSyst x Capacity AC): so aparece quando as
+  // duas opcoes existem; sem PVSyst o capacity AC ja e o padrao
+  const expWrap = document.getElementById("dailyExpToggleWrap");
+  const expPvBtn = document.getElementById("dailyToggleExpPvsyst");
+  const expCapBtn = document.getElementById("dailyToggleExpCap");
+  const hasPvsystExpected = Array.isArray(DAILY?.expectedPower)
+    && DAILY.expectedPower.some(v => v != null && Number(v) > 0);
+  const capOk = asNumber(PLANT_STATE.capacity_ac, 0) > 0;
+  const effCapacity = capOk && (DAILY_CHART_EXPECTED_SOURCE === "capacity" || !hasPvsystExpected);
+
+  if (expWrap) expWrap.style.display = (hasPvsystExpected && capOk) ? "" : "none";
+  if (expPvBtn) expPvBtn.classList.toggle("active", hasPvsystExpected && !effCapacity);
+  if (expCapBtn) expCapBtn.classList.toggle("active", effCapacity);
 }
 
 function dailyChartSetPowerSource(source) {
@@ -6028,6 +6057,12 @@ function dailyChartSetPowerSource(source) {
 
 function dailyChartSetIrrSource(source) {
   DAILY_CHART_IRR_SOURCE = source;
+  _updateDailyChartToggles();
+  _showChartLoader("dailyChartLoader", () => renderDailyChart());
+}
+
+function dailyChartSetExpectedSource(source) {
+  DAILY_CHART_EXPECTED_SOURCE = source;
   _updateDailyChartToggles();
   _showChartLoader("dailyChartLoader", () => renderDailyChart());
 }
@@ -6485,6 +6520,85 @@ function renderPlantName(realtime) {
 }
 
 // ======================================================
+// MANUTENÇÃO DO COLETOR LOCAL (aviso + toggle admin)
+// ======================================================
+let COLLECTOR_MAINTENANCE = false;
+
+const CMB_WRENCH_SVG =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>';
+
+function renderCollectorMaintenance(realtime) {
+  if (realtime && typeof realtime.collector_maintenance !== "undefined") {
+    COLLECTOR_MAINTENANCE = realtime.collector_maintenance === true;
+  }
+
+  const ctx = getUserContext();
+  const isAdmin = ctx.is_superuser === true || ctx.is_superuser === "true";
+
+  // Estados da faixa: "on" (banner p/ todos, admin ganha botão Encerrar),
+  // "idle" (só admin: faixa discreta p/ ativar), "none" (nada)
+  const state = COLLECTOR_MAINTENANCE ? "on" : (isAdmin ? "idle" : "none");
+
+  let banner = document.getElementById("collectorMaintenanceBanner");
+  if (banner && banner.dataset.state === state) return;
+  if (banner) banner.remove();
+  if (state === "none") return;
+
+  const headerCard = document.querySelector(".plant-header-card");
+  if (!headerCard || !headerCard.parentNode) return;
+
+  banner = document.createElement("div");
+  banner.id = "collectorMaintenanceBanner";
+  banner.dataset.state = state;
+
+  if (state === "on") {
+    banner.className = "collector-maintenance-banner";
+    banner.innerHTML =
+      CMB_WRENCH_SVG +
+      '<strong>COLETOR LOCAL SENDO ATUALIZADO</strong>' +
+      '<span class="cmb-sub">nossa equipe está trabalhando na usina; podem existir inconsistências temporárias nos dados</span>' +
+      (isAdmin
+        ? '<button id="collectorMaintenanceBtn" class="cmb-action" type="button" title="Encerrar manutenção do coletor local">' + CMB_WRENCH_SVG + '<span>Encerrar</span></button>'
+        : '');
+  } else {
+    banner.className = "collector-maintenance-banner collector-maintenance-banner--idle";
+    banner.innerHTML =
+      '<button id="collectorMaintenanceBtn" class="cmb-action" type="button" title="Avisar na plataforma que o coletor local está sendo atualizado">' + CMB_WRENCH_SVG + '<span>Marcar coletor em atualização</span></button>';
+  }
+
+  headerCard.parentNode.insertBefore(banner, headerCard.nextSibling);
+  const btn = banner.querySelector("#collectorMaintenanceBtn");
+  if (btn) btn.addEventListener("click", toggleCollectorMaintenance);
+}
+
+async function toggleCollectorMaintenance() {
+  const turnOn = !COLLECTOR_MAINTENANCE;
+  const msg = turnOn
+    ? 'Marcar esta usina como "ATUALIZANDO COLETOR LOCAL"?\n\nO aviso ficará visível para todos os usuários até ser encerrado.'
+    : 'Encerrar o modo "ATUALIZANDO COLETOR LOCAL" desta usina?';
+  if (!window.confirm(msg)) return;
+
+  const btn = document.getElementById("collectorMaintenanceBtn");
+  if (btn) btn.disabled = true;
+  try {
+    const res = await fetch(`${API_BASE}/plants/${PLANT_ID}/maintenance`, {
+      method: "PATCH",
+      headers: buildWriteAuthHeaders(),
+      body: JSON.stringify({ maintenance: turnOn })
+    });
+    const data = await res.json().catch(() => null);
+    if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
+    COLLECTOR_MAINTENANCE = data?.collector_maintenance === true;
+    renderCollectorMaintenance(null);
+  } catch (e) {
+    console.error("[collector-maintenance] erro", e);
+    alert("Falha ao alterar o modo manutenção: " + (e?.message || e));
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+// ======================================================
 // ✅ REFRESH (realtime + alarms + inverters rows + strings abertas + relay)
 // ======================================================
 async function refreshRealtimeEverything() {
@@ -6506,6 +6620,7 @@ async function refreshRealtimeEverything() {
     if (realtimeRes.status === "fulfilled") {
       realtime = realtimeRes.value;
       renderPlantName(realtime);
+      renderCollectorMaintenance(realtime);
       if (realtime) {
         const rated = asNumber(
           realtime.rated_power_ac_kw ?? realtime.rated_power_kw ?? realtime.rated_power_kwp,
@@ -6518,13 +6633,17 @@ async function refreshRealtimeEverything() {
         const prPct = normalizePercentMaybe(
           realtime.performance_ratio ?? realtime.pr_daily_pct ?? realtime.pr_percent
         );
+        // % de capacidade sobre a capacity AC (o que a usina entrega);
+        // rated DC so como fallback se nao houver capacity_ac
+        const capAc = realtime.capacity_ac != null ? Number(realtime.capacity_ac) : PLANT_STATE.capacity_ac;
+        const capBase = (capAc != null && capAc > 0) ? capAc : rated;
         PLANT_STATE = {
           ...PLANT_STATE,
           rated_power_kwp: rated,
           active_power_kw: active,
-          capacity_percent: rated > 0 ? (active / rated) * 100 : PLANT_STATE.capacity_percent,
+          capacity_percent: capBase > 0 ? (active / capBase) * 100 : PLANT_STATE.capacity_percent,
           pr_percent: prPct != null ? prPct : PLANT_STATE.pr_percent,
-          capacity_ac: realtime.capacity_ac != null ? Number(realtime.capacity_ac) : PLANT_STATE.capacity_ac,
+          capacity_ac: capAc,
         };
       }
     } else {
@@ -6532,7 +6651,13 @@ async function refreshRealtimeEverything() {
     }
 
     if (alarmsRes.status === "fulfilled") {
+      const _prevAlarmCount = ACTIVE_ALARMS.length;
       ACTIVE_ALARMS = Array.isArray(alarmsRes.value) ? alarmsRes.value : [];
+      // Som quando surge alarme novo (não toca no primeiro carregamento)
+      if (_plantAlarmSoundPrimed && ACTIVE_ALARMS.length > _prevAlarmCount) {
+        try { window.NotifySound?.play("critical"); } catch (_) {}
+      }
+      _plantAlarmSoundPrimed = true;
       renderAlarms(ACTIVE_ALARMS);
       renderAlarmMenuButton();
     } else {
