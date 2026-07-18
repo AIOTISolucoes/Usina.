@@ -4623,8 +4623,12 @@ function renderWeather(data) {
   // Painel expandido
   const wxWind = document.getElementById("wxWindSpeed");
   if (wxWind) {
-    const v = d.wind_speed_ms ?? d.vel_vento ?? null;
-    wxWind.textContent = v != null ? `${Number(v).toFixed(1)} m/s` : "—";
+    const v = d.wind_speed_ms ?? d.wind_speed ?? d.vel_vento ?? null;
+    // sanidade: CLP com registrador errado manda milhões (ex.: Pacajus1) —
+    // acima de 60 m/s (furacão) trata como dado inválido
+    const n = v != null ? Number(v) : null;
+    wxWind.textContent = n != null && isFinite(n) && n >= 0 && n <= 60
+      ? `${n.toFixed(1)} m/s` : "—";
   }
 
   const wxDir = document.getElementById("wxWindDir");
@@ -4641,8 +4645,8 @@ function renderWeather(data) {
 
   const wxRain = document.getElementById("wxRain");
   if (wxRain) {
-    const hour = d.rainfall_hour_mm ?? d.acumulador_pluv_hour ?? null;
-    const month = d.rainfall_month_mm ?? d.acumulador_pluv_month ?? null;
+    const hour = d.rainfall_hour_mm ?? d.hourly_accumulated_rain_mm ?? d.acumulador_pluv_hour ?? null;
+    const month = d.rainfall_month_mm ?? d.monthly_accumulated_rain_mm ?? d.acumulador_pluv_month ?? null;
     const hStr = hour != null ? `${Number(hour).toFixed(1)}` : "—";
     const mStr = month != null ? `${Number(month).toFixed(1)}` : "—";
     wxRain.textContent = `${hStr} / ${mStr} mm`;
@@ -4656,7 +4660,7 @@ function renderWeather(data) {
 
   const wxSensor = document.getElementById("wxRainSensor");
   if (wxSensor) {
-    const v = d.rain_sensor ?? d.sensor_chuva ?? null;
+    const v = d.rain_sensor ?? d.rain_signal ?? d.sensor_chuva ?? null;
     wxSensor.textContent = v != null ? (Number(v) === 1 ? "Chuva" : "Seco") : "—";
   }
 }
@@ -5881,10 +5885,11 @@ function renderDailyChart() {
 
   const powerData = useMeter ? DAILY.meterPower : DAILY.activePower;
   const powerLabel = useMeter ? "Multimedidor" : "Potência Ativa";
-  const powerColor = useMeter ? "#4da3ff" : "#39e58c";
-  const powerColorRgba = useMeter
+  const _br = window.__brandRemap || ((c) => c);
+  const powerColor = _br(useMeter ? "#4da3ff" : "#39e58c");
+  const powerColorRgba = (useMeter
     ? ["rgba(77,163,255,0.36)", "rgba(77,163,255,0.20)", "rgba(77,163,255,0.03)"]
-    : ["rgba(57,229,140,0.36)", "rgba(57,229,140,0.20)", "rgba(57,229,140,0.03)"];
+    : ["rgba(57,229,140,0.36)", "rgba(57,229,140,0.20)", "rgba(57,229,140,0.03)"]).map(_br);
 
   const irrData = useGhi ? DAILY.irradianceGhi : DAILY.irradiance;
   const irrLabel = useGhi ? "Irradiância GHI" : "Irradiância POA";
@@ -7848,22 +7853,34 @@ function _rondaSwitchTab(tab) {
   }
 }
 
+// Busca a ronda; se o backend avisar string_box_error (timeout das strings com o
+// banco ocupado), tenta de novo sozinho 1x depois de 2,5s — o usuário não vê o erro.
+async function _rondaFetchData(dateStr) {
+  let url = `${API_BASE}/plants/${PLANT_ID}/realtime?view=daily-round`;
+  if (dateStr) url += `&date=${dateStr}`;
+  const user = JSON.parse(localStorage.getItem("user") || "{}");
+  const headers = {};
+  if (user.customer_id) headers["X-Customer-Id"] = user.customer_id;
+  if (user.is_superuser === true) headers["X-Is-Superuser"] = "true";
+  let data = null;
+  for (let tentativa = 0; tentativa < 2; tentativa++) {
+    const res = await fetch(url, { headers, cache: "no-store" });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    data = await res.json();
+    if (data && data.body) data = typeof data.body === "string" ? JSON.parse(data.body) : data.body;
+    if (!data || !data.string_box_error) break;
+    await new Promise(r => setTimeout(r, 2500));
+  }
+  return data;
+}
+
 async function _rondaFetchAndRender(dateStr) {
   const el = document.getElementById("robotRondaContent");
   if (!el || !PLANT_ID) return;
   _RONDA_LOADING = true;
   el.innerHTML = '<div class="ronda-loading"><i class="fa-solid fa-spinner fa-spin"></i><br>Carregando ronda...</div>';
   try {
-    let url = `${API_BASE}/plants/${PLANT_ID}/realtime?view=daily-round`;
-    if (dateStr) url += `&date=${dateStr}`;
-    const user = JSON.parse(localStorage.getItem("user") || "{}");
-    const headers = {};
-    if (user.customer_id) headers["X-Customer-Id"] = user.customer_id;
-    if (user.is_superuser === true) headers["X-Is-Superuser"] = "true";
-    const res = await fetch(url, { headers, cache: "no-store" });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    let data = await res.json();
-    if (data && data.body) data = typeof data.body === "string" ? JSON.parse(data.body) : data.body;
+    const data = await _rondaFetchData(dateStr);
     _RONDA_DATA = data;
     _rondaRender(data, el);
   } catch (e) {
@@ -7872,6 +7889,14 @@ async function _rondaFetchAndRender(dateStr) {
   } finally {
     _RONDA_LOADING = false;
   }
+}
+
+// Mensagem quando a caixa de strings vem vazia: diferencia timeout do backend
+// (string_box_error, Lambda nova) de data fora da retenção de 45d da stg_inverter_string.
+function _rondaStringEmptyMsg(data) {
+  return data && data.string_box_error
+    ? '<i class="fa-solid fa-triangle-exclamation"></i> Não foi possível carregar as strings agora (banco de dados ocupado). Tente novamente em alguns minutos.'
+    : '<i class="fa-solid fa-circle-info"></i> Sem dados de strings para esta data — o histórico de strings guarda os últimos 45 dias.';
 }
 
 function _rondaFmt(v, dec) {
@@ -7986,6 +8011,11 @@ function _rondaRender(data, el) {
       </div>`;
     });
     html += `</div>`;
+  } else {
+    html += `<div class="ronda-section">
+      <div class="ronda-section-title"><i class="fa-solid fa-plug-circle-check"></i> Saúde String Box</div>
+      <div class="ronda-string-empty">${_rondaStringEmptyMsg(data)}</div>
+    </div>`;
   }
 
   el.innerHTML = html;
@@ -8158,6 +8188,14 @@ function _rondaOpenFullPanel(data) {
       </div>`;
     });
     body += `</div></div></div>`;
+  } else {
+    body += `<div class="ronda-card span-full">
+      <div class="ronda-card-header">
+        <div class="ronda-card-icon icon-string">${svgString}</div>
+        <div><div class="ronda-card-title">Saúde String Box</div><div class="ronda-card-subtitle">sem dados</div></div>
+      </div>
+      <div class="ronda-card-body"><div class="ronda-string-empty">${_rondaStringEmptyMsg(data)}</div></div>
+    </div>`;
   }
 
   body += "</div>";
@@ -8179,16 +8217,7 @@ async function _rondaFetchFullPanel(dateStr) {
   if (!bodyEl || !PLANT_ID) return;
   bodyEl.innerHTML = '<div class="ronda-loading"><i class="fa-solid fa-spinner fa-spin"></i><br>Carregando...</div>';
   try {
-    let url = `${API_BASE}/plants/${PLANT_ID}/realtime?view=daily-round`;
-    if (dateStr) url += `&date=${dateStr}`;
-    const user = JSON.parse(localStorage.getItem("user") || "{}");
-    const headers = {};
-    if (user.customer_id) headers["X-Customer-Id"] = user.customer_id;
-    if (user.is_superuser === true) headers["X-Is-Superuser"] = "true";
-    const res = await fetch(url, { headers, cache: "no-store" });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    let data = await res.json();
-    if (data && data.body) data = typeof data.body === "string" ? JSON.parse(data.body) : data.body;
+    const data = await _rondaFetchData(dateStr);
     _RONDA_DATA = data;
     _rondaOpenFullPanel(data);
   } catch (e) {
