@@ -57,6 +57,7 @@ function apiFetch(path, options = {}) {
   if (user.customer_id) headers["X-Customer-Id"] = user.customer_id;
   if (user.is_superuser === true) headers["X-Is-Superuser"] = "true";
   if (user.username) headers["X-Username"] = user.username;
+  if (user.token) headers["Authorization"] = `Bearer ${user.token}`;
 
   return fetch(`${API_BASE}${path}`, {
     ...options,
@@ -2573,16 +2574,33 @@ function populateContextSelectForPlant(plantId, tags) {
 
 // --- Select all / deselect all ---
 
+// Limite específico para corrente de string: cada string vira uma consulta à hist_string no
+// backend; muitas de uma vez (ainda mais em janelas longas) saturam o banco de 2 vCPU e estouram
+// o timeout do gateway (erro 503 → gráfico vazio). Por isso capamos o nº de séries de string.
+const DS_MAX_STRING_SERIES = 24;
+function _dsIsStringTag(tag) {
+  const p = dsSafeTrim(tag?.pathname || tag?.path_name || tag?.tag);
+  return /^INV_\d+\.string_current_\d+$/.test(p);
+}
+function _dsCountSelectedStrings(ps) {
+  return (ps?.selectedTags || []).filter(_dsIsStringTag).length;
+}
+
 function dsSelectAllTagsForPlant(plantId) {
   const ps = DATASTUDIO_PLANTS[String(plantId)];
   if (!ps) return;
   const visible = Array.isArray(ps.availableTags) ? ps.availableTags : [];
-  let added = 0;
+  let added = 0, skippedStrings = 0;
+  let stringCount = _dsCountSelectedStrings(ps);
   for (const tag of visible) {
     if (ps.selectedTags.length >= 50) break;
     const pathname = dsSafeTrim(tag?.pathname || tag?.path_name || tag?.tag);
     if (!pathname) continue;
     if (isTagSelectedForPlant(plantId, tag)) continue;
+    if (_dsIsStringTag(tag)) {
+      if (stringCount >= DS_MAX_STRING_SERIES) { skippedStrings++; continue; }
+      stringCount++;
+    }
     ps.selectedTags.push({
       id: tag?.id ?? null, tag_id: tag?.id ?? null,
       device_type: tag?.device_type ?? null, device_id: tag?.device_id ?? null,
@@ -2599,6 +2617,9 @@ function dsSelectAllTagsForPlant(plantId) {
   if (added) {
     updateStageUIForPlant(plantId);
     renderDataStudioTagsTableForPlant(plantId, visible);
+  }
+  if (skippedStrings) {
+    window.alert(`Foram adicionadas até ${DS_MAX_STRING_SERIES} correntes de string (limite por vez para não sobrecarregar o servidor). ${skippedStrings} não foram incluídas — plote em lotes menores.`);
   }
   dsUpdateSelectAllButtons(plantId);
 }
@@ -2640,6 +2661,10 @@ function addSelectedTagForPlant(plantId, tag) {
   if (isTagSelectedForPlant(plantId, tag)) return true;
   if (ps.selectedTags.length >= 50) {
     window.alert("Você pode selecionar no máximo 50 medidas por usina.");
+    return false;
+  }
+  if (_dsIsStringTag(tag) && _dsCountSelectedStrings(ps) >= DS_MAX_STRING_SERIES) {
+    window.alert(`Para não sobrecarregar o servidor, você pode plotar no máximo ${DS_MAX_STRING_SERIES} correntes de string por vez. Remova alguma para adicionar outra.`);
     return false;
   }
   ps.selectedTags.push(tag);
@@ -4629,8 +4654,8 @@ function isPlatformAdmin() {
 }
 
 function showView(viewName) {
-  // Explorador de Dados (JSON bruto do MQTT) é restrito ao admin da plataforma
-  if (viewName === "explorer" && !isPlatformAdmin()) viewName = "overview";
+  // Explorador de Dados (JSON bruto do MQTT): liberado a qualquer usuário logado;
+  // o backend limita cada cliente às SUAS usinas (filtro por customer_id em /raw/query).
   localStorage.setItem("currentView", viewName);
   Object.values(views).forEach(v => { if (v) v.classList.add("hidden"); });
   if (views[viewName]) {
@@ -4692,14 +4717,8 @@ document.getElementById("btnDataStudio")?.addEventListener("click", () => showVi
 document.getElementById("btnExplorer")?.addEventListener("click", () => showView("explorer"));
 document.getElementById("btnTickets")?.addEventListener("click", () => showView("tickets"));
 
-// Explorador (JSON do MQTT) só aparece para o admin da plataforma
-if (!isPlatformAdmin()) {
-  const _btnExp = document.getElementById("btnExplorer");
-  if (_btnExp) _btnExp.style.display = "none";
-  if (localStorage.getItem("currentView") === "explorer") {
-    localStorage.setItem("currentView", "overview");
-  }
-}
+// Explorador (JSON do MQTT): disponível para todos os usuários logados
+// (o backend restringe cada cliente às próprias usinas via customer_id).
 // Botão OS desabilitado temporariamente — não disponível para clientes ainda
 // document.getElementById("btnOS")?.addEventListener("click", () => {
 //   window.location.href = "os.html";
@@ -5067,9 +5086,10 @@ function updatePortfolioCardData(plants) {
       else icon.className = "plant-card__icon";
     }
 
-    // Update comm badge (manutenção não usa badge no topo — só o status embaixo)
+    // Update comm badge — manutenção e "Sem comunicação" não usam badge no topo (o status
+    // embaixo já avisa e o badge sumia com o nome da usina). Só a comunicação parcial fica.
     const existingBadge = card.querySelector(".badge--offline, .badge--partial, .badge--maintenance");
-    if (commStatus.badge && !isMaintenance) {
+    if (commStatus.badge && !isMaintenance && !isCommOffline) {
       if (existingBadge) {
         existingBadge.className = commStatus.badgeClass;
         existingBadge.textContent = commStatus.badge;
@@ -5307,6 +5327,8 @@ function openClpDiagModal(plantId, plantName) {
     document.body.appendChild(ov);
   }
   ov.classList.remove("hidden");
+  ov.dataset.plantId = plantId != null ? String(plantId) : "";
+  ov.dataset.plantName = plantName || "";
   ov.innerHTML = `
     <div class="clp-diag-modal" role="dialog" aria-label="Diagnóstico de conexão do CLP">
       <div class="clp-diag-head">
@@ -5396,7 +5418,76 @@ function _renderClpDiag(ov, data) {
       `</details>`;
   }
 
+  // Aba "Envio de configurações" (admin) — publica JSON no tópico exclusivo do
+  // gateway da usina via MQTT. Fase 1: teste manual (Igor define o JSON padrão).
+  if (data.is_admin) {
+    const _pid = ov.dataset.plantId || "";
+    html += `
+      <details class="clp-diag-cfg">
+        <summary><i class="fa-solid fa-gears"></i> Envio de configurações (admin)</summary>
+        <div class="clp-cfg-inner">
+          <p class="clp-cfg-hint">Publica um JSON de configuração no tópico exclusivo do gateway desta usina (MQTT). Deixe o tópico vazio para usar o padrão.</p>
+          <label class="clp-cfg-label">Tópico do gateway</label>
+          <input id="clpCfgTopic" class="clp-cfg-input" placeholder="padrão: dev/write/UFV/&lt;usina&gt;/config" autocomplete="off" spellcheck="false">
+          <label class="clp-cfg-label">Configuração (JSON)</label>
+          <textarea id="clpCfgPayload" class="clp-cfg-area" rows="6" placeholder='{ "device": "inversor", "marca": "...", "registers": [ ... ] }' spellcheck="false"></textarea>
+          <div class="clp-cfg-auth">
+            <input id="clpCfgUser" class="clp-cfg-input" placeholder="usuário" autocomplete="off">
+            <input id="clpCfgPass" class="clp-cfg-input" type="password" placeholder="senha" autocomplete="new-password">
+          </div>
+          <button class="clp-cfg-btn" onclick="_clpSendConfig('${_pid}')"><i class="fa-solid fa-satellite-dish"></i> Publicar no gateway</button>
+          <div id="clpCfgResult" class="clp-cfg-result"></div>
+        </div>
+      </details>`;
+  }
+
   body.innerHTML = html;
+}
+
+// Publica o JSON de configuração no tópico exclusivo do gateway (MQTT).
+// Re-valida usuário+senha operacional no backend (mesma segurança do comando remoto).
+function _clpSendConfig(plantId) {
+  const topicEl = document.getElementById("clpCfgTopic");
+  const payEl   = document.getElementById("clpCfgPayload");
+  const userEl  = document.getElementById("clpCfgUser");
+  const passEl  = document.getElementById("clpCfgPass");
+  const resEl   = document.getElementById("clpCfgResult");
+  if (!payEl || !resEl) return;
+
+  const topic      = ((topicEl && topicEl.value) || "").trim();
+  const rawPayload = (payEl.value || "").trim();
+  const username   = ((userEl && userEl.value) || "").trim();
+  const password   = (passEl && passEl.value) || "";
+
+  if (!rawPayload) { resEl.innerHTML = `<span class="clp-cfg-err">Cole o JSON de configuração.</span>`; return; }
+  if (!username || !password) { resEl.innerHTML = `<span class="clp-cfg-err">Informe usuário e senha.</span>`; return; }
+
+  let payload;
+  try {
+    payload = JSON.parse(rawPayload);
+  } catch (e) {
+    resEl.innerHTML = `<span class="clp-cfg-err"><i class="fa-solid fa-triangle-exclamation"></i> JSON inválido: ${_clpEsc(e.message)}</span>`;
+    return;
+  }
+
+  resEl.innerHTML = `<span class="clp-cfg-wait"><i class="fa-solid fa-circle-notch fa-spin"></i> Publicando...</span>`;
+  apiFetch(`/plants/${plantId}/clp/config`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ topic, payload, username, password }),
+  })
+    .then(async (r) => {
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || d.ok === false) throw new Error(d.error || ("HTTP " + r.status));
+      return d;
+    })
+    .then((d) => {
+      resEl.innerHTML = `<span class="clp-cfg-ok"><i class="fa-solid fa-check"></i> Publicado em <code>${_clpEsc(d.mqtt_topic)}</code></span>`;
+      if (passEl) passEl.value = "";
+    })
+    .catch((err) => {
+      resEl.innerHTML = `<span class="clp-cfg-err"><i class="fa-solid fa-triangle-exclamation"></i> ${_clpEsc(err.message || err)}</span>`;
+    });
 }
 
 function renderPortfolioCards(plants) {
@@ -5468,8 +5559,10 @@ function renderPortfolioCards(plants) {
     const canvasId = "mini-chart-" + plantId;
     _miniChartCapAc.set(String(plantId), Number(plant.capacity_ac ?? 0) || 0);
 
-    // Em manutenção o card NÃO ganha badge no topo (o status embaixo já avisa)
-    const commBadgeHtml = commStatus.badge && !isMaintenance
+    // Manutenção e "Sem comunicação" NÃO ganham badge no topo: o status embaixo já avisa
+    // e o badge inline engolia o espaço da linha, sumindo com o nome da usina (ex.: PedraBranca).
+    // Só a comunicação parcial (que não aparece no status de baixo) mantém o badge no topo.
+    const commBadgeHtml = commStatus.badge && !isMaintenance && !isCommOffline
       ? `<span class="${commStatus.badgeClass}">${commStatus.badge}</span>`
       : '';
     const activePowerDisplay = isCommOffline ? '—' : activePower.toFixed(1) + ' kW';
@@ -7497,6 +7590,31 @@ function _appRondaDownloadCsv(data) {
   URL.revokeObjectURL(url);
 }
 
+// Rasteriza o elemento do relatório limitando o tamanho do canvas: com scale fixo 2 um relatório
+// comprido estoura o teto de área de canvas do navegador (Safari/iOS ~16 Mpx) e o toDataURL devolve
+// um PNG vazio → jsPDF: "Incomplete or corrupt PNG file". Aqui a escala é reduzida p/ caber, com
+// fallback p/ JPEG (menor em memória) e, em último caso, erro claro pro usuário.
+async function _pdfRenderCanvas(bodyEl) {
+  const cw = bodyEl.scrollWidth || bodyEl.clientWidth || 1;
+  const ch = bodyEl.scrollHeight || bodyEl.clientHeight || 1;
+  const MAX_DIM = 8000;                 // teto por dimensão (px)
+  const MAX_AREA = 24 * 1024 * 1024;    // teto de área seguro entre navegadores (~24 Mpx)
+  let scale = Math.min(2, MAX_DIM / cw, MAX_DIM / ch, Math.sqrt(MAX_AREA / (cw * ch)));
+  if (!isFinite(scale) || scale <= 0) scale = 1;
+  scale = Math.max(0.5, scale);
+  const canvas = await html2canvas(bodyEl, { backgroundColor: "#1a1d23", scale, scrollY: 0, scrollX: 0, windowHeight: ch + 200 });
+  let imgData = canvas.toDataURL("image/png");
+  let imgFmt = "PNG";
+  if (!imgData || imgData.length < 1000) {            // PNG vazio → tenta JPEG (bem menor)
+    imgData = canvas.toDataURL("image/jpeg", 0.92);
+    imgFmt = "JPEG";
+  }
+  if (!imgData || imgData.length < 1000) {
+    throw new Error("relatório grande demais para o navegador gerar de uma vez. Tente reduzir o período ou gerar por seção.");
+  }
+  return { canvas, imgData, imgFmt };
+}
+
 async function _pdfCaptureFull(bodyEl, panelEl, filename, orientation) {
   const overlay = document.createElement("div");
   overlay.style.cssText = "position:fixed;inset:0;z-index:99999;background:rgba(0,0,0,0.7);display:flex;align-items:center;justify-content:center;font-size:14px;color:#39e58c;font-family:'Inter',sans-serif;";
@@ -7515,13 +7633,12 @@ async function _pdfCaptureFull(bodyEl, panelEl, filename, orientation) {
     if (typeof html2canvas === "undefined") { const sc = document.createElement("script"); sc.src = "https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"; document.head.appendChild(sc); await new Promise((r, j) => { sc.onload = r; sc.onerror = j; }); }
     if (typeof jspdf === "undefined" && typeof jsPDF === "undefined") { const sc = document.createElement("script"); sc.src = "https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"; document.head.appendChild(sc); await new Promise((r, j) => { sc.onload = r; sc.onerror = j; }); }
     const JP = (typeof jsPDF !== "undefined") ? jsPDF : (typeof jspdf !== "undefined" ? jspdf.jsPDF : window.jspdf.jsPDF);
-    const canvas = await html2canvas(bodyEl, { backgroundColor: "#1a1d23", scale: 2, scrollY: 0, scrollX: 0, windowHeight: bodyEl.scrollHeight + 200 });
-    const imgData = canvas.toDataURL("image/png");
+    const { canvas, imgData, imgFmt } = await _pdfRenderCanvas(bodyEl);
     const pdf = new JP({ orientation: orientation || "landscape", unit: "mm", format: "a4" });
     const pW = pdf.internal.pageSize.getWidth(), pH = pdf.internal.pageSize.getHeight(), m = 10, uW = pW - 2 * m;
     const imgH = (canvas.height / canvas.width) * uW;
     let yOff = 0;
-    while (yOff < imgH) { if (yOff > 0) pdf.addPage(); pdf.addImage(imgData, "PNG", m, m - yOff, uW, imgH); pdf.setFontSize(8); pdf.setTextColor(150); pdf.text(window.__BRANDING_PDF_FOOTER || "Gerado automaticamente pela plataforma AIOTI Solar SCADA", pW / 2, pH - 5, { align: "center" }); yOff += pH - 2 * m; }
+    while (yOff < imgH) { if (yOff > 0) pdf.addPage(); pdf.addImage(imgData, imgFmt, m, m - yOff, uW, imgH); pdf.setFontSize(8); pdf.setTextColor(150); pdf.text(window.__BRANDING_PDF_FOOTER || "Gerado automaticamente pela plataforma AIOTI Solar SCADA", pW / 2, pH - 5, { align: "center" }); yOff += pH - 2 * m; }
     pdf.save(filename);
   } catch (e) { console.error("[PDF]", e); alert("Erro ao gerar PDF: " + e.message); }
   finally {

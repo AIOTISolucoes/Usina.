@@ -9,7 +9,16 @@ function _getUserRole() {
 }
 function _canSendCommand() {
   if (typeof canSendCommand === "function") return canSendCommand();
-  const r = _getUserRole();
+  let u = {};
+  try { u = JSON.parse(localStorage.getItem("user") || "{}"); } catch { u = {}; }
+  // Espelha o backend can_send_command: superuser OU permissao especifica.
+  // (superuser tem role_key null -> nao pode depender so de role_key)
+  if (u.is_superuser === true || u.is_superuser === "true") return true;
+  const p = (u && typeof u.permissions === "object" && u.permissions) ? u.permissions : {};
+  const hasPerm = (k) => p[k] === true || p[k] === "true";
+  if (hasPerm("admin_customer") || hasPerm("remote_command") || hasPerm("device_command")) return true;
+  // Fallback por role_key (compatibilidade)
+  const r = u.role_key || "viewer";
   return ["superuser", "operator", "admin_customer"].includes(r);
 }
 
@@ -5596,6 +5605,22 @@ function renderStringsGrid(gridEl, payload) {
     return;
   }
 
+  // Última atualização das strings — elas têm cadência própria (~5 min, pipeline
+  // separado do inversor); mostrar o timestamp evita achar que a string travou.
+  const _strTimestamps = strings
+    .map(s => (s && s.last_ts) ? new Date(s.last_ts).getTime() : NaN)
+    .filter(t => !Number.isNaN(t));
+  if (_strTimestamps.length) {
+    const _latest = Math.max(..._strTimestamps);
+    const _ageSec = Math.max(0, Math.round((Date.now() - _latest) / 1000));
+    const _lbl = document.createElement("div");
+    _lbl.className = "strings-updated-row";
+    _lbl.style.gridColumn = "1 / -1";
+    _lbl.title = `Última leitura das strings: ${new Date(_latest).toLocaleString("pt-BR")}`;
+    _lbl.innerHTML = `<i class="fa-regular fa-clock"></i> Strings atualizadas ${_formatThermalAge(_ageSec)}`;
+    gridEl.appendChild(_lbl);
+  }
+
   const isEffectiveEnabled = (str) => {
     const disabledByPref = isDisabledPref(inverterRealId, str.string_index);
     return disabledByPref ? false : !!str.enabled;
@@ -8493,6 +8518,26 @@ function _plantReportDownloadCsv(data) {
   a.click(); URL.revokeObjectURL(url);
 }
 
+// Rasteriza o relatório da usina limitando o canvas: scale fixo 2 num relatório comprido estoura o
+// teto de área do navegador (Safari/iOS ~16 Mpx) → toDataURL vazio → jsPDF "Incomplete or corrupt
+// PNG file". Reduz a escala p/ caber, com fallback JPEG e erro claro em último caso.
+async function _pdfRenderCanvasPlant(bodyEl) {
+  const cw = bodyEl.scrollWidth || bodyEl.clientWidth || 1;
+  const ch = bodyEl.scrollHeight || bodyEl.clientHeight || 1;
+  const MAX_DIM = 8000, MAX_AREA = 24 * 1024 * 1024;
+  let scale = Math.min(2, MAX_DIM / cw, MAX_DIM / ch, Math.sqrt(MAX_AREA / (cw * ch)));
+  if (!isFinite(scale) || scale <= 0) scale = 1;
+  scale = Math.max(0.5, scale);
+  const canvas = await html2canvas(bodyEl, { backgroundColor: "#1a1d23", scale, scrollY: 0, scrollX: 0, windowHeight: ch + 200 });
+  let imgData = canvas.toDataURL("image/png");
+  let imgFmt = "PNG";
+  if (!imgData || imgData.length < 1000) { imgData = canvas.toDataURL("image/jpeg", 0.92); imgFmt = "JPEG"; }
+  if (!imgData || imgData.length < 1000) {
+    throw new Error("relatório grande demais para o navegador gerar de uma vez. Tente reduzir o período ou gerar por seção.");
+  }
+  return { canvas, imgData, imgFmt };
+}
+
 async function _pdfCaptureFullPlant(bodyEl, panelEl, filename, orientation) {
   const overlay = document.createElement("div");
   overlay.style.cssText = "position:fixed;inset:0;z-index:99999;background:rgba(0,0,0,0.7);display:flex;align-items:center;justify-content:center;font-size:14px;color:#39e58c;font-family:'Inter',sans-serif;";
@@ -8507,13 +8552,12 @@ async function _pdfCaptureFullPlant(bodyEl, panelEl, filename, orientation) {
     if (typeof html2canvas === "undefined") { const sc = document.createElement("script"); sc.src = "https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"; document.head.appendChild(sc); await new Promise((r, j) => { sc.onload = r; sc.onerror = j; }); }
     if (typeof jspdf === "undefined" && typeof jsPDF === "undefined") { const sc = document.createElement("script"); sc.src = "https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"; document.head.appendChild(sc); await new Promise((r, j) => { sc.onload = r; sc.onerror = j; }); }
     const JP = (typeof jsPDF !== "undefined") ? jsPDF : (typeof jspdf !== "undefined" ? jspdf.jsPDF : window.jspdf.jsPDF);
-    const canvas = await html2canvas(bodyEl, { backgroundColor: "#1a1d23", scale: 2, scrollY: 0, scrollX: 0, windowHeight: bodyEl.scrollHeight + 200 });
-    const imgData = canvas.toDataURL("image/png");
+    const { canvas, imgData, imgFmt } = await _pdfRenderCanvasPlant(bodyEl);
     const pdf = new JP({ orientation: orientation || "landscape", unit: "mm", format: "a4" });
     const pW = pdf.internal.pageSize.getWidth(), pH = pdf.internal.pageSize.getHeight(), m = 10, uW = pW - 2 * m;
     const imgH = (canvas.height / canvas.width) * uW;
     let yOff = 0;
-    while (yOff < imgH) { if (yOff > 0) pdf.addPage(); pdf.addImage(imgData, "PNG", m, m - yOff, uW, imgH); pdf.setFontSize(8); pdf.setTextColor(150); pdf.text(window.__BRANDING_PDF_FOOTER || "Gerado automaticamente pela plataforma AIOTI Solar SCADA", pW / 2, pH - 5, { align: "center" }); yOff += pH - 2 * m; }
+    while (yOff < imgH) { if (yOff > 0) pdf.addPage(); pdf.addImage(imgData, imgFmt, m, m - yOff, uW, imgH); pdf.setFontSize(8); pdf.setTextColor(150); pdf.text(window.__BRANDING_PDF_FOOTER || "Gerado automaticamente pela plataforma AIOTI Solar SCADA", pW / 2, pH - 5, { align: "center" }); yOff += pH - 2 * m; }
     pdf.save(filename);
   } catch (e) { console.error("[PDF]", e); alert("Erro ao gerar PDF: " + e.message); }
   finally { bodyEl.style.overflow = sO; bodyEl.style.maxHeight = sMH; bodyEl.style.height = sH; if (panelEl) { panelEl.style.height = sPH; panelEl.style.overflow = ""; } overlay.remove(); }
