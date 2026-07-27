@@ -22,6 +22,17 @@ function _canSendCommand() {
   return ["superuser", "operator", "admin_customer"].includes(r);
 }
 
+function _canEditPlant() {
+  let u = {};
+  try { u = JSON.parse(localStorage.getItem("user") || "{}"); } catch { u = {}; }
+  // Espelha o backend can_edit_plant (superuser OU admin_customer OU plant_edit)
+  if (u.is_superuser === true || u.is_superuser === "true") return true;
+  const p = (u && typeof u.permissions === "object" && u.permissions) ? u.permissions : {};
+  const hasPerm = (k) => p[k] === true || p[k] === "true";
+  if (hasPerm("admin_customer") || hasPerm("plant_edit")) return true;
+  return u.role_key === "admin_customer";
+}
+
 function _dismissAppLoader() {
   const el = document.getElementById("appLoader");
   if (!el) return;
@@ -41,6 +52,9 @@ let PLANT_STATE = {
   inverter_online: 0,
   pr_percent: 0,
   capacity_ac: null,
+  // Tetos dos eixos do gráfico diário configurados por admin (null = automático)
+  chart_power_max_kw: null,
+  chart_irr_max_wm2: null,
 };
 
 // ======================================================
@@ -4601,7 +4615,7 @@ function renderHeaderSummary() {
   elCapacity.textContent = `${asNumber(PLANT_STATE.capacity_percent).toFixed(1)} %`;
   if (elCapacityAc) {
     const ac = PLANT_STATE.capacity_ac;
-    elCapacityAc.textContent = ac != null && ac > 0 ? `${Number(ac).toFixed(1)} kWp` : "—";
+    elCapacityAc.textContent = ac != null && ac > 0 ? `${Number(ac).toFixed(1)} kW` : "—";
   }
 }
 
@@ -5858,6 +5872,37 @@ function renderSummaryStrip() {
 // ======================================================
 let dailyChartInstance = null;
 let monthlyChartInstance = null;
+
+// Irradiância acumulada por dia no gráfico mensal (pedido do supervisor 24/07):
+// opção DESLIGADA por padrão pra não poluir; só dias CONCLUÍDOS entram na curva.
+let MONTHLY_SHOW_IRR = (() => {
+  try { return localStorage.getItem("plant_monthly_irr") === "1"; } catch (e) { return false; }
+})();
+
+function ensureMonthlyIrrToggle(hasIrrData) {
+  const row = document.querySelector(".plant-chart-card--monthly .monthly-legend-row");
+  if (!row) return;
+  let btn = document.getElementById("monthlyIrrToggle");
+  if (!hasIrrData) {
+    if (btn) btn.remove();
+    return;
+  }
+  if (!btn) {
+    btn = document.createElement("button");
+    btn.type = "button";
+    btn.id = "monthlyIrrToggle";
+    btn.className = "monthly-leg monthly-irr-toggle";
+    btn.innerHTML = '<span class="monthly-leg-sq monthly-leg-sq--irr"></span> Irradiância (kWh/m²)';
+    btn.title = "Mostrar/ocultar a irradiação acumulada de cada dia concluído";
+    btn.addEventListener("click", () => {
+      MONTHLY_SHOW_IRR = !MONTHLY_SHOW_IRR;
+      try { localStorage.setItem("plant_monthly_irr", MONTHLY_SHOW_IRR ? "1" : "0"); } catch (e) {}
+      renderMonthlyChart();
+    });
+    row.appendChild(btn);
+  }
+  btn.classList.toggle("is-on", MONTHLY_SHOW_IRR);
+}
 let LAST_INVERTER_ROWS_SIGNATURE = "";
 let DAILY_CHART_ZOOM_WIRED = false;
 
@@ -5888,13 +5933,150 @@ function wireDailyChartZoomControlsOnce() {
 }
 
 // ======================================================
+// LIMITES DOS EIXOS DO GRÁFICO DIÁRIO (admin)
+// Supervisor 24/07: em vez de valor fixo no código, quem tem permissão de
+// editar a usina ajusta na tela. Persiste em public.power_plant
+// (chart_power_max_kw / chart_irr_max_wm2) pela rota PATCH /plants/{id}/name,
+// que já existe no API Gateway. Vazio = automático.
+// ======================================================
+let DAILY_LIMITS_WIRED = false;
+
+function setupDailyLimitsButton() {
+  const btn = document.getElementById("dailyLimitsBtn");
+  if (!btn) return;
+  if (!_canEditPlant()) {
+    btn.style.display = "none";
+    return;
+  }
+  btn.style.display = "";
+  if (!DAILY_LIMITS_WIRED) {
+    DAILY_LIMITS_WIRED = true;
+    btn.addEventListener("click", openDailyLimitsModal);
+  }
+}
+
+function closeDailyLimitsModal() {
+  document.getElementById("dailyLimitsModal")?.remove();
+}
+
+function openDailyLimitsModal() {
+  closeDailyLimitsModal();
+
+  const capAc = asNumber(PLANT_STATE.capacity_ac, 0);
+  const autoPower = capAc > 0 ? `${capAc.toFixed(0)} kW (Capacity AC)` : "potência nominal";
+  const curPower = PLANT_STATE.chart_power_max_kw;
+  const curIrr = PLANT_STATE.chart_irr_max_wm2;
+
+  const overlay = document.createElement("div");
+  overlay.id = "dailyLimitsModal";
+  overlay.className = "daily-limits-overlay";
+  overlay.innerHTML = `
+    <div class="daily-limits-box" role="dialog" aria-modal="true" aria-labelledby="dailyLimitsTitle">
+      <div class="daily-limits-head">
+        <h3 id="dailyLimitsTitle"><i class="fa-solid fa-sliders"></i> Limites do gráfico diário</h3>
+        <button type="button" class="daily-limits-close" aria-label="Fechar">&times;</button>
+      </div>
+      <p class="daily-limits-hint">
+        Teto de cada eixo do gráfico "Produção diária" desta usina.
+        Deixe em branco para voltar ao automático.
+      </p>
+      <label class="daily-limits-field">
+        <span>Eixo da potência (kW)</span>
+        <input type="number" id="dailyLimitPower" min="1" step="1"
+               placeholder="automático: ${autoPower}"
+               value="${curPower != null ? curPower : ""}">
+      </label>
+      <label class="daily-limits-field">
+        <span>Eixo da irradiância (W/m²)</span>
+        <input type="number" id="dailyLimitIrr" min="1" step="10"
+               placeholder="automático" value="${curIrr != null ? curIrr : ""}">
+      </label>
+      <div class="daily-limits-feedback" id="dailyLimitsFeedback"></div>
+      <div class="daily-limits-actions">
+        <button type="button" class="daily-limits-btn" id="dailyLimitsCancel">Cancelar</button>
+        <button type="button" class="daily-limits-btn primary" id="dailyLimitsSave">Salvar</button>
+      </div>
+    </div>`;
+
+  document.body.appendChild(overlay);
+
+  overlay.addEventListener("click", (e) => {
+    if (e.target === overlay) closeDailyLimitsModal();
+  });
+  overlay.querySelector(".daily-limits-close")?.addEventListener("click", closeDailyLimitsModal);
+  document.getElementById("dailyLimitsCancel")?.addEventListener("click", closeDailyLimitsModal);
+  document.getElementById("dailyLimitsSave")?.addEventListener("click", saveDailyLimits);
+  document.getElementById("dailyLimitPower")?.focus();
+}
+
+async function saveDailyLimits() {
+  const fb = document.getElementById("dailyLimitsFeedback");
+  const powerRaw = document.getElementById("dailyLimitPower")?.value?.trim() ?? "";
+  const irrRaw = document.getElementById("dailyLimitIrr")?.value?.trim() ?? "";
+
+  const parse = (raw, label, ceiling) => {
+    if (raw === "") return null;
+    const v = Number(raw);
+    if (!isFinite(v) || v <= 0 || v > ceiling) throw new Error(`${label} inválido.`);
+    return v;
+  };
+
+  let payload;
+  try {
+    payload = {
+      chart_power_max_kw: parse(powerRaw, "Limite de potência", 1000000),
+      chart_irr_max_wm2: parse(irrRaw, "Limite de irradiância", 5000),
+    };
+  } catch (e) {
+    if (fb) { fb.textContent = e.message; fb.className = "daily-limits-feedback err"; }
+    return;
+  }
+
+  if (fb) { fb.textContent = "Salvando…"; fb.className = "daily-limits-feedback"; }
+  try {
+    const res = await fetch(`${API_BASE}/plants/${PLANT_ID}/name`, {
+      method: "PATCH",
+      headers: buildWriteAuthHeaders(),
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
+    if (data?.chart_limits_error) throw new Error(data.chart_limits_error);
+
+    PLANT_STATE.chart_power_max_kw = payload.chart_power_max_kw;
+    PLANT_STATE.chart_irr_max_wm2 = payload.chart_irr_max_wm2;
+    renderDailyChart();
+    if (fb) { fb.textContent = "✓ Salvo!"; fb.className = "daily-limits-feedback ok"; }
+    setTimeout(closeDailyLimitsModal, 700);
+  } catch (e) {
+    if (fb) { fb.textContent = e.message || "Erro ao salvar."; fb.className = "daily-limits-feedback err"; }
+  }
+}
+
+// ======================================================
 // GRÁFICO DIÁRIO
 // ======================================================
 function renderDailyChart() {
   const canvas = document.getElementById("plantMainChart");
   if (!canvas || !DAILY?.labels?.length) return;
   const ratedPower = asNumber(PLANT_STATE.rated_power_kwp, 0);
-  const powerAxisMax = ratedPower > 0 ? Math.ceil(ratedPower) : 1250;
+  // Tetos dos eixos. O admin pode fixar cada um pelo botão de limites
+  // (power_plant.chart_power_max_kw / chart_irr_max_wm2, pedido do supervisor
+  // 24/07). Sem valor configurado: potência = Capacity AC na Pedra Branca
+  // (teste) ou rated DC; irradiância acompanha a potência — era o que esmagava
+  // a curva amarela num eixo que ia até 3248.
+  const _isPedraBrancaTest = String(PLANT_ID) === "18";
+  const _capAcKw = asNumber(PLANT_STATE.capacity_ac, 0);
+  const _cfgPowerMax = asNumber(PLANT_STATE.chart_power_max_kw, 0);
+  const _cfgIrrMax = asNumber(PLANT_STATE.chart_irr_max_wm2, 0);
+  const powerAxisMax = _cfgPowerMax > 0
+    ? Math.ceil(_cfgPowerMax)
+    : ((_isPedraBrancaTest && _capAcKw > 0)
+      ? Math.ceil(_capAcKw)
+      : (ratedPower > 0 ? Math.ceil(ratedPower) : 1250));
+  const irrAxisMax = _cfgIrrMax > 0
+    ? Math.ceil(_cfgIrrMax)
+    : (_isPedraBrancaTest ? 1300 : powerAxisMax);
 
   const ctx = canvas.getContext("2d");
 
@@ -6039,7 +6221,7 @@ function renderDailyChart() {
         yIrr: {
           position: "right",
           min: 0,
-          max: powerAxisMax,
+          max: irrAxisMax,
           ticks: { color: "#ffd84d", callback: v => `${v} W/m²` },
           grid: { drawOnChartArea: false }
         }
@@ -6265,6 +6447,23 @@ function renderMonthlyChart() {
   const deviation = totalExpectedToDate > 0 ? ((totalReal - totalExpectedToDate) / totalExpectedToDate) * 100 : 0;
   const elapsedDays = currentIndex + 1;
 
+  // Irradiação acumulada por dia (kWh/m², vem do fct via /energy/monthly).
+  // Só dia CONCLUÍDO (antes de hoje) e com leitura entra; o dia corrente ficaria
+  // "pela metade" e enganaria (combinado com o supervisor 24/07).
+  const irrRaw = Array.isArray(MONTHLY?.irradiation_daily_kwh_m2)
+    ? MONTHLY.irradiation_daily_kwh_m2.map(v => Number(v) || 0)
+    : [];
+  const irrDaily = daily.map((_, idx) => {
+    const v = Number(irrRaw[idx] ?? 0);
+    return (idx < currentIndex && v > 0) ? v : null;
+  });
+  const hasIrrData = irrDaily.some(v => v != null);
+  const irrMaxVal = hasIrrData ? Math.max(...irrDaily.filter(v => v != null)) : 0;
+  // Igor: "normalmente ela oscila até 10 kWh/m²" — teto mínimo 8 pro eixo não degenerar
+  const irrAxisMaxMonthly = Math.max(8, Math.ceil(irrMaxVal * 1.15));
+  ensureMonthlyIrrToggle(hasIrrData);
+  const showIrr = hasIrrData && MONTHLY_SHOW_IRR;
+
   const kpiRealEl = document.getElementById("monthlyKpiReal");
   const kpiExpectedMtdEl = document.getElementById("monthlyKpiExpectedMtd");
   const kpiExpEl = document.getElementById("monthlyKpiExp");
@@ -6346,6 +6545,26 @@ function renderMonthlyChart() {
     barPercentage: hasDailyExpected ? 0.70 : 0.92,
     order: 1
   });
+  if (showIrr) {
+    datasets.push({
+      label: "Irradiância",
+      type: "line",
+      data: irrDaily,
+      yAxisID: "yIrr",
+      borderColor: "rgba(255,214,102,.45)",
+      backgroundColor: "rgba(255,214,102,.85)",
+      pointBackgroundColor: "rgba(255,214,102,.85)",
+      pointBorderColor: "rgba(255,214,102,.95)",
+      pointRadius: isMobile ? 2 : 3,
+      pointHoverRadius: 5,
+      borderWidth: 1.5,
+      borderDash: [4, 4],
+      tension: 0.3,
+      spanGaps: true,
+      fill: false,
+      order: 2
+    });
+  }
 
   monthlyChartInstance = new Chart(ctx, {
     type: "bar",
@@ -6375,6 +6594,10 @@ function renderMonthlyChart() {
               const expected = Number(expectedPadded[idx] ?? 0);
               if (item?.dataset?.label === "Esperado") return `Esperado: ${formatKwhPtBR(expected)}`;
               if (item?.dataset?.label === "Real") return `Real: ${formatKwhPtBR(real)}`;
+              if (item?.dataset?.label === "Irradiância") {
+                const v = item?.parsed?.y;
+                return v == null ? "" : `Irradiância: ${Number(v).toFixed(2).replace(".", ",")} kWh/m²`;
+              }
               return "";
             },
             afterBody: (items) => {
@@ -6423,7 +6646,21 @@ function renderMonthlyChart() {
             color: "rgba(255,255,255,0.04)",
             drawBorder: false
           }
-        }
+        },
+        ...(showIrr ? {
+          yIrr: {
+            position: "right",
+            beginAtZero: true,
+            max: irrAxisMaxMonthly,
+            ticks: {
+              color: "rgba(255,214,102,.75)",
+              maxTicksLimit: 5,
+              padding: 6,
+              font: { size: tickFontSize }
+            },
+            grid: { display: false, drawBorder: false }
+          }
+        } : {})
       }
     }
   });
@@ -6674,7 +6911,12 @@ async function refreshRealtimeEverything() {
           capacity_percent: capBase > 0 ? (active / capBase) * 100 : PLANT_STATE.capacity_percent,
           pr_percent: prPct != null ? prPct : PLANT_STATE.pr_percent,
           capacity_ac: capAc,
+          chart_power_max_kw: realtime.chart_power_max_kw != null
+            ? Number(realtime.chart_power_max_kw) : null,
+          chart_irr_max_wm2: realtime.chart_irr_max_wm2 != null
+            ? Number(realtime.chart_irr_max_wm2) : null,
         };
+        setupDailyLimitsButton();
       }
     } else {
       console.error("[refreshRealtimeEverything][realtime] erro", realtimeRes.reason);
@@ -8739,6 +8981,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   setupInverterToggles();
   setupWeatherExpand();
   wireDailyChartZoomControlsOnce();
+  setupDailyLimitsButton();
   initTrackersPanel();
   setupDeviceNav();
   initInvViewToggle();

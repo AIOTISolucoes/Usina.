@@ -1840,7 +1840,7 @@ function updateSummaryUI(plants) {
 
   if (elPsfActive) elPsfActive.textContent = totalActivePower.toFixed(1) + " kW";
   if (elPsfRated) elPsfRated.textContent = totalRatedPower.toFixed(1) + " kWp";
-  if (elPsfRatedAc) elPsfRatedAc.textContent = totalCapacityAc > 0 ? totalCapacityAc.toFixed(1) + " kWp" : "—";
+  if (elPsfRatedAc) elPsfRatedAc.textContent = totalCapacityAc > 0 ? totalCapacityAc.toFixed(1) + " kW" : "—";
   if (elPsfPercent) elPsfPercent.textContent = loadPct.toFixed(1) + "%";
 
   // Update SVG progress ring
@@ -5418,24 +5418,76 @@ function _renderClpDiag(ov, data) {
       `</details>`;
   }
 
-  // Aba "Envio de configurações" (admin) — publica JSON no tópico exclusivo do
-  // gateway da usina via MQTT. Fase 1: teste manual (Igor define o JSON padrão).
+  // Aba "Configuração do gateway" (admin) — edita o JSON de config da usina,
+  // salva no banco e publica como TRANSAÇÃO V2 (begin/put/validate/commit).
   if (data.is_admin) {
     const _pid = ov.dataset.plantId || "";
+    const gc = data.gateway_config || null;
+    _CLP_CFG_SAVED = gc && gc.config && typeof gc.config === "object" ? gc.config : null;
+    _CLP_CFG_HISTORY = Array.isArray(data.gateway_config_history) ? data.gateway_config_history : [];
+    // o último envio é o primeiro do histórico; o campo separado é retrocompatibilidade
+    const last = data.gateway_config_last_sent || _CLP_CFG_HISTORY[0] || null;
+
+    const savedInfo = gc
+      ? `Salva em ${_clpEsc(new Date(gc.updated_at).toLocaleString("pt-BR"))}` +
+        (gc.updated_by ? ` por ${_clpEsc(gc.updated_by)}` : "") +
+        ` <button type="button" class="clp-cfg-tpl clp-cfg-tpl--mini" onclick="_clpCfgRestoreSaved()">` +
+        `<i class="fa-solid fa-rotate-left"></i> Restaurar</button>` +
+        ` <button type="button" class="clp-cfg-tpl clp-cfg-tpl--mini" onclick="_clpCfgDownload()">` +
+        `<i class="fa-solid fa-download"></i> Baixar</button>`
+      : "Nenhuma configuração salva ainda.";
+    const lastInfo = last
+      ? `Último envio: ${_clpEsc(new Date(last.sent_at).toLocaleString("pt-BR"))} · ` +
+        `${last.entity_count || 0} entidades · CRC ${_clpEsc(last.crc32 || "—")}` +
+        (last.sent_by_username ? ` · ${_clpEsc(last.sent_by_username)}` : "") +
+        (_CLP_CFG_HISTORY.length
+          ? ` <button type="button" class="clp-cfg-tpl clp-cfg-tpl--mini" onclick="_clpCfgToggleHistory('${_pid}')">` +
+            `<i class="fa-solid fa-clock-rotate-left"></i> Histórico (${_CLP_CFG_HISTORY.length})</button>`
+          : "")
+      : "";
+
     html += `
       <details class="clp-diag-cfg">
-        <summary><i class="fa-solid fa-gears"></i> Envio de configurações (admin)</summary>
+        <summary><i class="fa-solid fa-gears"></i> Configuração do gateway (admin)</summary>
         <div class="clp-cfg-inner">
-          <p class="clp-cfg-hint">Publica um JSON de configuração no tópico exclusivo do gateway desta usina (MQTT). Deixe o tópico vazio para usar o padrão.</p>
-          <label class="clp-cfg-label">Tópico do gateway</label>
-          <input id="clpCfgTopic" class="clp-cfg-input" placeholder="padrão: dev/write/UFV/&lt;usina&gt;/config" autocomplete="off" spellcheck="false">
-          <label class="clp-cfg-label">Configuração (JSON)</label>
-          <textarea id="clpCfgPayload" class="clp-cfg-area" rows="6" placeholder='{ "device": "inversor", "marca": "...", "registers": [ ... ] }' spellcheck="false"></textarea>
+          <p class="clp-cfg-hint">
+            A configuração vai para o gateway quebrada em várias mensagens, e nada chega aos
+            equipamentos antes da última delas. Se alguma for recusada, a configuração antiga
+            continua valendo.
+          </p>
+          <div class="clp-cfg-meta">${savedInfo}${lastInfo ? `<br>${lastInfo}` : ""}</div>
+          <div class="clp-cfg-history" id="clpCfgHistory"></div>
+          <label class="clp-cfg-label">
+            Configuração (JSON)
+            <span>
+              <button type="button" class="clp-cfg-tpl" onclick="_clpLoadConfigTemplate()">
+                <i class="fa-solid fa-file-code" aria-hidden="true"></i> Modelo padrão
+              </button>
+              <button type="button" class="clp-cfg-tpl" onclick="_clpCfgPreview('${_pid}')">
+                <i class="fa-solid fa-eye" aria-hidden="true"></i> Pré-visualizar
+              </button>
+            </span>
+          </label>
+          <textarea id="clpCfgPayload" class="clp-cfg-area" rows="10" spellcheck="false"
+            placeholder='{ "plant": {...}, "channels": [...], "templates": [...], "devices": [...] }'>${
+              _CLP_CFG_SAVED ? _clpEsc(JSON.stringify(_CLP_CFG_SAVED, null, 2)) : ""
+            }</textarea>
+          <div class="clp-cfg-preview" id="clpCfgPreview"></div>
+          <label class="clp-cfg-check" title="Template importado chega com o mapa não validado em campo; sem isso o gateway recusa a transação inteira">
+            <input type="checkbox" id="clpCfgAllowUnverified" checked>
+            <span>Aceitar mapa de template ainda não validado em campo</span>
+          </label>
+          <button class="clp-cfg-btn clp-cfg-btn--ghost" onclick="_clpCfgSave('${_pid}')">
+            <i class="fa-solid fa-floppy-disk"></i> Salvar no banco
+          </button>
+          <p class="clp-cfg-hint">Para publicar no gateway, confirme com o seu usuário e senha:</p>
           <div class="clp-cfg-auth">
             <input id="clpCfgUser" class="clp-cfg-input" placeholder="usuário" autocomplete="off">
             <input id="clpCfgPass" class="clp-cfg-input" type="password" placeholder="senha" autocomplete="new-password">
           </div>
-          <button class="clp-cfg-btn" onclick="_clpSendConfig('${_pid}')"><i class="fa-solid fa-satellite-dish"></i> Publicar no gateway</button>
+          <button class="clp-cfg-btn" onclick="_clpSendConfig('${_pid}')">
+            <i class="fa-solid fa-satellite-dish"></i> Publicar no gateway
+          </button>
           <div id="clpCfgResult" class="clp-cfg-result"></div>
         </div>
       </details>`;
@@ -5444,37 +5496,114 @@ function _renderClpDiag(ov, data) {
   body.innerHTML = html;
 }
 
-// Publica o JSON de configuração no tópico exclusivo do gateway (MQTT).
-// Re-valida usuário+senha operacional no backend (mesma segurança do comando remoto).
-function _clpSendConfig(plantId) {
-  const topicEl = document.getElementById("clpCfgTopic");
-  const payEl   = document.getElementById("clpCfgPayload");
-  const userEl  = document.getElementById("clpCfgUser");
-  const passEl  = document.getElementById("clpCfgPass");
-  const resEl   = document.getElementById("clpCfgResult");
-  if (!payEl || !resEl) return;
+// Modelo de configuração do gateway enviado pelo Igor em 24/07 ("exatamente
+// esse vai ser o padrão"). O print do WhatsApp cortou depois de "commands" —
+// as chaves seguintes entram quando ele mandar o arquivo inteiro. Serve de
+// ponto de partida no textarea; o gateway é quem valida o conteúdo.
+const CLP_CONFIG_TEMPLATE = {
+  alarms: [],
+  auto_reclosing: {
+    allowed_protections: [],
+    allowed_schedule: {},
+    blocking_conditions: [],
+    delay_ms: 30000,
+    device_id: "",
+    enabled: false,
+    max_attempts: 0,
+    metadata: {},
+    require_communication: true,
+    require_voltage_normal: true,
+    retry_interval_ms: 60000,
+    stability_ms: 60000
+  },
+  channels: [
+    {
+      data_bits: 8,
+      enabled: false,
+      id: "tcp-inversores",
+      ip: "192.0.2.190",
+      metadata: {},
+      name: "Rede TCP dos inversores",
+      parity: "none",
+      poll_interval_ms: 1000,
+      port: 502,
+      retries: 1,
+      stop_bits: 1,
+      timeout_ms: 1000,
+      transport: "tcp"
+    }
+  ],
+  commands: []
+};
 
-  const topic      = ((topicEl && topicEl.value) || "").trim();
-  const rawPayload = (payEl.value || "").trim();
-  const username   = ((userEl && userEl.value) || "").trim();
-  const password   = (passEl && passEl.value) || "";
+let _CLP_CFG_SAVED = null;
+let _CLP_CFG_HISTORY = [];
 
-  if (!rawPayload) { resEl.innerHTML = `<span class="clp-cfg-err">Cole o JSON de configuração.</span>`; return; }
-  if (!username || !password) { resEl.innerHTML = `<span class="clp-cfg-err">Informe usuário e senha.</span>`; return; }
+// ---- Resgate da configuração -----------------------------------------------
+// Pedido do Igor 25/07: poder voltar para uma configuração que já funcionou.
+// A do banco é a "atual"; o histórico guarda o JSON de cada envio, então dá
+// para recuperar qualquer um deles se um envio novo der ruim.
 
-  let payload;
+function _clpCfgRestoreSaved() {
+  const el = document.getElementById("clpCfgPayload");
+  const res = document.getElementById("clpCfgResult");
+  if (!el || !_CLP_CFG_SAVED) return;
+  if (el.value.trim() && !confirm("Substituir o que está na caixa pela configuração salva no banco?")) return;
+  el.value = JSON.stringify(_CLP_CFG_SAVED, null, 2);
+  if (res) res.innerHTML = `<span class="clp-cfg-ok"><i class="fa-solid fa-check"></i> Configuração salva recarregada.</span>`;
+}
+
+function _clpCfgDownload() {
+  let cfg;
   try {
-    payload = JSON.parse(rawPayload);
+    cfg = _clpCfgRead();
   } catch (e) {
-    resEl.innerHTML = `<span class="clp-cfg-err"><i class="fa-solid fa-triangle-exclamation"></i> JSON inválido: ${_clpEsc(e.message)}</span>`;
-    return;
+    cfg = _CLP_CFG_SAVED;
   }
+  if (!cfg) return;
+  const nome = `config-gateway-${(cfg.plant && cfg.plant.id) || "usina"}-${new Date().toISOString().slice(0, 10)}.json`;
+  const blob = new Blob([JSON.stringify(cfg, null, 2)], { type: "application/json" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = nome;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
 
-  resEl.innerHTML = `<span class="clp-cfg-wait"><i class="fa-solid fa-circle-notch fa-spin"></i> Publicando...</span>`;
+function _clpCfgToggleHistory(plantId) {
+  const box = document.getElementById("clpCfgHistory");
+  if (!box) return;
+  if (box.innerHTML.trim()) { box.innerHTML = ""; return; }
+
+  box.innerHTML = _CLP_CFG_HISTORY.map(h => {
+    const quando = h.sent_at ? new Date(h.sent_at).toLocaleString("pt-BR") : "—";
+    const btn = h.has_snapshot
+      ? `<button type="button" class="clp-cfg-tpl clp-cfg-tpl--mini" onclick="_clpCfgRestoreFromLog('${plantId}', ${h.id})">
+           <i class="fa-solid fa-rotate-left"></i> Usar esta
+         </button>`
+      : `<span class="clp-cfg-history-nosnap">sem cópia do JSON</span>`;
+    return `<div class="clp-cfg-history-item">
+      <div>
+        <strong>${_clpEsc(quando)}</strong> · ${h.entity_count || 0} entidades ·
+        CRC <code>${_clpEsc(h.crc32 || "—")}</code>
+        ${h.sent_by_username ? `· ${_clpEsc(h.sent_by_username)}` : ""}
+      </div>
+      ${btn}
+    </div>`;
+  }).join("");
+}
+
+function _clpCfgRestoreFromLog(plantId, logId) {
+  const res = document.getElementById("clpCfgResult");
+  const el = document.getElementById("clpCfgPayload");
+  if (!el) return;
+  if (el.value.trim() && !confirm("Substituir o que está na caixa por este envio anterior?")) return;
+
+  if (res) res.innerHTML = `<span class="clp-cfg-wait"><i class="fa-solid fa-circle-notch fa-spin"></i> Recuperando...</span>`;
   apiFetch(`/plants/${plantId}/clp/config`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ topic, payload, username, password }),
+    body: JSON.stringify({ action: "restore", log_id: logId }),
   })
     .then(async (r) => {
       const d = await r.json().catch(() => ({}));
@@ -5482,12 +5611,249 @@ function _clpSendConfig(plantId) {
       return d;
     })
     .then((d) => {
-      resEl.innerHTML = `<span class="clp-cfg-ok"><i class="fa-solid fa-check"></i> Publicado em <code>${_clpEsc(d.mqtt_topic)}</code></span>`;
-      if (passEl) passEl.value = "";
+      el.value = JSON.stringify(d.config, null, 2);
+      const quando = d.sent_at ? new Date(d.sent_at).toLocaleString("pt-BR") : "";
+      if (res) res.innerHTML = `<span class="clp-cfg-ok"><i class="fa-solid fa-check"></i> ` +
+        `Configuração de ${_clpEsc(quando)} carregada na caixa. ` +
+        `Confira e publique para aplicar no gateway.</span>`;
+      document.getElementById("clpCfgHistory").innerHTML = "";
     })
     .catch((err) => {
-      resEl.innerHTML = `<span class="clp-cfg-err"><i class="fa-solid fa-triangle-exclamation"></i> ${_clpEsc(err.message || err)}</span>`;
+      if (res) res.innerHTML = `<span class="clp-cfg-err"><i class="fa-solid fa-triangle-exclamation"></i> ${_clpEsc(err.message || err)}</span>`;
     });
+}
+
+function _clpCfgRead() {
+  const el = document.getElementById("clpCfgPayload");
+  const raw = (el && el.value || "").trim();
+  if (!raw) throw new Error("Cole ou carregue a configuração.");
+  return JSON.parse(raw);
+}
+
+// Monta a transação V2 com o emissor oficial do gateway (js/gateway_v2.js) e
+// mostra o que seria publicado, sem mandar nada.
+function _clpCfgBuild(plantId) {
+  if (typeof buildPublications !== "function") {
+    throw new Error("emissor do gateway não carregado (js/gateway_v2.js)");
+  }
+  const cfg = _clpCfgAplicaMapaNaoValidado(_clpCfgRead());
+  const usina = _clpCfgPlantSegment(plantId, cfg);
+  // request_id NOVO a cada envio: o gateway ignora um begin com id que ele já
+  // viu (idempotência), e aí o envio "some" sem erro nenhum. O sufixo aleatório
+  // cobre dois cliques dentro do mesmo milissegundo.
+  const rid = "cfg-" + Date.now() + "-" + Math.random().toString(36).slice(2, 7);
+  const user = JSON.parse(localStorage.getItem("user") || "{}");
+  return {
+    cfg,
+    rid,
+    txn: buildPublications(cfg, rid, { usina, originUser: user.username || "plataforma" }),
+  };
+}
+
+// Template importado chega ao gateway com o mapa "não validado em campo", e a
+// validação recusa a transação inteira a não ser que o device permita. O campo
+// mora no metadata de cada device; quase nenhum JSON traz isso preenchido.
+function _clpCfgDevicesSemMapaLiberado(cfg) {
+  const devs = Array.isArray(cfg && cfg.devices) ? cfg.devices : [];
+  return devs.filter(d => !(d && d.metadata && d.metadata.allow_unverified_map === true)).length;
+}
+
+function _clpCfgAplicaMapaNaoValidado(cfg) {
+  const el = document.getElementById("clpCfgAllowUnverified");
+  if (!el || !el.checked || !Array.isArray(cfg.devices)) return cfg;
+  const copia = JSON.parse(JSON.stringify(cfg));
+  copia.devices.forEach(d => {
+    if (!d || typeof d !== "object") return;
+    if (!d.metadata || typeof d.metadata !== "object") d.metadata = {};
+    d.metadata.allow_unverified_map = true;
+  });
+  return copia;
+}
+
+// O segmento do tópico é o NOME da usina no cadastro (a ingestão casa exato).
+function _clpCfgPlantSegment(plantId, cfg) {
+  const card = document.querySelector(`.plant-card[data-plant-id="${plantId}"]`);
+  const fromCard = card && (card.dataset.plantTopicName || card.dataset.plantName);
+  const fromCfg = cfg && ((cfg.plant && cfg.plant.id) || (cfg.general && cfg.general.plant_id));
+  const seg = String(fromCfg || fromCard || "").trim();
+  if (!seg) throw new Error('defina "plant".id no JSON com o nome da usina do tópico');
+  return seg;
+}
+
+function _clpCfgPreview(plantId) {
+  const box = document.getElementById("clpCfgPreview");
+  if (!box) return;
+  try {
+    const { txn } = _clpCfgBuild(plantId);
+    const porEntidade = {};
+    txn.publications.filter(p => p.kind === "put")
+      .forEach(p => { porEntidade[p.entity] = (porEntidade[p.entity] || 0) + 1; });
+    const resumo = Object.entries(porEntidade)
+      .map(([k, v]) => `${v}× ${_clpEsc(k)}`).join(" · ") || "nenhuma entidade";
+    const alerta = txn.issues.length
+      ? `<div class="clp-cfg-err">${txn.issues.length} entidade(s) passam do limite de 511 bytes e ` +
+        `seriam recusadas: ${_clpEsc(txn.issues.join("; "))}</div>`
+      : "";
+    // Aviso do mapa não validado: é a recusa mais comum e não dá erro nenhum
+    // aqui — a transação sai inteira e o gateway rejeita no validate.
+    const semMapa = _clpCfgDevicesSemMapaLiberado(_clpCfgRead());
+    const avisoMapa = (semMapa && !document.getElementById("clpCfgAllowUnverified")?.checked)
+      ? `<div class="clp-cfg-err">${semMapa} equipamento(s) sem "mapa não validado" liberado. ` +
+        `Se o template for importado, o gateway recusa a configuração inteira. ` +
+        `Marque a opção abaixo ou valide o mapa em campo.</div>`
+      : "";
+    box.innerHTML =
+      `<div><strong>${txn.publications.length}</strong> mensagens · ` +
+      `<strong>${txn.entityCount}</strong> entidades · CRC <code>${_clpEsc(txn.crc)}</code></div>` +
+      `<div class="clp-cfg-preview-list">${resumo}</div>` +
+      `<div class="clp-cfg-preview-topic">${_clpEsc(txn.topics.chunk)}</div>` + alerta + avisoMapa;
+  } catch (e) {
+    box.innerHTML = `<div class="clp-cfg-err"><i class="fa-solid fa-triangle-exclamation"></i> ${_clpEsc(e.message || e)}</div>`;
+  }
+}
+
+// Salva o JSON no banco sem publicar (não pede senha: não toca no equipamento).
+function _clpCfgSave(plantId) {
+  const res = document.getElementById("clpCfgResult");
+  if (!res) return;
+  let cfg;
+  try {
+    cfg = _clpCfgRead();
+  } catch (e) {
+    res.innerHTML = `<span class="clp-cfg-err">JSON inválido: ${_clpEsc(e.message)}</span>`;
+    return;
+  }
+  res.innerHTML = `<span class="clp-cfg-wait"><i class="fa-solid fa-circle-notch fa-spin"></i> Salvando...</span>`;
+  apiFetch(`/plants/${plantId}/clp/config`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action: "save", config: cfg }),
+  })
+    .then(async (r) => {
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || d.ok === false) throw new Error(d.error || ("HTTP " + r.status));
+      return d;
+    })
+    .then(() => {
+      _CLP_CFG_SAVED = cfg;
+      res.innerHTML = `<span class="clp-cfg-ok"><i class="fa-solid fa-check"></i> Configuração salva no banco.</span>`;
+    })
+    .catch((err) => {
+      res.innerHTML = `<span class="clp-cfg-err"><i class="fa-solid fa-triangle-exclamation"></i> ${_clpEsc(err.message || err)}</span>`;
+    });
+}
+
+function _clpLoadConfigTemplate() {
+  const el = document.getElementById("clpCfgPayload");
+  const res = document.getElementById("clpCfgResult");
+  if (!el) return;
+  el.value = JSON.stringify(CLP_CONFIG_TEMPLATE, null, 2);
+  if (res) {
+    res.innerHTML = `<span class="clp-cfg-wait">Modelo carregado. Confira os valores antes de publicar. ` +
+      `As seções que vierem depois de "commands" ainda precisam ser completadas.</span>`;
+  }
+}
+
+// Publica a configuração como TRANSAÇÃO V2 (begin → put ×N → validate → commit).
+// O emissor roda aqui no front (js/gateway_v2.js, cópia da referência do Igor) e o
+// backend só repassa as mensagens ao IoT Core, na ordem e sem reserializar — o
+// gateway confere CRC32/SHA-256 sobre os bytes exatos.
+// Re-valida usuário+senha operacional no backend (mesma segurança do comando remoto).
+function _clpSendConfig(plantId) {
+  const userEl  = document.getElementById("clpCfgUser");
+  const passEl  = document.getElementById("clpCfgPass");
+  const resEl   = document.getElementById("clpCfgResult");
+  if (!resEl) return;
+
+  const username = ((userEl && userEl.value) || "").trim();
+  const password = (passEl && passEl.value) || "";
+  if (!username || !password) {
+    resEl.innerHTML = `<span class="clp-cfg-err">Informe usuário e senha.</span>`;
+    return;
+  }
+
+  let built;
+  try {
+    built = _clpCfgBuild(plantId);
+  } catch (e) {
+    resEl.innerHTML = `<span class="clp-cfg-err"><i class="fa-solid fa-triangle-exclamation"></i> ${_clpEsc(e.message || e)}</span>`;
+    return;
+  }
+
+  const { cfg, rid, txn } = built;
+  if (txn.issues.length) {
+    resEl.innerHTML = `<span class="clp-cfg-err"><i class="fa-solid fa-triangle-exclamation"></i> ` +
+      `${txn.issues.length} entidade(s) passam de 511 bytes e o gateway recusaria. ` +
+      `Veja a pré-visualização.</span>`;
+    return;
+  }
+
+  if (!confirm(
+    `Publicar ${txn.publications.length} mensagens (${txn.entityCount} entidades) no gateway?\n\n` +
+    `Tópico: ${txn.topics.chunk}\n\n` +
+    `O commit aplica a configuração no equipamento.`
+  )) return;
+
+  _clpCfgPublishBatches(plantId, built, username, password, passEl, resEl);
+}
+
+// Manda a transação INTEIRA. Quem cuida do tempo é a API: ela publica o que
+// couber no orçamento dela e, se não terminar, responde `partial` com o índice
+// de onde continuar — aí a gente só reenvia o resto. Na maioria das usinas sai
+// numa chamada só.
+async function _clpCfgPublishBatches(plantId, built, username, password, passEl, resEl) {
+  const { cfg, rid, txn } = built;
+  const pubs = txn.publications;
+  const total = pubs.length;
+  let enviadas = 0;
+  let voltas = 0;
+
+  try {
+    while (enviadas < total) {
+      if (++voltas > 20) throw new Error("envio não terminou depois de 20 tentativas");
+
+      resEl.innerHTML = `<span class="clp-cfg-wait"><i class="fa-solid fa-circle-notch fa-spin"></i> ` +
+        (enviadas
+          ? `Publicando... ${enviadas} de ${total} mensagens`
+          : `Publicando ${total} mensagens...`) + `</span>`;
+
+      const r = await apiFetch(`/plants/${plantId}/clp/config`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          publications: pubs.slice(enviadas),
+          request_id: rid,
+          crc: txn.crc,
+          config: cfg,
+          final_batch: true,
+          abort_topic: txn.abort && txn.abort.topic,
+          abort_message: txn.abort && txn.abort.payload,
+          username,
+          password,
+        }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || d.ok === false) {
+        throw new Error(
+          (d.error || `HTTP ${r.status}`) +
+          (enviadas ? ` (parou em ${enviadas} de ${total} mensagens; sem o commit o gateway não aplica nada)` : "")
+        );
+      }
+
+      const publicadas = Number(d.published) || 0;
+      if (publicadas <= 0) throw new Error("a API não publicou nenhuma mensagem desta vez");
+      enviadas += publicadas;
+      if (!d.partial) break;
+    }
+
+    resEl.innerHTML = `<span class="clp-cfg-ok"><i class="fa-solid fa-check"></i> ` +
+      `${enviadas} mensagens publicadas (${txn.entityCount} entidades). ` +
+      `O resultado chega em <code>${_clpEsc(txn.topics.feedback)}</code>: ` +
+      `espere received=${txn.entityCount}, applied=1, rejected=0.</span>`;
+    if (passEl) passEl.value = "";
+  } catch (err) {
+    resEl.innerHTML = `<span class="clp-cfg-err"><i class="fa-solid fa-triangle-exclamation"></i> ${_clpEsc(err.message || err)}</span>`;
+  }
 }
 
 function renderPortfolioCards(plants) {
@@ -9274,6 +9640,13 @@ async function initPlatformUpdates() {
 
   if (closeBtn) closeBtn.addEventListener("click", () => { panel.style.display = "none"; });
 
+  const prefsBtn = document.getElementById("notifPrefsBtn");
+  if (prefsBtn) prefsBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    panel.style.display = "none";
+    openNotifCenter();
+  });
+
   document.addEventListener("click", (e) => {
     if (panel.style.display !== "none" && !e.target.closest(".notif-bell-wrap")) {
       panel.style.display = "none";
@@ -9384,6 +9757,209 @@ function _notifEsc(s) {
   const d = document.createElement("div");
   d.textContent = s;
   return d.innerHTML;
+}
+
+// =============================================================================
+// CENTRAL DE NOTIFICAÇÕES (engrenagem do sininho)
+// Pedido do supervisor 24/07: os alarmes notificam demais (tracker chega a
+// 150x/dia, falha de comunicação direto) — cada usuário escolhe o que quer
+// receber no celular/PC. Grava em app_user.notif_prefs (mesmo jsonb do robô,
+// com merge no backend) e o push_notifier.py da EC2 respeita na hora de enviar.
+// =============================================================================
+let _NOTIF_ALARM_CATALOG = [];
+
+function _notifCenterPrefs() {
+  const p = _robotGetNotifPrefs();
+  return {
+    push_muted: p.push_muted === true,
+    push_min_severity: p.push_min_severity || "all",
+    push_disabled_codes: Array.isArray(p.push_disabled_codes) ? p.push_disabled_codes.map(String) : [],
+  };
+}
+
+async function openNotifCenter() {
+  document.getElementById("notifCenterOverlay")?.remove();
+
+  const overlay = document.createElement("div");
+  overlay.id = "notifCenterOverlay";
+  overlay.className = "notif-center-overlay";
+  overlay.innerHTML = `
+    <div class="notif-center-box" role="dialog" aria-modal="true" aria-labelledby="notifCenterTitle">
+      <div class="notif-center-head">
+        <h3 id="notifCenterTitle"><i class="fa-solid fa-bell"></i> Central de notificações</h3>
+        <button type="button" class="notif-center-close" aria-label="Fechar">&times;</button>
+      </div>
+      <p class="notif-center-hint">
+        Vale para as notificações no celular e no computador (push) deste usuário,
+        em qualquer aparelho.
+      </p>
+
+      <label class="notif-center-switch">
+        <input type="checkbox" id="notifCenterMuted">
+        <span>Pausar todas as notificações de alarme</span>
+      </label>
+
+      <div class="notif-center-field">
+        <span>Notificar a partir de</span>
+        <select id="notifCenterSeverity">
+          <option value="all">Todos os alarmes</option>
+          <option value="medium">Média e alta</option>
+          <option value="high">Somente alta</option>
+        </select>
+      </div>
+
+      <div class="notif-center-list-head">
+        <span>Alarmes que notificam</span>
+        <div class="notif-center-bulk">
+          <button type="button" id="notifCenterAll">Marcar todos</button>
+          <button type="button" id="notifCenterNone">Limpar</button>
+        </div>
+      </div>
+      <input type="search" id="notifCenterSearch" class="notif-center-search" placeholder="Buscar alarme…">
+      <div class="notif-center-list" id="notifCenterList">
+        <p class="notif-center-loading">Carregando alarmes…</p>
+      </div>
+
+      <div class="notif-center-feedback" id="notifCenterFeedback"></div>
+      <div class="notif-center-actions">
+        <button type="button" class="notif-center-btn" id="notifCenterCancel">Cancelar</button>
+        <button type="button" class="notif-center-btn primary" id="notifCenterSave">Salvar</button>
+      </div>
+    </div>`;
+
+  document.body.appendChild(overlay);
+
+  const close = () => overlay.remove();
+  overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
+  overlay.querySelector(".notif-center-close")?.addEventListener("click", close);
+  document.getElementById("notifCenterCancel")?.addEventListener("click", close);
+  document.getElementById("notifCenterSave")?.addEventListener("click", _notifCenterSave);
+
+  const cur = _notifCenterPrefs();
+  const mutedEl = document.getElementById("notifCenterMuted");
+  const sevEl = document.getElementById("notifCenterSeverity");
+  if (mutedEl) mutedEl.checked = cur.push_muted;
+  if (sevEl) sevEl.value = cur.push_min_severity;
+
+  document.getElementById("notifCenterSearch")?.addEventListener("input", (e) => {
+    _notifCenterRenderList(String(e.target.value || "").toLowerCase());
+  });
+  document.getElementById("notifCenterAll")?.addEventListener("click", () => {
+    overlay.querySelectorAll(".notif-center-code").forEach(c => { c.checked = true; });
+  });
+  document.getElementById("notifCenterNone")?.addEventListener("click", () => {
+    overlay.querySelectorAll(".notif-center-code").forEach(c => { c.checked = false; });
+  });
+
+  await _notifCenterLoadCatalog();
+}
+
+async function _notifCenterLoadCatalog() {
+  const list = document.getElementById("notifCenterList");
+  try {
+    const user = JSON.parse(localStorage.getItem("user") || "{}");
+    const r = await apiFetch("/users/notif-prefs", { headers: { "X-Username": user.username || "" } });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const d = await r.json();
+    const payload = d?.body ? (typeof d.body === "string" ? JSON.parse(d.body) : d.body) : d;
+    _NOTIF_ALARM_CATALOG = Array.isArray(payload?.alarm_catalog) ? payload.alarm_catalog : [];
+    if (payload?.prefs && typeof payload.prefs === "object") {
+      localStorage.setItem(ROBOT_NOTIF_PREFS_KEY, JSON.stringify(payload.prefs));
+      const cur = _notifCenterPrefs();
+      const mutedEl = document.getElementById("notifCenterMuted");
+      const sevEl = document.getElementById("notifCenterSeverity");
+      if (mutedEl) mutedEl.checked = cur.push_muted;
+      if (sevEl) sevEl.value = cur.push_min_severity;
+    }
+  } catch (e) {
+    console.warn("[notif-center] catálogo indisponível:", e);
+    if (list) {
+      list.innerHTML = '<p class="notif-center-loading">Não foi possível carregar a lista de alarmes. ' +
+        'As demais opções continuam valendo.</p>';
+    }
+    return;
+  }
+  _notifCenterRenderList("");
+}
+
+function _notifCenterRenderList(filter) {
+  const list = document.getElementById("notifCenterList");
+  if (!list) return;
+  if (!_NOTIF_ALARM_CATALOG.length) {
+    list.innerHTML = '<p class="notif-center-loading">Nenhum alarme no catálogo.</p>';
+    return;
+  }
+  // Preserva o que já estiver marcado na tela antes de redesenhar (busca)
+  const onScreen = new Map();
+  list.querySelectorAll(".notif-center-code").forEach(c => onScreen.set(c.value, c.checked));
+  const disabled = new Set(_notifCenterPrefs().push_disabled_codes);
+
+  const rows = _NOTIF_ALARM_CATALOG.filter(a => {
+    if (!filter) return true;
+    const hay = `${a.code} ${a.description_pt || ""}`.toLowerCase();
+    return hay.includes(filter);
+  });
+
+  if (!rows.length) {
+    list.innerHTML = '<p class="notif-center-loading">Nenhum alarme encontrado.</p>';
+    return;
+  }
+
+  list.innerHTML = rows.map(a => {
+    const code = String(a.code);
+    const checked = onScreen.has(code) ? onScreen.get(code) : !disabled.has(code);
+    const sev = String(a.severity || "").toLowerCase();
+    const sevClass = sev === "high" ? "high" : (sev === "medium" ? "medium" : "low");
+    return `<label class="notif-center-row">
+      <input type="checkbox" class="notif-center-code" value="${_notifEsc(code)}" ${checked ? "checked" : ""}>
+      <span class="notif-center-sev ${sevClass}"></span>
+      <span class="notif-center-desc">${_notifEsc(a.description_pt || code)}</span>
+      <span class="notif-center-codetag">${_notifEsc(code)}</span>
+    </label>`;
+  }).join("");
+}
+
+async function _notifCenterSave() {
+  const fb = document.getElementById("notifCenterFeedback");
+  const overlay = document.getElementById("notifCenterOverlay");
+  if (!overlay) return;
+
+  // Desmarcado = não notifica. Só conta o que está na tela + o que o filtro
+  // da busca escondeu (esses seguem com a preferência anterior).
+  const shown = new Set();
+  const disabled = new Set(_notifCenterPrefs().push_disabled_codes);
+  overlay.querySelectorAll(".notif-center-code").forEach(c => {
+    shown.add(c.value);
+    if (c.checked) disabled.delete(c.value);
+    else disabled.add(c.value);
+  });
+
+  const prefs = {
+    ..._robotGetNotifPrefs(),
+    push_muted: document.getElementById("notifCenterMuted")?.checked === true,
+    push_min_severity: document.getElementById("notifCenterSeverity")?.value || "all",
+    push_disabled_codes: Array.from(disabled),
+  };
+
+  if (fb) { fb.textContent = "Salvando…"; fb.className = "notif-center-feedback"; }
+  try {
+    localStorage.setItem(ROBOT_NOTIF_PREFS_KEY, JSON.stringify(prefs));
+    const user = JSON.parse(localStorage.getItem("user") || "{}");
+    const r = await apiFetch("/users/notif-prefs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Username": user.username || "" },
+      body: JSON.stringify({ prefs, merge: true }),
+    });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    if (fb) { fb.textContent = "✓ Preferências salvas."; fb.className = "notif-center-feedback ok"; }
+    setTimeout(() => overlay.remove(), 800);
+  } catch (e) {
+    if (fb) {
+      fb.textContent = "Salvo neste aparelho, mas o servidor não respondeu — as notificações " +
+        "no celular podem continuar como estavam.";
+      fb.className = "notif-center-feedback err";
+    }
+  }
 }
 
 document.addEventListener("DOMContentLoaded", () => {

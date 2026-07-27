@@ -3076,16 +3076,38 @@ tbody tr:hover td {
 }
 .clp-diag-cfg[open] summary::after { transform: rotate(180deg); }
 .clp-diag-cfg summary:hover { background: rgba(57,229,140,0.06); }
-.clp-cfg-inner { padding: 4px 13px 14px; display: flex; flex-direction: column; gap: 7px; }
-.clp-cfg-hint { margin: 2px 0 4px; font-size: 11px; line-height: 1.4; color: #8aaea0; }
-.clp-cfg-label { font-size: 10.5px; font-weight: 700; color: #9adbb8; text-transform: uppercase; letter-spacing: .03em; }
-.clp-cfg-input, .clp-cfg-area {
-  width: 100%; box-sizing: border-box; padding: 8px 10px;
-  background: rgba(2,10,7,0.6); border: 1px solid rgba(57,229,140,0.2); border-radius: 8px;
-  color: #d8f2e4; font-size: 12px; font-family: 'JetBrains Mono', monospace;
+.clp-cfg-inner { padding: 4px 13px 16px; display: flex; flex-direction: column; gap: 9px; }
+/* 12.5px: o modal usa 13px para texto de leitura — 11px aqui ficava ilegível */
+.clp-cfg-hint { margin: 2px 0 2px; font-size: 12.5px; line-height: 1.55; color: #9fc4b2; }
+.clp-cfg-hint code {
+  font-family: 'JetBrains Mono', monospace; font-size: 11.5px;
+  color: #bdf2d6; word-break: break-all;
 }
-.clp-cfg-area { resize: vertical; min-height: 96px; line-height: 1.45; }
+.clp-cfg-label { font-size: 11px; font-weight: 700; color: #9adbb8; text-transform: uppercase; letter-spacing: .04em; display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+/* Ações secundárias: precisam LER como botão (o texto solto não lia) */
+.clp-cfg-tpl {
+  cursor: pointer;
+  display: inline-flex; align-items: center; gap: 6px;
+  min-height: 30px; padding: 5px 11px;
+  border: 1px solid rgba(57,229,140,0.30); border-radius: 7px;
+  background: rgba(57,229,140,0.07);
+  color: #9df0c4; font-family: inherit; font-size: 11.5px; font-weight: 600;
+  text-transform: none; letter-spacing: 0; white-space: nowrap;
+  transition: background 0.15s ease-out, border-color 0.15s ease-out, color 0.15s ease-out;
+}
+.clp-cfg-tpl i { font-size: 10.5px; opacity: 0.9; }
+.clp-cfg-tpl:hover { background: rgba(57,229,140,0.15); border-color: rgba(57,229,140,0.48); color: #d9ffe9; }
+.clp-cfg-tpl:focus-visible { outline: 1px solid rgba(57,229,140,0.7); outline-offset: 2px; color: #d9ffe9; }
+.clp-cfg-tpl:active { background: rgba(57,229,140,0.22); }
+.clp-cfg-input, .clp-cfg-area {
+  width: 100%; box-sizing: border-box; padding: 9px 11px;
+  background: rgba(2,10,7,0.6); border: 1px solid rgba(57,229,140,0.2); border-radius: 8px;
+  color: #d8f2e4; font-size: 12.5px; font-family: 'JetBrains Mono', monospace;
+}
+.clp-cfg-input::placeholder, .clp-cfg-area::placeholder { color: #7fa494; }
+.clp-cfg-area { resize: vertical; min-height: 130px; line-height: 1.55; }
 .clp-cfg-input:focus, .clp-cfg-area:focus { outline: none; border-color: rgba(57,229,140,0.55); }
+.clp-cfg-input:focus-visible, .clp-cfg-area:focus-visible { outline: 1px solid rgba(57,229,140,0.45); outline-offset: 1px; }
 .clp-cfg-auth { display: flex; gap: 7px; }
 .clp-cfg-auth .clp-cfg-input { flex: 1; }
 .clp-cfg-btn {
@@ -3095,11 +3117,83 @@ tbody tr:hover td {
   display: inline-flex; align-items: center; gap: 7px; transition: background .15s;
 }
 .clp-cfg-btn:hover { background: rgba(57,229,140,0.22); }
-.clp-cfg-result { font-size: 11.5px; min-height: 16px; }
-.clp-cfg-result code { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #bdf2d6; word-break: break-all; }
+.clp-cfg-btn:focus-visible { outline: 1px solid rgba(57,229,140,0.7); outline-offset: 2px; }
+.clp-cfg-btn:active { background: rgba(57,229,140,0.30); }
+.clp-cfg-result { font-size: 12.5px; line-height: 1.55; min-height: 18px; }
+.clp-cfg-result code { font-family: 'JetBrains Mono', monospace; font-size: 11.5px; color: #bdf2d6; word-break: break-all; }
 .clp-cfg-ok  { color: #7ee0aa; display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .clp-cfg-err { color: #ffb4b4; display: inline-flex; align-items: center; gap: 6px; }
 .clp-cfg-wait { color: #9adbb8; display: inline-flex; align-items: center; gap: 6px; }
+
+/* Tela de configuração do gateway (protocolo V2) */
+.clp-cfg-meta {
+  font-size: 12px; line-height: 1.55; color: #9fc4b2;
+  padding: 9px 11px; border-radius: 8px;
+  background: rgba(2,10,7,0.45); border: 1px solid rgba(57,229,140,0.10);
+}
+.clp-cfg-label > span { display: inline-flex; gap: 8px; flex-wrap: wrap; }
+.clp-cfg-btn--ghost {
+  background: rgba(255,255,255,0.05); border-color: rgba(255,255,255,0.14); color: #e6f5ec;
+}
+.clp-cfg-btn--ghost:hover { background: rgba(255,255,255,0.10); }
+.clp-cfg-btn--ghost:active { background: rgba(255,255,255,0.14); }
+.clp-cfg-preview:empty { display: none; }
+.clp-cfg-preview {
+  font-size: 12.5px; line-height: 1.6; color: #e6f5ec;
+  padding: 11px 12px; border-radius: 8px;
+  background: rgba(2,10,7,0.55); border: 1px solid rgba(57,229,140,0.16);
+}
+.clp-cfg-preview code { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: #bdf2d6; }
+.clp-cfg-preview-list { color: #9fc4b2; margin-top: 2px; }
+.clp-cfg-preview-topic {
+  font-family: 'JetBrains Mono', monospace; font-size: 11.5px;
+  color: #8fb6a6; word-break: break-all; margin-top: 5px;
+}
+.clp-cfg-preview .clp-cfg-err { margin-top: 8px; align-items: flex-start; }
+
+.clp-cfg-check {
+  display: flex; align-items: center; gap: 9px; cursor: pointer;
+  font-size: 12.5px; line-height: 1.45; color: #d8f2e4;
+}
+.clp-cfg-check input { accent-color: #39e58c; flex: 0 0 auto; }
+
+/* Resgate: botões pequenos dentro da caixa de informação */
+.clp-cfg-tpl--mini {
+  min-height: 24px; padding: 2px 8px; font-size: 11px; vertical-align: middle;
+  margin-left: 4px;
+}
+.clp-cfg-history:empty { display: none; }
+.clp-cfg-history {
+  display: flex; flex-direction: column; gap: 4px;
+  max-height: 190px; overflow-y: auto;
+  padding: 8px 10px; border-radius: 8px;
+  background: rgba(2,10,7,0.55); border: 1px solid rgba(57,229,140,0.16);
+  scrollbar-width: thin; scrollbar-color: rgba(57,229,140,.25) transparent;
+}
+.clp-cfg-history-item {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  flex-wrap: wrap;
+  font-size: 12px; color: #d8f2e4; line-height: 1.5;
+  padding: 5px 0;
+}
+.clp-cfg-history-item + .clp-cfg-history-item { border-top: 1px solid rgba(255,255,255,0.06); }
+.clp-cfg-history-item code { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #bdf2d6; }
+.clp-cfg-history-nosnap { font-size: 11px; color: #8fb6a6; }
+
+@media (max-width: 640px) {
+  .clp-cfg-tpl--mini { min-height: 32px; padding: 4px 10px; flex: none; }
+}
+
+/* Mobile / PWA: alvo de toque de 44px nas ações secundárias */
+@media (max-width: 640px) {
+  .clp-cfg-label { align-items: flex-start; }
+  .clp-cfg-label > span { width: 100%; }
+  .clp-cfg-tpl { min-height: 44px; padding: 8px 14px; flex: 1; justify-content: center; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .clp-cfg-tpl { transition: none; }
+}
 
 /* Mobile / PWA: modal vira bottom-sheet (mais cara de app) */
 @media (max-width: 640px) {
