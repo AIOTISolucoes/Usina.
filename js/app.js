@@ -5428,67 +5428,97 @@ function _renderClpDiag(ov, data) {
     // o último envio é o primeiro do histórico; o campo separado é retrocompatibilidade
     const last = data.gateway_config_last_sent || _CLP_CFG_HISTORY[0] || null;
 
+    // Estado da configuração. Os botões saem do meio do texto e vão para uma
+    // fila própria: intercalados, quebravam a leitura em qualquer largura.
+    // Dado técnico (entidades, CRC) em mono, como no resto da plataforma.
     const savedInfo = gc
       ? `Salva em ${_clpEsc(new Date(gc.updated_at).toLocaleString("pt-BR"))}` +
-        (gc.updated_by ? ` por ${_clpEsc(gc.updated_by)}` : "") +
-        ` <button type="button" class="clp-cfg-tpl clp-cfg-tpl--mini" onclick="_clpCfgRestoreSaved()">` +
-        `<i class="fa-solid fa-rotate-left"></i> Restaurar</button>` +
-        ` <button type="button" class="clp-cfg-tpl clp-cfg-tpl--mini" onclick="_clpCfgDownload()">` +
-        `<i class="fa-solid fa-download"></i> Baixar</button>`
+        (gc.updated_by ? ` por ${_clpEsc(gc.updated_by)}` : "")
       : "Nenhuma configuração salva ainda.";
+    // o nome de quem enviou vem ANTES da data: no fim, ele sobrava sozinho
+    // na última linha do balão estreito
     const lastInfo = last
-      ? `Último envio: ${_clpEsc(new Date(last.sent_at).toLocaleString("pt-BR"))} · ` +
-        `${last.entity_count || 0} entidades · CRC ${_clpEsc(last.crc32 || "—")}` +
-        (last.sent_by_username ? ` · ${_clpEsc(last.sent_by_username)}` : "") +
-        (_CLP_CFG_HISTORY.length
-          ? ` <button type="button" class="clp-cfg-tpl clp-cfg-tpl--mini" onclick="_clpCfgToggleHistory('${_pid}')">` +
-            `<i class="fa-solid fa-clock-rotate-left"></i> Histórico (${_CLP_CFG_HISTORY.length})</button>`
-          : "")
+      ? `Último envio${last.sent_by_username ? ` por ${_clpEsc(last.sent_by_username)}` : ""}: ` +
+        `${_clpEsc(new Date(last.sent_at).toLocaleString("pt-BR"))} · ` +
+        `<code>${last.entity_count || 0}</code> entidades · CRC <code>${_clpEsc(last.crc32 || "—")}</code>`
       : "";
+    const metaAcoes = [
+      gc ? `<button type="button" class="clp-cfg-tpl clp-cfg-tpl--mini" onclick="_clpCfgRestoreSaved()">
+              <i class="fa-solid fa-rotate-left" aria-hidden="true"></i> Restaurar</button>` : "",
+      gc ? `<button type="button" class="clp-cfg-tpl clp-cfg-tpl--mini" onclick="_clpCfgDownload()">
+              <i class="fa-solid fa-download" aria-hidden="true"></i> Baixar</button>` : "",
+      (last && _CLP_CFG_HISTORY.length)
+        ? `<button type="button" class="clp-cfg-tpl clp-cfg-tpl--mini" onclick="_clpCfgToggleHistory('${_pid}')">
+             <i class="fa-solid fa-clock-rotate-left" aria-hidden="true"></i> Histórico (${_CLP_CFG_HISTORY.length})</button>`
+        : "",
+    ].filter(Boolean).join("");
 
     html += `
       <details class="clp-diag-cfg">
         <summary><i class="fa-solid fa-gears"></i> Configuração do gateway (admin)</summary>
         <div class="clp-cfg-inner">
-          <p class="clp-cfg-hint">
-            A configuração vai para o gateway quebrada em várias mensagens, e nada chega aos
-            equipamentos antes da última delas. Se alguma for recusada, a configuração antiga
-            continua valendo.
-          </p>
-          <div class="clp-cfg-meta">${savedInfo}${lastInfo ? `<br>${lastInfo}` : ""}</div>
-          <div class="clp-cfg-history" id="clpCfgHistory"></div>
-          <label class="clp-cfg-label">
-            Configuração (JSON)
-            <span>
-              <button type="button" class="clp-cfg-tpl" onclick="_clpLoadConfigTemplate()">
-                <i class="fa-solid fa-file-code" aria-hidden="true"></i> Modelo padrão
-              </button>
-              <button type="button" class="clp-cfg-tpl" onclick="_clpCfgPreview('${_pid}')">
-                <i class="fa-solid fa-eye" aria-hidden="true"></i> Pré-visualizar
-              </button>
-            </span>
-          </label>
-          <textarea id="clpCfgPayload" class="clp-cfg-area" rows="10" spellcheck="false"
-            placeholder='{ "plant": {...}, "channels": [...], "templates": [...], "devices": [...] }'>${
-              _CLP_CFG_SAVED ? _clpEsc(JSON.stringify(_CLP_CFG_SAVED, null, 2)) : ""
-            }</textarea>
-          <div class="clp-cfg-preview" id="clpCfgPreview"></div>
-          <label class="clp-cfg-check" title="Template importado chega com o mapa não validado em campo; sem isso o gateway recusa a transação inteira">
-            <input type="checkbox" id="clpCfgAllowUnverified" checked>
-            <span>Aceitar mapa de template ainda não validado em campo</span>
-          </label>
-          <button class="clp-cfg-btn clp-cfg-btn--ghost" onclick="_clpCfgSave('${_pid}')">
-            <i class="fa-solid fa-floppy-disk"></i> Salvar no banco
-          </button>
-          <p class="clp-cfg-hint">Para publicar no gateway, confirme com o seu usuário e senha:</p>
-          <div class="clp-cfg-auth">
-            <input id="clpCfgUser" class="clp-cfg-input" placeholder="usuário" autocomplete="off">
-            <input id="clpCfgPass" class="clp-cfg-input" type="password" placeholder="senha" autocomplete="new-password">
+          <div class="clp-cfg-meta">
+            <div>${savedInfo}</div>
+            ${lastInfo ? `<div>${lastInfo}</div>` : ""}
+            ${metaAcoes ? `<div class="clp-cfg-meta-acoes">${metaAcoes}</div>` : ""}
           </div>
-          <button class="clp-cfg-btn" onclick="_clpSendConfig('${_pid}')">
-            <i class="fa-solid fa-satellite-dish"></i> Publicar no gateway
+          ${_clpCfgFeedbackHtml(data.gateway_config_feedback, last)}
+          <div class="clp-cfg-history" id="clpCfgHistory"></div>
+
+          <button type="button" class="clp-cfg-abrir" onclick="_clpAbreConfigurador('${_pid}')">
+            <i class="fa-solid fa-table-columns" aria-hidden="true"></i>
+            <span class="clp-cfg-abrir-txt">
+              <strong>${_CLP_CFG_SAVED ? "Abrir o configurador" : "Configurar este gateway"}</strong>
+              <small>Equipamentos, canais, campos, tópicos, comandos, sequências e PID.
+                O catálogo de modelos já traz o mapa Modbus pronto.</small>
+            </span>
+            <i class="fa-solid fa-arrow-right clp-cfg-abrir-seta" aria-hidden="true"></i>
           </button>
-          <div id="clpCfgResult" class="clp-cfg-result"></div>
+
+          <details class="clp-cfg-manual">
+            <summary><i class="fa-solid fa-code" aria-hidden="true"></i> Colar o JSON à mão</summary>
+            <div class="clp-cfg-manual-inner">
+              <p class="clp-cfg-hint">
+                A configuração vai para o gateway quebrada em várias mensagens, e nada chega aos
+                equipamentos antes da última delas. Se alguma for recusada, a configuração antiga
+                continua valendo.
+              </p>
+              <label class="clp-cfg-label" for="clpCfgPayload">
+                Configuração (JSON)
+                <span>
+                  <button type="button" class="clp-cfg-tpl" onclick="_clpLoadConfigTemplate()">
+                    <i class="fa-solid fa-file-code" aria-hidden="true"></i> Modelo padrão
+                  </button>
+                  <button type="button" class="clp-cfg-tpl" onclick="_clpCfgPreview('${_pid}')">
+                    <i class="fa-solid fa-eye" aria-hidden="true"></i> Pré-visualizar
+                  </button>
+                </span>
+              </label>
+              <textarea id="clpCfgPayload" class="clp-cfg-area" rows="10" spellcheck="false"
+                placeholder='{ "plant": {...}, "channels": [...], "templates": [...], "devices": [...] }'>${
+                  _CLP_CFG_SAVED ? _clpEsc(JSON.stringify(_CLP_CFG_SAVED, null, 2)) : ""
+                }</textarea>
+              <div class="clp-cfg-preview" id="clpCfgPreview"></div>
+              <label class="clp-cfg-check" title="Template importado chega com o mapa não validado em campo; sem isso o gateway recusa a transação inteira">
+                <input type="checkbox" id="clpCfgAllowUnverified" checked>
+                <span>Aceitar mapa de template ainda não validado em campo</span>
+              </label>
+              <button class="clp-cfg-btn clp-cfg-btn--ghost" onclick="_clpCfgSave('${_pid}')">
+                <i class="fa-solid fa-floppy-disk"></i> Salvar no banco
+              </button>
+              <p class="clp-cfg-hint">Para publicar no gateway, confirme com o seu usuário e senha:</p>
+              <div class="clp-cfg-auth">
+                <input id="clpCfgUser" class="clp-cfg-input" placeholder="usuário" autocomplete="off"
+                       aria-label="usuário">
+                <input id="clpCfgPass" class="clp-cfg-input" type="password" placeholder="senha"
+                       autocomplete="new-password" aria-label="senha">
+              </div>
+              <button class="clp-cfg-btn" onclick="_clpSendConfig('${_pid}')">
+                <i class="fa-solid fa-satellite-dish"></i> Publicar no gateway
+              </button>
+              <div id="clpCfgResult" class="clp-cfg-result"></div>
+            </div>
+          </details>
         </div>
       </details>`;
   }
@@ -5538,6 +5568,17 @@ const CLP_CONFIG_TEMPLATE = {
 
 let _CLP_CFG_SAVED = null;
 let _CLP_CFG_HISTORY = [];
+
+// Abre o configurador gráfico (gateway.html) na usina do modal. O segmento do
+// tópico é o NOME da usina no cadastro — vai junto para a tela já avisar quando
+// o "plant.id" do JSON não bater com ele (a ingestão casa exato).
+function _clpAbreConfigurador(plantId) {
+  const card = document.querySelector(`.plant-card[data-plant-id="${plantId}"]`);
+  const nome = (card && (card.dataset.plantTopicName || card.dataset.plantName)) || "";
+  const url = `gateway.html?plant_id=${encodeURIComponent(plantId)}` +
+    (nome ? `&plant=${encodeURIComponent(nome)}` : "");
+  window.open(url, "_blank", "noopener");
+}
 
 // ---- Resgate da configuração -----------------------------------------------
 // Pedido do Igor 25/07: poder voltar para uma configuração que já funcionou.
@@ -5641,7 +5682,12 @@ function _clpCfgBuild(plantId) {
   // request_id NOVO a cada envio: o gateway ignora um begin com id que ele já
   // viu (idempotência), e aí o envio "some" sem erro nenhum. O sufixo aleatório
   // cobre dois cliques dentro do mesmo milissegundo.
-  const rid = "cfg-" + Date.now() + "-" + Math.random().toString(36).slice(2, 7);
+  // ⚠️ A API de referência do Igor (27/07) valida com ^[A-Za-z0-9._-]{1,16}$ —
+  // o limite caiu de 63 para 16. O formato antigo ("cfg-" + Date.now() + "-" +
+  // aleatório) dava 23 caracteres e seria recusado. Base36 do relógio resolve:
+  // 1 + 8 + 5 = 14, ainda único e compatível com o firmware antigo (16 < 63).
+  const rid = ("c" + Date.now().toString(36) +
+    Math.random().toString(36).slice(2, 7)).slice(0, 16);
   const user = JSON.parse(localStorage.getItem("user") || "{}");
   return {
     cfg,
@@ -5656,6 +5702,101 @@ function _clpCfgBuild(plantId) {
 function _clpCfgDevicesSemMapaLiberado(cfg) {
   const devs = Array.isArray(cfg && cfg.devices) ? cfg.devices : [];
   return devs.filter(d => !(d && d.metadata && d.metadata.allow_unverified_map === true)).length;
+}
+
+// Resultado REAL do último envio, vindo do tópico de feedback do gateway
+// (IoT Rule -> app.gateway_config_feedback). Até 27/07 a tela dizia "publicado"
+// e ficava por isso mesmo, mesmo quando o CC100 recusava tudo em silêncio.
+// AUSÊNCIA de feedback também é diagnóstico: significa que o gateway não
+// respondeu nada — ou está fora do ar, ou o tópico não bate.
+function _clpCfgFeedbackHtml(lista, ultimoEnvio) {
+  if (!Array.isArray(lista) || !lista.length) {
+    return ultimoEnvio
+      ? `<div class="clp-cfg-fb clp-cfg-fb--mudo"><i class="fa-solid fa-circle-question"></i> ` +
+        `O gateway não respondeu nada neste envio. Confirme se ele está online e se a regra ` +
+        `de feedback está ativa.</div>`
+      : "";
+  }
+  const f = lista[0];
+  const st = String(f.status_final || "").toLowerCase();
+  // "partial_success" é FALHA na referência do Igor, não sucesso parcial benigno
+  const ruim = ["failed", "validation_error", "partial_success"].includes(st);
+  const classe = ruim ? "clp-cfg-fb--erro" : (st === "success" ? "clp-cfg-fb--ok" : "clp-cfg-fb--neutro");
+  const icone = ruim ? "fa-circle-xmark" : (st === "success" ? "fa-circle-check" : "fa-circle-info");
+  const num = v => (v === null || v === undefined ? "—" : v);
+  const casa = ultimoEnvio && String(ultimoEnvio.request_id || "") === String(f.request_id || "");
+
+  return `<div class="clp-cfg-fb ${classe}">` +
+    `<i class="fa-solid ${icone}"></i> ` +
+    `<strong>Resposta do gateway:</strong> ${_clpEsc(f.status_final || "sem status")}` +
+    ` · recebidas ${num(f.received)} · aplicadas ${num(f.applied)} · recusadas ${num(f.rejected)}` +
+    (f.devices_configured != null ? ` · ${f.devices_configured} entidades confirmadas` : "") +
+    (f.ultima_mensagem ? `<br><span class="clp-cfg-fb-msg">${_clpEsc(f.ultima_mensagem)}</span>` : "") +
+    (casa ? "" : `<br><span class="clp-cfg-fb-msg">(de um envio anterior — ` +
+      `${_clpEsc(String(f.request_id || ""))})</span>`) +
+    `</div>`;
+}
+
+// Capacidades do staging do CC100 (tabela "Capacidades" da documentacao do
+// gateway V16). Estourar qualquer uma faz o validate recusar a TRANSACAO
+// INTEIRA, e a doc e explicita: "config invalida nunca vira ativa". Como a
+// plataforma ainda nao assina o topico de feedback, sem esta checagem o erro
+// aparece como "publicou e nao aplicou" - o mesmo sintoma das outras 4
+// armadilhas. Barato conferir aqui antes de mandar 493 mensagens.
+const CLP_CFG_LIMITES = {
+  channels: 32, templates: 100, devices: 255,
+  sequences: 128, pid: 16, reclose_rules: 32, metadata: 1024,
+  requests_por_template: 32, fields_por_template: 192,
+  commands_por_device: 6, status_map_por_template: 16,
+  passos_por_sequencia: 16,
+};
+
+function _clpCfgLimitesEstourados(cfg) {
+  const problemas = [];
+  const arr = k => (Array.isArray(cfg && cfg[k]) ? cfg[k] : []);
+
+  // Limites globais (contagem simples da lista)
+  [
+    ["channels", "canais Modbus"], ["templates", "templates"],
+    ["devices", "equipamentos"], ["sequences", "sequencias"],
+    ["pid", "controladores PID"], ["metadata", "entradas de metadados"],
+  ].forEach(([chave, rotulo]) => {
+    const n = arr(chave).length;
+    const max = CLP_CFG_LIMITES[chave];
+    if (n > max) problemas.push(`${n} ${rotulo} (maximo ${max})`);
+  });
+
+  // Limites POR PAI: agrupa pelo id do template/device e olha o maior grupo.
+  const porPai = (lista, campoPai) => {
+    const c = {};
+    lista.forEach(x => {
+      const pai = x && (x[campoPai] != null ? String(x[campoPai]) : "");
+      if (pai) c[pai] = (c[pai] || 0) + 1;
+    });
+    let topo = ["", 0];
+    Object.entries(c).forEach(e => { if (e[1] > topo[1]) topo = e; });
+    return topo;
+  };
+  [
+    ["requests", "template_id", "requests_por_template", "requests no template"],
+    ["fields", "template_id", "fields_por_template", "campos no template"],
+    ["status_map", "template_id", "status_map_por_template", "correlacoes de status no template"],
+    ["commands", "device_id", "commands_por_device", "comandos no equipamento"],
+    ["sequence_steps", "sequence_id", "passos_por_sequencia", "passos na sequencia"],
+  ].forEach(([chave, campoPai, limite, rotulo]) => {
+    const [pai, n] = porPai(arr(chave), campoPai);
+    const max = CLP_CFG_LIMITES[limite];
+    if (n > max) problemas.push(`${n} ${rotulo} "${pai}" (maximo ${max})`);
+  });
+
+  // Regras de religamento: ora vem como lista, ora dentro de auto_reclosing.
+  const reclose = arr("reclose_rules").length ||
+    (cfg && cfg.auto_reclosing && Array.isArray(cfg.auto_reclosing.rules)
+      ? cfg.auto_reclosing.rules.length : 0);
+  if (reclose > CLP_CFG_LIMITES.reclose_rules) {
+    problemas.push(`${reclose} regras de religamento (maximo ${CLP_CFG_LIMITES.reclose_rules})`);
+  }
+  return problemas;
 }
 
 function _clpCfgAplicaMapaNaoValidado(cfg) {
@@ -5702,11 +5843,19 @@ function _clpCfgPreview(plantId) {
         `Se o template for importado, o gateway recusa a configuração inteira. ` +
         `Marque a opção abaixo ou valide o mapa em campo.</div>`
       : "";
+    // Capacidades do staging: se estourar, o gateway recusa TUDO no validate.
+    const estourados = _clpCfgLimitesEstourados(_clpCfgRead());
+    const avisoLimite = estourados.length
+      ? `<div class="clp-cfg-err">Passa da capacidade do gateway: ` +
+        `${_clpEsc(estourados.join("; "))}. O validate recusaria a configuração inteira.</div>`
+      : "";
     box.innerHTML =
       `<div><strong>${txn.publications.length}</strong> mensagens · ` +
-      `<strong>${txn.entityCount}</strong> entidades · CRC <code>${_clpEsc(txn.crc)}</code></div>` +
+      `<strong>${txn.entityCount}</strong> entidades <span class="clp-cfg-hint">` +
+      `(conferência local — quem compila de verdade é o servidor)</span></div>` +
       `<div class="clp-cfg-preview-list">${resumo}</div>` +
-      `<div class="clp-cfg-preview-topic">${_clpEsc(txn.topics.chunk)}</div>` + alerta + avisoMapa;
+      `<div class="clp-cfg-preview-topic">${_clpEsc(txn.topics.chunk)}</div>` +
+      alerta + avisoMapa + avisoLimite;
   } catch (e) {
     box.innerHTML = `<div class="clp-cfg-err"><i class="fa-solid fa-triangle-exclamation"></i> ${_clpEsc(e.message || e)}</div>`;
   }
@@ -5789,70 +5938,83 @@ function _clpSendConfig(plantId) {
   }
 
   if (!confirm(
-    `Publicar ${txn.publications.length} mensagens (${txn.entityCount} entidades) no gateway?\n\n` +
-    `Tópico: ${txn.topics.chunk}\n\n` +
+    `Enviar a configuração (${txn.entityCount} entidades) ao gateway?\n\n` +
+    `O backend compila e publica uma mensagem por vez, esperando o gateway ` +
+    `confirmar cada uma. Isso leva alguns minutos.\n\n` +
     `O commit aplica a configuração no equipamento.`
   )) return;
 
-  _clpCfgPublishBatches(plantId, built, username, password, passEl, resEl);
+  _clpCfgApplyV2(plantId, cfg, username, password, passEl, resEl);
 }
 
-// Manda a transação INTEIRA. Quem cuida do tempo é a API: ela publica o que
-// couber no orçamento dela e, se não terminar, responde `partial` com o índice
-// de onde continuar — aí a gente só reenvia o resto. Na maioria das usinas sai
-// numa chamada só.
-async function _clpCfgPublishBatches(plantId, built, username, password, passEl, resEl) {
-  const { cfg, rid, txn } = built;
-  const pubs = txn.publications;
-  const total = pubs.length;
-  let enviadas = 0;
-  let voltas = 0;
-
+// Caminho NOVO (contrato do Igor, 27/07). O front manda a configuração de ALTO
+// NÍVEL e não compila nada: quem compila é o backend, com o mqtt_entities.py
+// dele. A API responde 202 e o envio real acontece num worker assíncrono, que
+// espera o ACK de cada mensagem — por isso aqui só resta acompanhar.
+async function _clpCfgApplyV2(plantId, cfg, username, password, passEl, resEl) {
+  const espera = ms => new Promise(r => setTimeout(r, ms));
   try {
-    while (enviadas < total) {
-      if (++voltas > 20) throw new Error("envio não terminou depois de 20 tentativas");
+    resEl.innerHTML = `<span class="clp-cfg-wait"><i class="fa-solid fa-circle-notch fa-spin"></i> ` +
+      `Compilando a configuração...</span>`;
 
-      resEl.innerHTML = `<span class="clp-cfg-wait"><i class="fa-solid fa-circle-notch fa-spin"></i> ` +
-        (enviadas
-          ? `Publicando... ${enviadas} de ${total} mensagens`
-          : `Publicando ${total} mensagens...`) + `</span>`;
+    const r = await apiFetch(`/plants/${plantId}/clp/config`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "apply_v2", configuration: cfg, username, password }),
+    });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok || d.ok === false) throw new Error(d.error || `HTTP ${r.status}`);
+    if (passEl) passEl.value = "";
 
-      const r = await apiFetch(`/plants/${plantId}/clp/config`, {
+    const rid = d.request_id;
+    const total = Number(d.messages) || 0;
+    let ultimo = "";
+
+    // Polling do job. Sem teto de tentativas: quem decide o fim é o backend
+    // (success/failed), e uma transação grande pode passar de 10 minutos.
+    for (;;) {
+      await espera(1500);
+      const jr = await apiFetch(`/plants/${plantId}/clp/config`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          publications: pubs.slice(enviadas),
-          request_id: rid,
-          crc: txn.crc,
-          config: cfg,
-          final_batch: true,
-          abort_topic: txn.abort && txn.abort.topic,
-          abort_message: txn.abort && txn.abort.payload,
-          username,
-          password,
-        }),
+        body: JSON.stringify({ action: "job", request_id: rid }),
       });
-      const d = await r.json().catch(() => ({}));
-      if (!r.ok || d.ok === false) {
-        throw new Error(
-          (d.error || `HTTP ${r.status}`) +
-          (enviadas ? ` (parou em ${enviadas} de ${total} mensagens; sem o commit o gateway não aplica nada)` : "")
-        );
+      const j = await jr.json().catch(() => ({}));
+      if (!jr.ok) throw new Error(j.error || `HTTP ${jr.status}`);
+
+      const enviadas = Number(j.entities_sent) || 0;
+      const pct = total ? Math.min(100, Math.round((enviadas / total) * 100)) : 0;
+      const etapa = { begin: "abrindo a transação", put: "enviando entidades",
+                      validate: "o gateway está validando", commit: "aplicando",
+                      finished: "concluído" }[j.stage] || (j.stage || "");
+
+      if (j.status === "success") {
+        resEl.innerHTML = `<span class="clp-cfg-ok"><i class="fa-solid fa-check"></i> ` +
+          `Configuração aplicada e confirmada pelo gateway ` +
+          `(${enviadas} de ${total} mensagens).</span>`;
+        _renderClpDiag && setTimeout(() => { try { openClpDiagModal(plantId); } catch (e) {} }, 1200);
+        return;
+      }
+      if (j.status === "failed") {
+        resEl.innerHTML = `<span class="clp-cfg-err"><i class="fa-solid fa-triangle-exclamation"></i> ` +
+          `O gateway recusou: ${_clpEsc(j.message || "sem detalhe")}<br>` +
+          `<small>Parou em ${enviadas} de ${total}. A configuração anterior continua valendo ` +
+          `(o backend publicou abort).</small></span>`;
+        return;
       }
 
-      const publicadas = Number(d.published) || 0;
-      if (publicadas <= 0) throw new Error("a API não publicou nenhuma mensagem desta vez");
-      enviadas += publicadas;
-      if (!d.partial) break;
+      const msg = `${pct}% · ${enviadas} de ${total} mensagens · ${etapa}`;
+      if (msg !== ultimo) {
+        ultimo = msg;
+        resEl.innerHTML = `<span class="clp-cfg-wait"><i class="fa-solid fa-circle-notch fa-spin"></i> ` +
+          `${_clpEsc(msg)}</span>` +
+          `<div class="clp-cfg-bar"><div class="clp-cfg-bar-fill" style="width:${pct}%"></div></div>` +
+          `<small class="clp-cfg-hint">Pode fechar esta janela — o envio continua no servidor.</small>`;
+      }
     }
-
-    resEl.innerHTML = `<span class="clp-cfg-ok"><i class="fa-solid fa-check"></i> ` +
-      `${enviadas} mensagens publicadas (${txn.entityCount} entidades). ` +
-      `O resultado chega em <code>${_clpEsc(txn.topics.feedback)}</code>: ` +
-      `espere received=${txn.entityCount}, applied=1, rejected=0.</span>`;
-    if (passEl) passEl.value = "";
   } catch (err) {
-    resEl.innerHTML = `<span class="clp-cfg-err"><i class="fa-solid fa-triangle-exclamation"></i> ${_clpEsc(err.message || err)}</span>`;
+    resEl.innerHTML = `<span class="clp-cfg-err"><i class="fa-solid fa-triangle-exclamation"></i> ` +
+      `${_clpEsc(err.message || err)}</span>`;
   }
 }
 
