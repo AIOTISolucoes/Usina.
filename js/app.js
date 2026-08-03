@@ -9786,7 +9786,15 @@ function _tkDate(s) {
 // =============================================================================
 const NOTIF_STORAGE_KEY = "platform_last_seen_update";
 
+// Quem chegou por `?infra=1` clicou num aviso de usina parada. As novidades da
+// plataforma não podem abrir por cima disso — nesse momento elas são ruído.
+let _NOTIF_VEIO_POR_INFRA = false;
+
 async function initPlatformUpdates() {
+  try {
+    _NOTIF_VEIO_POR_INFRA = new URLSearchParams(location.search).get("infra") === "1";
+  } catch (e) { /* URL exótica não pode derrubar o sininho */ }
+
   const bellBtn = document.getElementById("notifBellBtn");
   const panel = document.getElementById("notifPanel");
   const closeBtn = document.getElementById("notifPanelClose");
@@ -9846,9 +9854,7 @@ async function initPlatformUpdates() {
   // O push de infraestrutura aponta para cá (`?infra=1`). Sem isto o clique na
   // notificação abria a usina e a pessoa não via nem o histórico nem o que
   // mais caiu junto — que é o dado que aponta para o CLP.
-  try {
-    if (new URLSearchParams(location.search).get("infra") === "1") openInfraHealth();
-  } catch (e) { /* URL exótica não pode derrubar o sininho */ }
+  if (_NOTIF_VEIO_POR_INFRA) openInfraHealth();
 }
 
 let _notifAllUpdates = [];
@@ -9909,6 +9915,7 @@ function _notifRenderPanel(updates, lastSeen) {
 }
 
 function _notifShowModal(unseen) {
+  if (_NOTIF_VEIO_POR_INFRA) return;
   const overlay = document.getElementById("notifModalOverlay");
   const body = document.getElementById("notifModalBody");
   if (!overlay || !body) return;
@@ -10194,9 +10201,11 @@ function _infraDur(s) {
   if (n < 90) return `${n} s`;
   const min = Math.round(n / 60);
   if (min < 90) return `${min} min`;
+  // Horas até 3 dias: numa parada de usina "51,6 h" diz muito mais do que
+  // "2 dias", e é esse número que vai para a conversa com o cliente.
   const h = n / 3600;
-  if (h < 48) return `${h.toFixed(1).replace(".", ",")} h`;
-  return `${Math.round(h / 24)} dias`;
+  if (h < 72) return `${h.toFixed(1).replace(".", ",")} h`;
+  return `${(h / 24).toFixed(1).replace(".", ",")} dias`;
 }
 
 function _infraWhen(iso) {
@@ -10328,9 +10337,22 @@ function _infraRenderModal() {
 function _infraCard(g) {
   const aberto = g.open === true;
   const sev = aberto ? (g.severity === "critical" ? "crit" : "warn") : "done";
+  // started_at é quando a usina calou, não quando o detector percebeu — a
+  // Acopiara caiu 26 h antes do detector existir e apareceria como "10 min".
   const quando = aberto
-    ? `parou ${_infraWhen(g.opened_at)} · há ${_infraDur(g.duration_s)}`
-    : `${_infraWhen(g.opened_at)} → ${_infraWhen(g.closed_at)} · ${_infraDur(g.duration_s)} fora`;
+    ? `parou ${_infraWhen(g.started_at)} · há ${_infraDur(g.duration_s)}`
+    : `${_infraWhen(g.started_at)} → ${_infraWhen(g.closed_at)} · ${_infraDur(g.duration_s)} fora`;
+
+  // Detector que ainda não estava de pé é informação de operação: sem esta
+  // linha o incidente parece ter sido acompanhado desde o primeiro minuto.
+  let atraso = "";
+  if (g.detected_at && g.started_at) {
+    const gap = (_tkDate(g.detected_at) - _tkDate(g.started_at)) / 1000;
+    if (gap > 1800) {
+      atraso = `<div class="infra-src">Detectado só ${_infraWhen(g.detected_at)} ·
+                  ${_infraDur(gap)} depois do início</div>`;
+    }
+  }
 
   // Nome de tabela só para a equipe: é o que aponta para o CLP. O cliente vê a
   // usina e o tempo, sem `raw_thermalrelay` nenhum (mesma regra do push).
@@ -10350,6 +10372,7 @@ function _infraCard(g) {
         <span class="infra-when">${quando}</span>
       </div>
       ${fontes}
+      ${atraso}
       ${link}
     </div>`;
 }
