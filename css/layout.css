@@ -360,11 +360,16 @@ html { scrollbar-gutter: stable; overflow-x: hidden; }
   z-index: 1;
 }
 
+/* Active Power e Rated Power (DC) trocaram de posição em 05/08. A troca é
+   feita pela grid-area, não mexendo no HTML: assim cada bloco leva junto o
+   visual dele (o Active continua verde e 26px, o Rated continua discreto).
+   As áreas do template seguem chamando "rated" e "active" pelo lugar que
+   ocupam na tela, não por quem mora nelas. */
 .psf-status-icons { grid-area: status; justify-self: start; }
 .psf-gauge        { grid-area: gauge; justify-self: center; }
-.psf-rated--dc    { grid-area: rated; justify-self: end; }
+.psf-active       { grid-area: rated; justify-self: end; }
 .psf-rated--ac    { grid-area: ac;    justify-self: start; }
-.psf-active       { grid-area: active; justify-self: end; }
+.psf-rated--dc    { grid-area: active; justify-self: end; }
 
 .psf-sep {
   height: 40px;
@@ -380,9 +385,12 @@ html { scrollbar-gutter: stable; overflow-x: hidden; }
   gap: 4px;
 }
 
-.psf-rated--dc { padding: 0 12px 0 0; }
+/* O recuo e o filete são do LUGAR, não do bloco: quem está à esquerda do anel
+   respira para a direita, quem está na ponta direita ganha o separador. Com a
+   troca acima, eles acompanham a posição para o cabeçalho ficar idêntico. */
+.psf-active    { padding: 0 12px 0 0; border-left: none; }
 .psf-rated--ac { padding: 0 0 0 12px; }
-.psf-active    { padding: 0 0 0 16px; border-left: 1px solid rgba(57,229,140,0.14); }
+.psf-rated--dc { padding: 0 0 0 16px; border-left: 1px solid rgba(57,229,140,0.14); }
 
 .psf-rated-label,
 .psf-active-label {
@@ -1305,9 +1313,10 @@ tbody tr:hover td {
     justify-self: center;
     padding: 0 6px;
   }
-  .psf-rated--dc{ grid-area: rated; justify-self: end; }
+  /* troca de 05/08: ver comentário na regra base */
+  .psf-active   { grid-area: rated; justify-self: end; }
   .psf-rated--ac{ grid-area: ac;    justify-self: start; }
-  .psf-active   { grid-area: active; }
+  .psf-rated--dc{ grid-area: active; }
   .psf-status-icons{
     grid-area: status;
     justify-self: start;
@@ -1370,9 +1379,10 @@ tbody tr:hover td {
     padding: 0 6px;
   }
 
-  .psf-rated--dc{ grid-area: rated; justify-self: end; }
+  /* troca de 05/08: ver comentário na regra base */
+  .psf-active   { grid-area: rated; justify-self: end; }
   .psf-rated--ac{ grid-area: ac;    justify-self: start; }
-  .psf-active   { grid-area: active; }
+  .psf-rated--dc{ grid-area: active; }
 
   .psf-gauge-circle{
     width: 74px;
@@ -1564,11 +1574,18 @@ tbody tr:hover td {
     font-size: 12px;
   }
 
-  .psf-rated--dc{
+  /* troca de 05/08. No celular as posições não são espelhadas: "rated" é uma
+     coluna estreita ao lado do anel e "active" é uma linha inteira embaixo.
+     Então aqui não basta trocar a área — o alinhamento, o recuo e o filete
+     também são do LUGAR e trocaram junto, senão o bloco que subiu ficaria
+     centralizado dentro de uma coluna estreita. */
+  .psf-active{
     grid-area: rated;
     align-items: flex-end;
     padding: 0 10px 0 0;
     border-right: 1px solid rgba(57,229,140,0.14);
+    border-left: none;
+    justify-self: auto;
   }
 
   .psf-rated--ac{
@@ -1578,16 +1595,16 @@ tbody tr:hover td {
     border-left: 1px solid rgba(57,229,140,0.14);
   }
 
-  .psf-active{
+  .psf-rated--dc{
     grid-area: active;
     align-items: center;
     padding: 0;
-    border-left: none;
+    border-right: none;
     justify-self: center;
   }
 
-  .psf-rated--dc .psf-rated-label,
-  .psf-rated--dc .psf-rated-value{
+  .psf-active-label,
+  .psf-active-value{
     text-align: right;
   }
 
@@ -1596,8 +1613,8 @@ tbody tr:hover td {
     text-align: left;
   }
 
-  .psf-active-label,
-  .psf-active-value{
+  .psf-rated--dc .psf-rated-label,
+  .psf-rated--dc .psf-rated-value{
     text-align: center;
   }
 
@@ -2698,8 +2715,13 @@ tbody tr:hover td {
 
 .plant-card:hover::before { opacity: 1; }
 
+/* As 4 severidades do catálogo. critical e low entraram em 05/08 junto com a
+   tela de edição do catálogo: sem regra própria a classe alarm-critical não
+   pintava nada e o cartão mais grave ficava com a borda neutra. */
+.plant-card.alarm-critical { border-color: rgba(213,0,0,0.55) !important; border-top-color: rgba(213,0,0,0.85) !important; }
 .plant-card.alarm-high   { border-color: rgba(255,79,79,0.38) !important; border-top-color: rgba(255,79,79,0.55) !important; }
 .plant-card.alarm-medium { border-color: rgba(255,170,0,0.38) !important; border-top-color: rgba(255,170,0,0.55) !important; }
+.plant-card.alarm-low    { border-color: rgba(76,175,80,0.32) !important; border-top-color: rgba(76,175,80,0.48) !important; }
 
 /* ── Offline / sem dados ── */
 .plant-card--offline {
@@ -2762,8 +2784,10 @@ tbody tr:hover td {
   box-shadow: 0 0 14px rgba(57,229,140,0.22), 0 0 4px rgba(57,229,140,0.10) inset;
 }
 
+.plant-card__icon.alarm-critical { border-color: rgba(213,0,0,0.7); color: #d50000; }
 .plant-card__icon.alarm-high { border-color: rgba(255,79,79,0.5); color: #ff4f4f; }
 .plant-card__icon.alarm-medium { border-color: rgba(255,170,0,0.5); color: #ffaa00; }
+.plant-card__icon.alarm-low { border-color: rgba(76,175,80,0.45); color: #4caf50; }
 
 .plant-card__name {
   font-family: 'Exo 2', sans-serif;
@@ -6064,6 +6088,109 @@ select.pem-ctrl option {
 .portfolio-row--maintenance td                { color: rgba(160,175,200,0.55) !important; text-shadow: none !important; }
 .portfolio-row--maintenance .plant-name-text  { color: rgba(180,195,220,0.75) !important; }
 .portfolio-row--maintenance .plant-icon--ok   { background: rgba(96,165,250,0.08) !important; border-color: rgba(96,165,250,0.22) !important; color: rgba(147,197,253,0.6) !important; box-shadow: none !important; }
+
+/* ── Manutenção em campo (equipe DO CLIENTE na usina) ──────────────────
+   Âmbar + capacete, contra o azul + chave inglesa do coletor. A cor não é
+   enfeite: é o que responde "quem está lá, nós ou eles?" de longe.
+   ---------------------------------------------------------------------- */
+.badge--field-maint {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 999px;
+  white-space: nowrap;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  background: rgba(69,39,4,0.55);
+  color: #fcd34d;
+  border: 1px solid rgba(217,119,6,0.55);
+  animation: field-maint-glow 2.4s ease-in-out infinite;
+}
+.badge--field-maint::before,
+.plant-card__status-text.is-field-maint::before {
+  content: '';
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  margin-right: 5px;
+  flex: 0 0 auto;
+  vertical-align: -1px;
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fcd34d' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M2 17h20'/%3E%3Cpath d='M4 17a8 8 0 0 1 16 0'/%3E%3Cpath d='M9 9.5V5.2A1.2 1.2 0 0 1 10.2 4h3.6A1.2 1.2 0 0 1 15 5.2v4.3'/%3E%3Cpath d='M2 17v1.5A1.5 1.5 0 0 0 3.5 20h17a1.5 1.5 0 0 0 1.5-1.5V17'/%3E%3C/svg%3E") center / contain no-repeat;
+}
+@keyframes field-maint-glow {
+  0%, 100% { border-color: rgba(217,119,6,0.40); box-shadow: 0 0 6px rgba(217,119,6,0.14), 0 0 16px rgba(180,83,9,0.08); }
+  50%      { border-color: rgba(251,191,36,0.85); box-shadow: 0 0 12px rgba(217,119,6,0.42), 0 0 26px rgba(180,83,9,0.25); }
+}
+
+.plant-card--field-maint {
+  background: linear-gradient(145deg, rgba(20,16,10,0.99) 0%, rgba(13,10,7,0.99) 100%) !important;
+  border: 1px solid rgba(217,119,6,0.50) !important;
+  animation: field-maint-glow 2.4s ease-in-out infinite;
+}
+.plant-card--field-maint::before {
+  background: linear-gradient(90deg, transparent, rgba(251,191,36,0.35), transparent);
+  opacity: 0.5;
+}
+.plant-card--field-maint .plant-card__name       { color: rgba(224,205,170,0.85); }
+.plant-card--field-maint .plant-card__icon       { background: rgba(251,191,36,0.10); border-color: rgba(251,191,36,0.25); color: rgba(252,211,77,0.8); box-shadow: none; }
+.plant-card--field-maint .plant-card__stat       { background: rgba(251,191,36,0.03); border-color: rgba(251,191,36,0.08); }
+.plant-card--field-maint .plant-card__stat-label { opacity: 0.5; }
+.plant-card--field-maint .plant-card__chart-area { opacity: 0.45; }
+
+/* o capacete ao lado do texto de status, no rodapé do card */
+.plant-card__status-text.is-field-maint {
+  display: inline-flex;
+  align-items: center;
+  color: #fcd34d;
+}
+.plant-card__status-dot.field-maint {
+  background: #d97706;
+  box-shadow: 0 0 7px rgba(217,119,6,0.9), 0 0 14px rgba(217,119,6,0.4);
+  animation: maintenance-blink 2.4s ease-in-out infinite;
+}
+
+/* Botão de marcar manutenção em campo — INLINE ao lado do nome da usina,
+   no mesmo lugar do .plant-card__issue-badge. Não foi para a fila do canto
+   (lápis 10 · ferramenta 42 · CLP 74) porque um quarto ícone em 106px comeria
+   o padding-right do .plant-card__top e apertaria o nome, que é o bug antigo
+   da PedraBranca. Aqui ele encolhe o nome só quando existe. */
+.plant-card__field-btn {
+  position: static;
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border-radius: 999px;
+  cursor: pointer;
+  border: 1px solid rgba(251,191,36,0.28);
+  background: rgba(251,191,36,0.07);
+  color: rgba(252,211,77,0.65);
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease, transform 0.15s ease;
+}
+.plant-card__field-btn svg { width: 13px; height: 13px; pointer-events: none; }
+.plant-card__field-btn:hover {
+  background: rgba(251,191,36,0.2);
+  border-color: rgba(251,191,36,0.7);
+  color: #fcd34d;
+  transform: scale(1.08);
+}
+/* ligado: deixa de ser discreto, porque aí ele é o estado da usina */
+.plant-card__field-btn.is-on {
+  background: rgba(217,119,6,0.28);
+  border-color: rgba(251,191,36,0.85);
+  color: #fde68a;
+  animation: field-maint-glow 2.4s ease-in-out infinite;
+}
+
+.portfolio-row--field-maint td               { color: rgba(200,180,140,0.62) !important; text-shadow: none !important; }
+.portfolio-row--field-maint .plant-name-text { color: rgba(224,205,170,0.82) !important; }
+.portfolio-row--field-maint .plant-icon--ok  { background: rgba(251,191,36,0.08) !important; border-color: rgba(251,191,36,0.22) !important; color: rgba(252,211,77,0.65) !important; box-shadow: none !important; }
 
 /* Toggle de manutenção no card (só admin vê; espelha o .plant-card__edit-btn) */
 .plant-card__maint-btn {

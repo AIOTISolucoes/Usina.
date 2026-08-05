@@ -180,16 +180,24 @@ function valueOrDash(v) {
 
 function severityColor(sev) {
   const s = String(sev || "").toLowerCase();
+  if (s === "critical") return "#d50000";
   if (s === "high") return "#f44336";
   if (s === "medium") return "#ff9800";
   if (s === "low") return "#4caf50";
   return "#ccc";
 }
 
+// As 4 severidades do catálogo (tb_event_alarm_catalog.severity) precisam
+// existir aqui. Até 05/08 esta função só conhecia high e medium: qualquer
+// código marcado como "critical" virava null e o alarme era pintado de
+// cinza e jogado para o FIM da ordenação, ou seja, o mais grave aparecia
+// como o menos grave. Passou a importar quando a tela de catálogo deixou o
+// operador escolher a severidade.
 function normalizeAlarmSeverity(sev) {
   if (!sev) return null;
   const normalized = String(sev).toLowerCase();
-  if (normalized === "high" || normalized === "medium") return normalized;
+  if (normalized === "critical" || normalized === "high" ||
+      normalized === "medium" || normalized === "low") return normalized;
   return null;
 }
 
@@ -221,7 +229,7 @@ function buildEventsRenderKey(list, page, filters) {
 }
 
 function getHigherSeverity(a, b) {
-  const rank = { high: 2, medium: 1 };
+  const rank = { critical: 4, high: 3, medium: 2, low: 1 };
   if (!a) return b;
   if (!b) return a;
   return (rank[b] || 0) > (rank[a] || 0) ? b : a;
@@ -1887,9 +1895,11 @@ function sortPortfolioPlants(plants) {
       || normalizeAlarmSeverity(lastAlarmSeverityByPlant.get(pname))
       || normalizeAlarmSeverity(lastAlarmSeverityByPlant.get(Number(pid)))
       || null;
-    if (sev === "high") return 0;
-    if (sev === "medium") return 1;
-    return 2;
+    if (sev === "critical") return 0;
+    if (sev === "high") return 1;
+    if (sev === "medium") return 2;
+    if (sev === "low") return 3;
+    return 4;
   };
 
   validPlants.sort((a, b) => {
@@ -1952,11 +1962,70 @@ async function togglePlantCollectorMaintenance(plantId, plantName, isOn) {
   }
 }
 
+// --- Manutenção em campo (equipe DO CLIENTE) no card do portfólio ---------
+// Espelha o can_flag_field_maintenance do api2.py. Se divergir, o botão
+// aparece e a rota responde 403: confuso, mas não perigoso.
+function canFlagFieldMaintenance() {
+  let u = {};
+  try { u = JSON.parse(localStorage.getItem("user") || "{}"); } catch { u = {}; }
+  const p = u.permissions || {};
+  return u.is_superuser === true || u.role_key === "admin_customer" ||
+    u.role_key === "operator" || p.admin_customer === true ||
+    p.plant_edit === true || p.remote_command === true;
+}
+
+function _syncCardFieldBtn(btn, isOn) {
+  btn.dataset.fieldOn = isOn ? "1" : "0";
+  btn.classList.toggle("is-on", isOn);
+  btn.title = isOn
+    ? "Encerrar manutenção em campo"
+    : "Marcar manutenção em campo (sua equipe na usina)";
+  btn.setAttribute("aria-label", btn.title);
+}
+
+async function togglePlantFieldMaintenance(plantId, plantName, isOn) {
+  const turnOn = !isOn;
+  let nota = null;
+  if (turnOn) {
+    const resp = window.prompt(
+      `Marcar a usina "${plantName}" como EM MANUTENÇÃO EM CAMPO?\n\n` +
+      "O aviso fica visível para todos até você encerrar, e a queda de geração\n" +
+      "no período deixa de ser tratada como falha pelo diagnóstico.\n\n" +
+      "Descreva o serviço (opcional):", "");
+    if (resp === null) return;
+    nota = resp.trim() || null;
+  } else if (!window.confirm(`Encerrar a manutenção em campo da usina "${plantName}"?`)) {
+    return;
+  }
+  try {
+    const res = await apiFetch(`/plants/${plantId}/maintenance`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ maintenance: turnOn, scope: "field", note: nota })
+    });
+    const data = await res.json().catch(() => null);
+    if (!res.ok) throw new Error(data?.hint || data?.error || `HTTP ${res.status}`);
+    const btn = document.querySelector(`.plant-card__field-btn[data-field-plant-id="${plantId}"]`);
+    if (btn) _syncCardFieldBtn(btn, data?.field_maintenance === true);
+    if (typeof refreshDashboard === "function") refreshDashboard();
+  } catch (e) {
+    console.error("[field-maintenance] erro", e);
+    alert("Falha ao alterar a manutenção em campo: " + (e?.message || e));
+  }
+}
+
 function getPlantCardStatus(plant) {
   // Modo manutenção do coletor local tem prioridade sobre qualquer status:
   // a equipe está mexendo no CLP, então "offline" aqui NÃO é falha.
   if (plant.collector_maintenance === true) {
     return { colorClass: 'plant-card--maintenance', badge: 'Atualizando coletor local', badgeClass: 'badge--maintenance' };
+  }
+  // Manutenção da equipe DO CLIENTE. Vem depois do coletor de propósito: se as
+  // duas estiverem ligadas, quem manda no que a tela diz é a nossa intervenção,
+  // porque durante ela o dado em si pode estar inconsistente — na do cliente o
+  // dado está certo, a usina é que está parada por escolha.
+  if (plant.field_maintenance === true) {
+    return { colorClass: 'plant-card--field-maint', badge: 'Manutenção em campo', badgeClass: 'badge--field-maint' };
   }
   // "Sem comunicação" = somente quando NÃO recebemos dados recentes (comunicação real perdida)
   if (plant.comm_status === 'offline') {
@@ -2007,7 +2076,9 @@ function renderPortfolioTable(plants) {
     const commStatus = getPlantCardStatus(plant);
     const isCommOffline = commStatus.colorClass === 'plant-card--offline';
     const isMaintenance = commStatus.badgeClass === 'badge--maintenance';
+    const isFieldMaint = commStatus.badgeClass === 'badge--field-maint';
     if (isMaintenance) tr.classList.add("portfolio-row--maintenance");
+    else if (isFieldMaint) tr.classList.add("portfolio-row--field-maint");
     else if (plantState.isOffline || isCommOffline) tr.classList.add("portfolio-row--offline");
 
     const alarmSeverity =
@@ -5043,10 +5114,12 @@ function updatePortfolioCardData(plants) {
 
     // Update status dot + text
     const isMaintenance = commStatus.badgeClass === 'badge--maintenance';
+    const isFieldMaint = commStatus.badgeClass === 'badge--field-maint';
     const isOffline = plantState.isOffline || isCommOffline;
     let statusDotClass = "plant-card__status-dot";
     let statusText;
     if (isMaintenance) { statusDotClass += " maintenance"; statusText = "Atualizando coletor local"; }
+    else if (isFieldMaint) { statusDotClass += " field-maint"; statusText = "Manuten\u00E7\u00E3o em campo"; }
     else if (isCommOffline) { statusDotClass += " offline"; statusText = "Sem comunica\u00E7\u00E3o"; }
     else if (plantState.kind === "offline") { statusDotClass += " offline"; statusText = "Desligada"; }
     else if (plantState.kind === "generating") { statusDotClass += " generating"; statusText = "Em gera\u00E7\u00E3o"; }
@@ -5055,7 +5128,11 @@ function updatePortfolioCardData(plants) {
     const dot = card.querySelector(".plant-card__status-dot");
     const txt = card.querySelector(".plant-card__status-text");
     if (dot) dot.className = statusDotClass;
-    if (txt) txt.textContent = statusText;
+    if (txt) {
+      // o capacete entra como ::before desta classe (ver layout.css)
+      txt.className = "plant-card__status-text" + (isFieldMaint ? " is-field-maint" : "");
+      txt.textContent = statusText;
+    }
 
     // Update card class (comm > alarm > offline)
     const pname = card.dataset.plantName || "";
@@ -5088,8 +5165,8 @@ function updatePortfolioCardData(plants) {
 
     // Update comm badge — manutenção e "Sem comunicação" não usam badge no topo (o status
     // embaixo já avisa e o badge sumia com o nome da usina). Só a comunicação parcial fica.
-    const existingBadge = card.querySelector(".badge--offline, .badge--partial, .badge--maintenance");
-    if (commStatus.badge && !isMaintenance && !isCommOffline) {
+    const existingBadge = card.querySelector(".badge--offline, .badge--partial, .badge--maintenance, .badge--field-maint");
+    if (commStatus.badge && !isMaintenance && !isFieldMaint && !isCommOffline) {
       if (existingBadge) {
         existingBadge.className = commStatus.badgeClass;
         existingBadge.textContent = commStatus.badge;
@@ -5109,6 +5186,11 @@ function updatePortfolioCardData(plants) {
     // Sincroniza o toggle de manutenção do coletor (estado pode mudar por outro admin)
     const maintBtn = card.querySelector(".plant-card__maint-btn");
     if (maintBtn) _syncCardMaintBtn(maintBtn, plant.collector_maintenance === true);
+
+    // Idem para o de campo: duas pessoas da mesma equipe podem estar na usina,
+    // e quem não clicou precisa ver o estado mudar sozinho
+    const fieldBtn = card.querySelector(".plant-card__field-btn");
+    if (fieldBtn) _syncCardFieldBtn(fieldBtn, plant.field_maintenance === true);
   });
 }
 
@@ -6052,6 +6134,7 @@ function renderPortfolioCards(plants) {
     const prAcc = plant.pr_accumulated_pct != null ? Number(plant.pr_accumulated_pct).toFixed(1) + "%" : "\u2014";
 
     const isMaintenance = commStatus.badgeClass === 'badge--maintenance';
+    const isFieldMaint = commStatus.badgeClass === 'badge--field-maint';
     const isOffline = plantState.isOffline || isCommOffline;
     const isGenerating = plantState.kind === "generating";
     let statusDotClass = "plant-card__status-dot";
@@ -6059,6 +6142,10 @@ function renderPortfolioCards(plants) {
     if (isMaintenance) {
       statusDotClass += " maintenance";
       statusText = "Atualizando coletor local";
+    }
+    else if (isFieldMaint) {
+      statusDotClass += " field-maint";
+      statusText = "Manutenção em campo";
     }
     else if (isCommOffline) {
       statusDotClass += " offline";
@@ -6090,7 +6177,7 @@ function renderPortfolioCards(plants) {
     // Manutenção e "Sem comunicação" NÃO ganham badge no topo: o status embaixo já avisa
     // e o badge inline engolia o espaço da linha, sumindo com o nome da usina (ex.: PedraBranca).
     // Só a comunicação parcial (que não aparece no status de baixo) mantém o badge no topo.
-    const commBadgeHtml = commStatus.badge && !isMaintenance && !isCommOffline
+    const commBadgeHtml = commStatus.badge && !isMaintenance && !isFieldMaint && !isCommOffline
       ? `<span class="${commStatus.badgeClass}">${commStatus.badge}</span>`
       : '';
     const activePowerDisplay = isCommOffline ? '—' : activePower.toFixed(1) + ' kW';
@@ -6107,6 +6194,14 @@ function renderPortfolioCards(plants) {
       <div class="plant-card__top">
         <div class="${iconClass}"><i class="fa-solid fa-seedling"></i></div>
         <div class="plant-card__name">${plantName}</div>
+        <button
+          class="plant-card__field-btn"
+          data-field-plant-id="${plantId}"
+          type="button"
+          style="display:none;"
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 17h20"/><path d="M4 17a8 8 0 0 1 16 0"/><path d="M9 9.5V5.2A1.2 1.2 0 0 1 10.2 4h3.6A1.2 1.2 0 0 1 15 5.2v4.3"/><path d="M2 17v1.5A1.5 1.5 0 0 0 3.5 20h17a1.5 1.5 0 0 0 1.5-1.5V17"/></svg>
+        </button>
         ${commBadgeHtml}
       </div>
       <div class="plant-card__stats">
@@ -6155,7 +6250,7 @@ function renderPortfolioCards(plants) {
       </div>
       <div class="plant-card__status">
         <div class="${statusDotClass}"></div>
-        <span class="plant-card__status-text">${statusText}</span>
+        <span class="plant-card__status-text${isFieldMaint ? ' is-field-maint' : ''}">${statusText}</span>
       </div>
       <button
         class="plant-card__edit-btn"
@@ -6205,6 +6300,19 @@ function renderPortfolioCards(plants) {
       _maintBtn.addEventListener("click", (e) => {
         e.stopPropagation();
         togglePlantCollectorMaintenance(plantId, plantName, _maintBtn.dataset.maintOn === "1");
+      });
+    }
+
+    // Manutenção em campo (equipe DO CLIENTE) — ao lado do nome, não na fila de
+    // ícones do canto. Lá já moram lápis, chave inglesa e CLP; um quarto em
+    // right:106px apertaria o nome da usina, que é o bug da PedraBranca.
+    const _fieldBtn = card.querySelector(".plant-card__field-btn");
+    if (_fieldBtn && canFlagFieldMaintenance()) {
+      _fieldBtn.style.display = "";
+      _syncCardFieldBtn(_fieldBtn, plant.field_maintenance === true);
+      _fieldBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        togglePlantFieldMaintenance(plantId, plantName, _fieldBtn.dataset.fieldOn === "1");
       });
     }
 
