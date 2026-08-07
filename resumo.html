@@ -1085,14 +1085,22 @@
     const _btnOS = document.getElementById("btnOS")
     if (_btnOS) _btnOS.style.display = _canSeeOS ? "" : "none"
 
-    // API Explorer: era só superusuário. Desde 07/08 o cliente também entra,
-    // pela permissão api_access (ligada por usuário na tela de gestão). Ele vê
-    // a MESMA API que a tela consome — e o backend filtra por customer_id
-    // vindo do token, então um cliente não alcança dado de outro.
-    const _canSeeSwagger = _u.is_superuser === true || _u.username === "admin"
-      || _perms.api_access === true
+    // API Explorer: aberto a QUALQUER usuário autenticado.
+    //
+    // Era só superusuário; em 07/08 passou por uma permissão api_access e no
+    // mesmo dia virou aberto. O motivo de largar a permissão: ela precisava ser
+    // concedida uma a uma, então todo usuário novo nasceria sem a aba e alguém
+    // teria que lembrar do checkbox — o tipo de controle que apodrece calado.
+    //
+    // Abrir é seguro porque a spec é DOCUMENTAÇÃO, não dado: a proteção real
+    // está no servidor, que resolve customer_id pelo token contra o banco e
+    // filtra toda consulta por ele. Cada cliente só alcança as próprias usinas,
+    // e o recorte de rotas continua por público (_CLIENT_API_PATHS no api2.py:
+    // equipe vê 17 rotas, cliente vê 11, todas de leitura).
+    //
+    // Para voltar a restringir, é esta linha: && _perms.api_access === true
     const _btnSwagger = document.getElementById("btnSwagger")
-    if (_btnSwagger) _btnSwagger.style.display = _canSeeSwagger ? "" : "none"
+    if (_btnSwagger) _btnSwagger.style.display = ""
 
     document.getElementById("btnOS")?.addEventListener("click", () => {
       window.location.href = "os.html"

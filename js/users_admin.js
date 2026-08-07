@@ -20,10 +20,10 @@
     ["plant_edit", "Editar usinas (cadastro, capacidade, manutenção)"],
     ["device_edit", "Editar dispositivos/equipamentos"],
     ["remote_command", "Enviar comandos remotos"],
-    ["string_config_edit", "Configurar strings"],
-    // API Explorer (Swagger). Só leitura — a aba lista os endpoints de
-    // consulta, e cada cliente enxerga apenas as usinas dele.
-    ["api_access", "Acessar a API (aba API Explorer)"]
+    ["string_config_edit", "Configurar strings"]
+    // Não existe checkbox de API aqui: a aba API Explorer é aberta a qualquer
+    // usuário autenticado (ver resumo.html). Um checkbox que não controla nada
+    // é pior do que controle nenhum — o admin marcaria achando que restringe.
   ];
 
   function getUser() {
