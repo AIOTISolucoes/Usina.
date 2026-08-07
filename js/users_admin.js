@@ -20,7 +20,10 @@
     ["plant_edit", "Editar usinas (cadastro, capacidade, manutenção)"],
     ["device_edit", "Editar dispositivos/equipamentos"],
     ["remote_command", "Enviar comandos remotos"],
-    ["string_config_edit", "Configurar strings"]
+    ["string_config_edit", "Configurar strings"],
+    // API Explorer (Swagger). Só leitura — a aba lista os endpoints de
+    // consulta, e cada cliente enxerga apenas as usinas dele.
+    ["api_access", "Acessar a API (aba API Explorer)"]
   ];
 
   function getUser() {

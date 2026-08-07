@@ -47,6 +47,15 @@ window.__refreshDsPalette = () => {
 window.__refreshDsPalette();
 const EVENTS_REFRESH_INTERVAL_MS = 10000;
 
+// Sessão inválida: manda para o login UMA vez. Sem a trava, cada chamada da
+// tela (são várias em paralelo) dispararia o próprio redirect.
+function forceReloginOnce() {
+  if (window.__aiotiRelogin) return;
+  window.__aiotiRelogin = true;
+  try { localStorage.removeItem("user"); } catch (e) {}
+  window.location.replace("index.html?expirou=1");
+}
+
 function apiFetch(path, options = {}) {
   const user = JSON.parse(localStorage.getItem("user") || "{}");
 
@@ -54,6 +63,11 @@ function apiFetch(path, options = {}) {
     ...(options.headers || {})
   };
 
+  // X-Is-Superuser continua sendo enviado DE PROPÓSITO, mesmo tendo virado
+  // inócuo: a API de 07/08 ignora esse header (era falsificável) e lê
+  // is_superuser do banco, pelo token. Mantê-lo deixa este arquivo compatível
+  // com a Lambda antiga também — assim o push do site e o deploy da Lambda
+  // não precisam ser simultâneos, em qualquer ordem nada quebra.
   if (user.customer_id) headers["X-Customer-Id"] = user.customer_id;
   if (user.is_superuser === true) headers["X-Is-Superuser"] = "true";
   if (user.username) headers["X-Username"] = user.username;
@@ -63,6 +77,19 @@ function apiFetch(path, options = {}) {
     ...options,
     headers,
     cache: "no-store"
+  }).then(r => {
+    // Desde 07/08 toda rota de dado exige o token assinado. Quem estava com
+    // sessão antiga no localStorage (salva antes de o token existir) passa a
+    // receber 401 aqui. Sem este tratamento a tela ficava vazia e sem dizer
+    // por quê — o usuário via "erro" onde a ação certa é relogar.
+    if (r.status === 401) {
+      r.clone().json().then(d => {
+        if (d && (d.code === "token_required" || d.code === "token_invalid")) {
+          forceReloginOnce();
+        }
+      }).catch(() => {});
+    }
+    return r;
   });
 }
 

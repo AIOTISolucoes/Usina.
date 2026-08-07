@@ -1083,7 +1083,12 @@
     const _btnOS = document.getElementById("btnOS")
     if (_btnOS) _btnOS.style.display = _canSeeOS ? "" : "none"
 
+    // API Explorer: era só superusuário. Desde 07/08 o cliente também entra,
+    // pela permissão api_access (ligada por usuário na tela de gestão). Ele vê
+    // a MESMA API que a tela consome — e o backend filtra por customer_id
+    // vindo do token, então um cliente não alcança dado de outro.
     const _canSeeSwagger = _u.is_superuser === true || _u.username === "admin"
+      || _perms.api_access === true
     const _btnSwagger = document.getElementById("btnSwagger")
     if (_btnSwagger) _btnSwagger.style.display = _canSeeSwagger ? "" : "none"
 
@@ -1195,6 +1200,22 @@
               layout: "BaseLayout",
               deepLinking: true,
               defaultModelsExpandDepth: -1,
+              docExpansion: "list",       // grupos abertos, endpoints fechados
+              filter: true,               // caixa de busca por endpoint
+              tryItOutEnabled: true,      // já entra pronto para testar
+              // Autentica o "Try it out" com a sessão de quem está na tela.
+              // Sem isto o usuário teria que descobrir e colar o próprio token
+              // no botão Authorize — barreira absurda para quem não é dev, e
+              // o pedido aqui é justamente ser usável por leigo.
+              requestInterceptor: function(req) {
+                try {
+                  var u = JSON.parse(localStorage.getItem("user") || "{}");
+                  if (u.token) req.headers["Authorization"] = "Bearer " + u.token;
+                  if (u.customer_id) req.headers["X-Customer-Id"] = u.customer_id;
+                  if (u.username) req.headers["X-Username"] = u.username;
+                } catch (e) {}
+                return req;
+              },
             });
           })
           .catch(function(err) {
