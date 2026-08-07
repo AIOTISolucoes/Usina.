@@ -34,6 +34,10 @@
     if (u.is_superuser === true) h["X-Is-Superuser"] = "true";
     if (u.username) h["X-Username"] = u.username;
     if (u.id) h["X-User-Id"] = u.id;
+    // Obrigatório desde 07/08: a API resolve a identidade pelo Bearer, contra
+    // o banco. Sem isto o /branding voltava 401 e a plataforma caía no tema
+    // AIOTI padrão — o cliente perdia logo e cores, sem nenhum aviso.
+    if (u.token) h["Authorization"] = "Bearer " + u.token;
     return h;
   }
   const keyCompany = () => CACHE_COMPANY + ":" + (getUser().customer_id || "anon");

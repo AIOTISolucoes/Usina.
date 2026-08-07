@@ -1338,17 +1338,24 @@ function getUserContext() {
       is_superuser: user?.is_superuser ?? false,
       username: user?.username ?? null,
       user_id: user?.id ?? user?.user_id ?? null,
+      token: user?.token ?? null,
     };
   } catch {
-    return { customer_id: null, is_superuser: false, username: null, user_id: null };
+    return { customer_id: null, is_superuser: false, username: null, user_id: null, token: null };
   }
 }
 
+// O token virou OBRIGATÓRIO em 07/08: a API passou a resolver a identidade
+// pelo Bearer, contra o banco, em vez de acreditar nos headers X-*. Esta
+// página tinha os headers mas não o token — todas as 25 chamadas dela caíam
+// em 401. Os X-* continuam sendo enviados só para compatibilidade.
 function buildAuthHeaders() {
   const ctx = getUserContext();
   const headers = { "Content-Type": "application/json" };
   if (ctx.customer_id) headers["X-Customer-Id"] = ctx.customer_id;
   if (ctx.is_superuser) headers["X-Is-Superuser"] = "true";
+  if (ctx.username) headers["X-Username"] = ctx.username;
+  if (ctx.token) headers["Authorization"] = `Bearer ${ctx.token}`;
   return headers;
 }
 
@@ -1359,6 +1366,7 @@ function buildWriteAuthHeaders() {
   if (ctx.is_superuser) headers["X-Is-Superuser"] = "true";
   if (ctx.username) headers["X-Username"] = ctx.username;
   if (ctx.user_id) headers["X-User-Id"] = String(ctx.user_id);
+  if (ctx.token) headers["Authorization"] = `Bearer ${ctx.token}`;
   return headers;
 }
 
@@ -7955,6 +7963,7 @@ function _pRobotSaveNotifPrefs(prefs) {
     if (user.customer_id) hdrs["X-Customer-Id"] = user.customer_id;
     if (user.is_superuser === true) hdrs["X-Is-Superuser"] = "true";
     if (user.username) hdrs["X-Username"] = user.username;
+    if (user.token) hdrs["Authorization"] = `Bearer ${user.token}`;
     fetch(`${API_BASE}/users/notif-prefs`, {
       method: "POST", headers: hdrs,
       body: JSON.stringify({ prefs })
@@ -7979,6 +7988,8 @@ function _robotApiFetch(path) {
   const headers = {};
   if (user.customer_id) headers["X-Customer-Id"] = user.customer_id;
   if (user.is_superuser === true) headers["X-Is-Superuser"] = "true";
+  if (user.username) headers["X-Username"] = user.username;
+  if (user.token) headers["Authorization"] = `Bearer ${user.token}`;
   return fetch(`${API_BASE}${path}`, { headers, cache: "no-store" });
 }
 
@@ -8427,6 +8438,8 @@ async function _rondaFetchData(dateStr) {
   const headers = {};
   if (user.customer_id) headers["X-Customer-Id"] = user.customer_id;
   if (user.is_superuser === true) headers["X-Is-Superuser"] = "true";
+  if (user.username) headers["X-Username"] = user.username;
+  if (user.token) headers["Authorization"] = `Bearer ${user.token}`;
   let data = null;
   for (let tentativa = 0; tentativa < 2; tentativa++) {
     const res = await fetch(url, { headers, cache: "no-store" });
@@ -8834,6 +8847,7 @@ async function _plantReportFetch() {
     if (user.customer_id) headers["X-Customer-Id"] = user.customer_id;
     if (user.is_superuser === true) headers["X-Is-Superuser"] = "true";
     if (user.username) headers["X-Username"] = user.username;
+    if (user.token) headers["Authorization"] = `Bearer ${user.token}`;
     const res = await fetch(url, { headers, cache: "no-store" });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     let data = await res.json();
