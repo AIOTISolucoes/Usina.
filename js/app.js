@@ -8824,6 +8824,7 @@ function _appReportOpenFullPanel(data) {
         <div class="ronda-full-kpi"><div class="ronda-full-kpi-label">FC Médio ${infoFC}</div><div class="ronda-full-kpi-value">${_rpFmt(s.avg_capacity_factor_pct,1)}<span class="ronda-full-kpi-unit">%</span></div></div>
       </div>
       <div class="ronda-full-kpi-row" style="margin-top:8px;">
+        <div class="ronda-full-kpi"><div class="ronda-full-kpi-label">Irrad. Total</div><div class="ronda-full-kpi-value">${_rpFmt(s.total_irradiation_kwh_m2,2)}<span class="ronda-full-kpi-unit">kWh/m²</span></div></div>
         <div class="ronda-full-kpi"><div class="ronda-full-kpi-label">Irrad. Média</div><div class="ronda-full-kpi-value">${_rpFmt(s.avg_irradiance_wm2,0)}<span class="ronda-full-kpi-unit">W/m²</span></div></div>
         <div class="ronda-full-kpi"><div class="ronda-full-kpi-label">Dias Oper.</div><div class="ronda-full-kpi-value">${s.operating_days || 0}<span class="ronda-full-kpi-unit">/ ${p.days||0}</span></div></div>
       </div>
