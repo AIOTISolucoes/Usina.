@@ -1122,6 +1122,8 @@ body {
 .infra-hero span { font-size: 12px; color: rgba(233,255,243,0.6); }
 .infra-hero.ok   { background: rgba(57,229,140,0.10); color: #7FD055; }
 .infra-hero.down { background: rgba(239,68,68,0.12);  color: #ff6b6b; }
+/* Equipamento isolado fora do ar com a usina gerando: âmbar, não vermelho. */
+.infra-hero.warn { background: rgba(255,214,102,0.10); color: #ffd666; }
 
 .infra-warn {
   display: flex;
@@ -1162,6 +1164,19 @@ body {
 .infra-plant { font-size: 13px; font-weight: 700; color: #e9fff3; }
 .infra-when  { font-size: 11px; color: rgba(233,255,243,0.55); }
 .infra-src   { font-size: 11px; color: rgba(233,255,243,0.45); margin-top: 5px; }
+/* Diz, no próprio cartão, se a usina inteira calou ou só um pedaço dela. */
+.infra-scope {
+  display: inline-block;
+  margin-top: 6px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.infra-scope.crit { background: rgba(239,68,68,0.16);  color: #ff6b6b; }
+.infra-scope.warn { background: rgba(255,214,102,0.14); color: #ffd666; }
 .infra-link {
   display: inline-block;
   margin-top: 7px;

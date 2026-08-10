@@ -10352,6 +10352,14 @@ function _infraDur(s) {
   return `${(h / 24).toFixed(1).replace(".", ",")} dias`;
 }
 
+// Nome da usina quando existe UMA só naquele estado. Antes a faixa pegava
+// sempre `incidents[0]`, que é o cartão de maior duração e pode ser de outro
+// estado que não o anunciado.
+function _infraNomeAberto(st, escopo) {
+  const g = (st?.incidents || []).filter(x => (x.scope || "silent") === escopo);
+  return g.length === 1 ? g[0].plant_name : "";
+}
+
 function _infraWhen(iso) {
   if (!iso) return "";
   const d = _tkDate(iso);
@@ -10374,17 +10382,33 @@ function _infraRenderStrip() {
   }
 
   const down = st.summary?.plants_down || 0;
+  const parcial = st.summary?.plants_partial || 0;
+  const atraso = st.summary?.plants_lagging || 0;
   const stale = st.watch?.stale === true;
   strip.style.display = "";
-  strip.className = "notif-infra-strip " + (down ? "down" : (stale ? "unknown" : "ok"));
+  strip.className = "notif-infra-strip " +
+    (down ? "down" : ((parcial || atraso) ? "unknown" : (stale ? "unknown" : "ok")));
+  // Sino vermelho só quando a usina inteira calou. Equipamento isolado fora do
+  // ar é aviso, não emergência — pintar tudo de vermelho foi o que fez o
+  // cliente achar que a Acopiara tinha parado enquanto ela gerava normal.
   bell?.classList.toggle("infra-alert", down > 0);
 
   let icone, texto;
   if (down) {
     icone = "fa-plug-circle-xmark";
     texto = down === 1
-      ? `${_notifEsc(st.incidents[0]?.plant_name || "1 usina")} sem comunicação`
+      ? `${_notifEsc(_infraNomeAberto(st, "silent") || "1 usina")} sem comunicação`
       : `${down} usinas sem comunicação`;
+  } else if (parcial) {
+    icone = "fa-triangle-exclamation";
+    texto = parcial === 1
+      ? `${_notifEsc(_infraNomeAberto(st, "partial") || "1 usina")} com equipamentos sem comunicação`
+      : `${parcial} usinas com equipamentos sem comunicação`;
+  } else if (atraso) {
+    icone = "fa-clock";
+    texto = atraso === 1
+      ? `${_notifEsc(_infraNomeAberto(st, "lag") || "1 usina")} publicando com atraso`
+      : `${atraso} usinas publicando com atraso`;
   } else if (stale) {
     // Vigia calado não é "tudo bem": é "não sei". A diferença entre as duas
     // coisas é justamente o que faz um painel de monitoramento valer algo.
@@ -10441,15 +10465,37 @@ function _infraRenderModal() {
   }
 
   const down = st.summary?.plants_down || 0;
+  const parcial = st.summary?.plants_partial || 0;
+  const atraso = st.summary?.plants_lagging || 0;
   const partes = [];
 
-  partes.push(`<div class="infra-hero ${down ? "down" : "ok"}">
-      <i class="fa-solid ${down ? "fa-plug-circle-xmark" : "fa-plug-circle-check"}"></i>
+  // O título tem que dizer o que de fato está acontecendo. "Usina sem
+  // comunicação" com a usina gerando gera chamado e desconfiança na tela.
+  let heroCls = "ok", heroIco = "fa-plug-circle-check";
+  let heroTit = "Todas as usinas comunicando";
+  let heroSub = "Nenhum problema aberto no caminho do dado.";
+  if (down) {
+    heroCls = "down"; heroIco = "fa-plug-circle-xmark";
+    heroTit = down === 1 ? "1 usina sem comunicação" : `${down} usinas sem comunicação`;
+    heroSub = "A equipe AIOTI já foi avisada.";
+  } else if (parcial) {
+    heroCls = "warn"; heroIco = "fa-triangle-exclamation";
+    heroTit = parcial === 1 ? "1 usina com equipamentos sem comunicação"
+                            : `${parcial} usinas com equipamentos sem comunicação`;
+    heroSub = "As usinas continuam gerando e enviando dados. " +
+              "Parte dos equipamentos parou de responder e a equipe AIOTI já foi avisada.";
+  } else if (atraso) {
+    heroCls = "warn"; heroIco = "fa-clock";
+    heroTit = atraso === 1 ? "1 usina publicando com atraso"
+                           : `${atraso} usinas publicando com atraso`;
+    heroSub = "Os dados estão chegando, só que mais devagar que o normal dela.";
+  }
+
+  partes.push(`<div class="infra-hero ${heroCls}">
+      <i class="fa-solid ${heroIco}"></i>
       <div>
-        <strong>${down ? (down === 1 ? "1 usina sem comunicação" : `${down} usinas sem comunicação`)
-                       : "Todas as usinas comunicando"}</strong>
-        <span>${down ? "A equipe AIOTI já foi avisada."
-                     : "Nenhum problema aberto no caminho do dado."}</span>
+        <strong>${heroTit}</strong>
+        <span>${heroSub}</span>
       </div>
     </div>`);
 
@@ -10459,7 +10505,7 @@ function _infraRenderModal() {
       Ou a frota inteira parou, ou a própria vigilância parou — vale conferir.</span></div>`);
   }
 
-  if (down) {
+  if (down || parcial || atraso) {
     partes.push(`<div class="infra-sec-title">Agora</div>`);
     partes.push(st.incidents.map(_infraCard).join(""));
   }
@@ -10478,13 +10524,23 @@ function _infraRenderModal() {
   body.innerHTML = partes.join("");
 }
 
+const _INFRA_ESCOPO = {
+  silent:  { txt: "Usina sem comunicação",              cls: "crit" },
+  partial: { txt: "Parte dos equipamentos calou",       cls: "warn" },
+  lag:     { txt: "Publicando com atraso",              cls: "warn" },
+};
+
 function _infraCard(g) {
   const aberto = g.open === true;
-  const sev = aberto ? (g.severity === "critical" ? "crit" : "warn") : "done";
+  const esc = _INFRA_ESCOPO[g.scope] || _INFRA_ESCOPO.silent;
+  const sev = aberto ? esc.cls : "done";
   // started_at é quando a usina calou, não quando o detector percebeu — a
   // Acopiara caiu 26 h antes do detector existir e apareceria como "10 min".
+  // O verbo muda com o escopo: "a usina parou" e "um tracker parou" não são a
+  // mesma frase, e era exatamente essa confusão que chegava ao cliente.
+  const verbo = g.scope === "lag" ? "atrasou desde" : "parou";
   const quando = aberto
-    ? `parou ${_infraWhen(g.started_at)} · há ${_infraDur(g.duration_s)}`
+    ? `${verbo} ${_infraWhen(g.started_at)} · há ${_infraDur(g.duration_s)}`
     : `${_infraWhen(g.started_at)} → ${_infraWhen(g.closed_at)} · ${_infraDur(g.duration_s)} fora`;
 
   // Detector que ainda não estava de pé é informação de operação: sem esta
@@ -10510,11 +10566,16 @@ function _infraCard(g) {
          Abrir usina <i class="fa-solid fa-arrow-right"></i></a>`
     : "";
 
+  const escopo = aberto
+    ? `<div class="infra-scope ${esc.cls}">${esc.txt}</div>`
+    : "";
+
   return `<div class="infra-card ${sev}">
       <div class="infra-card-top">
         <span class="infra-plant">${_notifEsc(g.plant_name || `Usina ${g.plant_id}`)}</span>
         <span class="infra-when">${quando}</span>
       </div>
+      ${escopo}
       ${fontes}
       ${atraso}
       ${link}
