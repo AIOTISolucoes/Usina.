@@ -3326,6 +3326,10 @@ async function exportDataStudioSelection() {
     const headers = {};
     if (user.customer_id) headers["X-Customer-Id"] = user.customer_id;
     if (user.is_superuser === true) headers["X-Is-Superuser"] = "true";
+    // Sem isto a API responde 401 desde 07/08. Este fetch e cru (precisa do
+    // corpo bruto do CSV), entao nao passa pelo apiFetch e o token tem que
+    // ser posto na mao - foi assim que este export ficou quebrado.
+    if (user.token) headers["Authorization"] = `Bearer ${user.token}`;
 
     // Fetch CSV from each plant and merge into a single file
     const csvParts = [];
@@ -3818,6 +3822,8 @@ async function exportDataStudioSelectionForPlant(plantId) {
     const headers = {};
     if (user.customer_id) headers["X-Customer-Id"] = user.customer_id;
     if (user.is_superuser === true) headers["X-Is-Superuser"] = "true";
+    // ver comentario no export de varias usinas: fetch cru precisa do token
+    if (user.token) headers["Authorization"] = `Bearer ${user.token}`;
     const res = await fetch(url, { headers, cache: "no-store" });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const blob = await res.blob();
@@ -8514,6 +8520,8 @@ async function _appReportFetch() {
     if (user.customer_id) headers["X-Customer-Id"] = user.customer_id;
     if (user.is_superuser === true) headers["X-Is-Superuser"] = "true";
     if (user.username) headers["X-Username"] = user.username;
+    // ver comentario no export do datastudio: fetch cru precisa do token
+    if (user.token) headers["Authorization"] = `Bearer ${user.token}`;
     const res = await fetch(url, { headers, cache: "no-store" });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     let data = await res.json();
