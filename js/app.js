@@ -7,6 +7,25 @@
     window.location.href = "index.html";
     return;
   }
+
+  // Volta para onde o usuário QUERIA ir antes de ser mandado para o login.
+  // Quem grava isto é o plant.js, quando a notificação de alarme faz deep-link
+  // com a sessão vencida. Fica aqui, e não no login.js, de propósito: o login
+  // tem QUATRO caminhos de sucesso (senha, Google, troca de senha, sessão já
+  // válida) e todos terminam em resumo.html. Tratando no destino, um lugar só
+  // cobre os quatro — e cobre também qualquer caminho novo que apareça.
+  try {
+    const destino = localStorage.getItem("scada:after_login_redirect");
+    if (destino) {
+      localStorage.removeItem("scada:after_login_redirect");
+      // só caminho interno, para o valor no localStorage nunca virar
+      // redirecionamento para fora do site
+      if (/^\/?[A-Za-z0-9_\-]+\.html(\?[^#]*)?$/.test(destino)) {
+        window.location.replace(destino.replace(/^\//, ""));
+        return;
+      }
+    }
+  } catch (e) {}
 })();
 
 /**

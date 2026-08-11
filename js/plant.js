@@ -1,4 +1,64 @@
-﻿// ======================================================
+﻿// =============================================================================
+// 🔒 AUTH GUARD + SESSÃO EXPIRADA
+// =============================================================================
+// Esta página não tinha nem guard nem tratamento de 401. Passou despercebido
+// porque, navegando pelo site, ninguém chega aqui sem passar pelo resumo.html,
+// que tem os dois (app.js). Só que a notificação de alarme faz DEEP-LINK direto
+// no plant.html, pulando o resumo — e aí, com sessão ausente ou vencida (o
+// token dura 72 h desde 07/08), as ~25 chamadas desta tela voltavam 401, cada
+// uma logava "mantendo estado anterior" e, como não havia estado anterior
+// nenhum, a usina abria PERMANENTEMENTE EM BRANCO, sem dizer por quê.
+// É a mesma armadilha que o app.js já descreve na linha do apiFetch: 401 não
+// levanta exceção, então nada estoura, nada aparece no console como erro.
+const AFTER_LOGIN_KEY = "scada:after_login_redirect";
+
+// Guarda para onde o usuário QUERIA ir, para voltar aqui depois do login em vez
+// de largá-lo no resumo. Quem consome isto é o app.js, no resumo.html.
+function _rememberAndGoToLogin(expirou) {
+  try {
+    localStorage.setItem(AFTER_LOGIN_KEY, location.pathname + location.search);
+  } catch (e) {}
+  location.replace(expirou ? "index.html?expirou=1" : "index.html");
+}
+
+(function plantAuthGuard() {
+  if (!localStorage.getItem("user")) _rememberAndGoToLogin(false);
+})();
+
+// Sessão inválida: manda para o login UMA vez. Sem a trava, as várias chamadas
+// paralelas desta tela disparariam um redirect cada.
+function forcePlantReloginOnce() {
+  if (window.__aiotiRelogin) return;
+  window.__aiotiRelogin = true;
+  try { localStorage.removeItem("user"); } catch (e) {}
+  _rememberAndGoToLogin(true);
+}
+
+// 🔑 Intercepta no fetch, e não em cada chamada. O plant.js não tem um
+// apiFetch central: são ~25 fetch crus espalhados. Tratar 401 um a um é
+// exatamente o erro de 10/08 ("auditar por ARQUIVO/por chamada"), e qualquer
+// chamada nova nasceria descoberta de novo. Aqui só olhamos a resposta; nenhum
+// comportamento existente muda.
+(function interceptaSessaoExpirada() {
+  const _fetch = window.fetch.bind(window);
+  window.fetch = function (input, init) {
+    return _fetch(input, init).then((r) => {
+      if (r && r.status === 401) {
+        const alvo = typeof input === "string" ? input : (input && input.url) || "";
+        if (alvo.indexOf("execute-api") !== -1) {
+          r.clone().json().then((d) => {
+            if (d && (d.code === "token_required" || d.code === "token_invalid")) {
+              forcePlantReloginOnce();
+            }
+          }).catch(() => {});
+        }
+      }
+      return r;
+    });
+  };
+})();
+
+// ======================================================
 // CONTROLE DE ACESSO POR ROLE
 // ======================================================
 function _getUserRole() {
@@ -7871,6 +7931,34 @@ function handleInitialPlantAction() {
   if (action === "command") {
     setTimeout(openCommandDevicePicker, 120);
   }
+  // Notificação de alarme: abre o painel de alarmes já aberto, em vez de
+  // largar o usuário na usina e obrigá-lo a procurar o sino. No celular isso
+  // é a diferença entre ver o alarme e não achar por que o telefone apitou.
+  // O painel é preenchido pelo primeiro refresh; por isso esperamos ele
+  // chegar em vez de abrir num painel vazio.
+  if (action === "alarms") {
+    let tentativas = 0;
+    const abrir = () => {
+      const btn = document.getElementById("plantAlarmMenuButton");
+      // olha a LISTA JÁ RENDERIZADA, não uma variável de estado: o
+      // renderAlarms() preenche este container, então ter filho aqui é a
+      // prova de que o dado chegou e foi desenhado
+      const lista = document.getElementById("plantActiveAlarms");
+      const temAlarme = !!lista && lista.children.length > 0;
+      // até ~6 s esperando o dado; passou disso, abre assim mesmo (o painel
+      // tem estado vazio próprio e dizer "nenhum alarme ativo" é uma resposta
+      // honesta — o alarme pode ter fechado entre o push e o toque)
+      if (btn && (temAlarme || tentativas > 20)) {
+        setPlantAlarmMenuOpen(true);
+        document.getElementById("plantAlarmMenuPanel")
+          ?.scrollIntoView({ behavior: "smooth", block: "center" });
+        return;
+      }
+      if (tentativas++ < 30) setTimeout(abrir, 300);
+    };
+    setTimeout(abrir, 400);
+  }
+
   // Deep-link to specific device (from robot assistant diagnostics)
   const deviceId = params.get("device_id");
   if (deviceId) {

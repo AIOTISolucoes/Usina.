@@ -1,4 +1,4 @@
-const CACHE_NAME = "aioti-v4";
+const CACHE_NAME = "aioti-v5";   // v5: guard/401 no plant.js + deep-link de alarme
 // caminhos relativos ao sw.js: funcionam na raiz (produção) e em
 // subpath (pipeline de teste github.io/USINA/)
 const SHELL = [
@@ -79,8 +79,19 @@ self.addEventListener("notificationclick", (e) => {
   const target = new URL(e.notification.data?.url || "./resumo.html", self.registration.scope).href;
   e.waitUntil(
     clients.matchAll({ type: "window", includeUncontrolled: true }).then((list) => {
+      // 🔑 A comparação era `c.url === target`, IGUALDADE EXATA. No celular
+      // isso quase nunca casa: o app instalado costuma estar aberto no
+      // resumo.html, ou na mesma usina mas sem o `action=alarms` da URL nova.
+      // Não casando, caía no openWindow — que no Android apenas TRAZ A JANELA
+      // EXISTENTE de volta, sem navegar. O usuário tocava na notificação e via
+      // a tela em que já estava, como se o toque não tivesse feito nada.
+      // Agora, havendo janela do app, ela é NAVEGADA para o alvo e focada.
       for (const c of list) {
         if (c.url === target && "focus" in c) return c.focus();
+      }
+      const app = list.find((c) => c.url.indexOf(self.registration.scope) === 0);
+      if (app && "navigate" in app) {
+        return app.navigate(target).then((c) => (c || app).focus()).catch(() => clients.openWindow(target));
       }
       return clients.openWindow(target);
     })
