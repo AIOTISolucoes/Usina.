@@ -548,6 +548,12 @@
       </div>
 
           <div class="relay-details-panel" id="multimeterDetailsPanel"></div>
+
+          <!-- Medidores adicionais da usina (ex.: Medidor QGBT). Preenchido pelo
+               plant.js a partir do `items` que a API manda em /multimeter/realtime.
+               Fica VAZIO quando a usina só tem o medidor principal: nada de
+               placeholder, o card só existe se o device existir no banco. -->
+          <div id="multimeterExtraStack"></div>
         </div>
       </div>
     </section>

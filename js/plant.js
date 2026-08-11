@@ -506,6 +506,9 @@ let PLANT_ALARMS_MENU_OPEN = false;
 let INVERTERS_REALTIME = [];
 let RELAY_REALTIME = null;
 let MULTIMETER_REALTIME = null;
+// Todos os medidores da usina (o principal + os adicionais, ex.: Medidor QGBT).
+// Vazio quando a usina só tem um: aí o bloco de extras não desenha nada.
+let MULTIMETER_ITEMS = [];
 let THERMALRELAY_REALTIME = [];
 window.INVERTERS_REALTIME = INVERTERS_REALTIME;
 window.RELAY_REALTIME = RELAY_REALTIME;
@@ -1619,6 +1622,13 @@ async function safeFetchMultimeterIfSupported(plantId) {
 
   MULTIMETER_SUPPORTED = true;
   const payload = normalizeApiBody(await res.json());
+
+  // A API manda { item, items }: `item` é o medidor de entrada da usina e
+  // `items` traz TODOS os medidores dela, cada um com is_main. O `items` vinha
+  // sendo descartado aqui — por isso o Medidor QGBT existia no banco, era
+  // devolvido pela API e mesmo assim não aparecia para ninguém.
+  MULTIMETER_ITEMS = Array.isArray(payload?.items) ? payload.items : [];
+
   return payload?.item ?? payload ?? null;
 }
 
@@ -5325,10 +5335,15 @@ function renderRelayCard(relayItem) {
 function renderMultimeterDetailsPanel(item) {
   const panel = document.getElementById("multimeterDetailsPanel");
   if (!panel) return;
+  panel.innerHTML = buildMultimeterDetailsHTML(item);
+}
 
+// Extraído de renderMultimeterDetailsPanel para os medidores adicionais
+// (Medidor QGBT) abrirem exatamente o mesmo detalhamento do principal, sem
+// duplicar a lista de chaves. Mexeu aqui, mudou nos dois.
+function buildMultimeterDetailsHTML(item) {
   if (!item) {
-    panel.innerHTML = `<div class="relay-details-empty">Sem dados detalhados do multimedidor.</div>`;
-    return;
+    return `<div class="relay-details-empty">Sem dados detalhados do multimedidor.</div>`;
   }
 
   const analog = item?.analog ?? {};
@@ -5350,7 +5365,7 @@ function renderMultimeterDetailsPanel(item) {
     ["Energia Exportada", metric(["energy_export_kwh", "energy_exp_kwh", "exported_active_energy_kwh"], "kWh", 1)],
   ];
 
-  panel.innerHTML = `
+  return `
     <div class="relay-details-card">
       <div class="relay-details-title">Leituras eletricas</div>
       <div class="relay-details-grid">
@@ -5374,6 +5389,126 @@ function renderMultimeterDetailsPanel(item) {
       </div>
     </div>
   `;
+}
+
+// ======================================================
+// MEDIDORES ADICIONAIS (ex.: Medidor QGBT)
+// ======================================================
+// Desenha uma linha por medidor que NÃO é o principal, com a mesma marcação e
+// as mesmas classes da linha do medidor principal — de propósito, para as duas
+// ficarem visualmente idênticas e herdarem qualquer ajuste futuro de CSS.
+//
+// 🔑 Nada aqui é mockado: a lista vem do `items` da API, que por sua vez vem do
+// device cadastrado no banco. Usina sem medidor extra não desenha nada, e
+// medidor cadastrado que ainda não publicou aparece OFFLINE com "—", que é a
+// verdade — não um card inventado.
+
+// Quadro geral de baixa tensão: gabinete, barramento e disjuntores. Mesmo traço
+// e mesma paleta do ícone do multimedidor no plant.html.
+const QGBT_SVG_ICON = `
+<svg class="meter-extra-icon" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+  <rect x="7" y="5" width="34" height="38" rx="4"
+        fill="none" stroke="rgba(57,229,140,0.85)" stroke-width="2"/>
+  <line x1="12" y1="13" x2="36" y2="13" stroke="rgba(57,229,140,0.7)" stroke-width="2" stroke-linecap="round"/>
+  <rect x="12" y="18" width="6" height="9" rx="1.5"
+        fill="rgba(57,229,140,0.10)" stroke="rgba(57,229,140,0.65)" stroke-width="1.3"/>
+  <rect x="21" y="18" width="6" height="9" rx="1.5"
+        fill="rgba(57,229,140,0.10)" stroke="rgba(57,229,140,0.65)" stroke-width="1.3"/>
+  <rect x="30" y="18" width="6" height="9" rx="1.5"
+        fill="rgba(57,229,140,0.10)" stroke="rgba(57,229,140,0.65)" stroke-width="1.3"/>
+  <line x1="15" y1="27" x2="15" y2="33" stroke="rgba(57,229,140,0.55)" stroke-width="1.5" stroke-linecap="round"/>
+  <line x1="24" y1="27" x2="24" y2="33" stroke="rgba(57,229,140,0.55)" stroke-width="1.5" stroke-linecap="round"/>
+  <line x1="33" y1="27" x2="33" y2="33" stroke="rgba(57,229,140,0.55)" stroke-width="1.5" stroke-linecap="round"/>
+  <line x1="12" y1="37" x2="36" y2="37" stroke="rgba(57,229,140,0.7)" stroke-width="2" stroke-linecap="round"/>
+</svg>`;
+
+function isMainMeterItem(it, principal) {
+  if (it?.is_main === true) return true;
+  const a = it?.device_id ?? it?.multimeter_id ?? null;
+  const b = principal?.device_id ?? principal?.multimeter_id ?? null;
+  return a != null && b != null && String(a) === String(b);
+}
+
+function renderMultimeterExtras(principal) {
+  const stack = document.getElementById("multimeterExtraStack");
+  if (!stack) return;
+
+  const extras = (Array.isArray(MULTIMETER_ITEMS) ? MULTIMETER_ITEMS : [])
+    .filter((it) => it && !isMainMeterItem(it, principal));
+
+  if (!extras.length) {
+    stack.innerHTML = "";
+    return;
+  }
+
+  // A tela se redesenha a cada 30 s. Como o innerHTML abaixo recria os nós, o
+  // painel que o usuário tivesse aberto fecharia sozinho no meio da leitura.
+  // Guardamos quais estavam abertos, por device_id (e não por posição, que
+  // muda se um medidor entrar ou sair da lista), e reabrimos no fim.
+  const abertosAntes = new Set(
+    Array.from(stack.querySelectorAll("[data-extra-meter].open"))
+      .map((el) => el.dataset.meterKey)
+      .filter(Boolean)
+  );
+
+  // Mesmas colunas da linha principal, incluindo a regra de esconder a coluna
+  // de potência aparente quando nenhum medidor publica esse campo.
+  const algumTemAparente = extras.some(
+    (it) => pickDeviceMetricValue(it, it?.analog ?? it?.data ?? {},
+      ["apparent_power_kva", "power_apparent_kva", "apparent_power", "apparent_power_va"]) != null
+  );
+  const cols = algumTemAparente
+    ? "14px minmax(250px,1.45fr) minmax(150px,0.95fr) minmax(150px,0.95fr) minmax(150px,0.95fr) minmax(190px,1fr) 88px"
+    : "14px minmax(250px,1.45fr) minmax(150px,0.95fr) minmax(150px,0.95fr) minmax(190px,1fr) 88px";
+
+  stack.innerHTML = extras.map((it, i) => {
+    const analog = it?.analog ?? it?.data ?? {};
+    const online = multimeterOnlineFromPayload(it);
+    // a API já resolve o rótulo (COALESCE de display_name com name), então
+    // device_name aqui é "Medidor QGBT", não "Multimedidor2"
+    const nome = it?.device_name || "Medidor";
+    const ativa = pickDeviceMetricValue(it, analog, ["active_power_kw", "p_kw", "power_kw", "active_power"]);
+    const aparente = pickDeviceMetricValue(it, analog, ["apparent_power_kva", "power_apparent_kva", "apparent_power", "apparent_power_va"]);
+    const reativa = pickDeviceMetricValue(it, analog, ["reactive_power_kvar", "power_reactive_kvar", "reactive_power", "reactive_power_var"]);
+    const ts = it?.last_update ?? it?.timestamp ?? null;
+
+    let c = 3;
+    const celulaAparente = algumTemAparente
+      ? `<div class="device-metric-cell" data-label="APPARENT POWER" style="grid-column:${++c};grid-row:1">${aparente != null ? formatMetricValue(aparente, "kVA", 1) : "—"}</div>`
+      : "";
+
+    return `
+      <div class="relay-row relay-row--table meter-extra-row ${online ? "online" : "offline"}"
+           data-extra-meter="${i}" data-meter-key="${cabinMapEscape(it?.device_id ?? it?.multimeter_id ?? nome)}"
+           style="grid-template-columns:${cols}">
+        <span class="status-dot"${online ? "" : ' style="opacity:0.65"'}></span>
+        <div class="relay-left">
+          <div class="relay-title">${QGBT_SVG_ICON}<span>${cabinMapEscape(nome)}</span></div>
+          <span class="relay-state ${online ? "relay-state--on" : "relay-state--off"}" style="margin-left:8px">${online ? "ONLINE" : "OFFLINE"}</span>
+          <i class="fa-solid fa-chevron-down relay-expand-icon"></i>
+        </div>
+        <div class="device-metric-cell" data-label="ACTIVE POWER" style="grid-column:3;grid-row:1">${formatMetricValue(ativa, "kW", 1)}</div>
+        ${celulaAparente}
+        <div class="device-metric-cell" data-label="REACTIVE POWER" style="grid-column:${++c};grid-row:1">${formatMetricValue(reativa, "kvar", 1)}</div>
+        <div class="device-metric-cell relay-timestamp-cell" data-label="ÚLTIMA LEITURA" style="grid-column:${++c};grid-row:1">${fmtDatePtBR(ts)}</div>
+      </div>
+      <div class="relay-details-panel" data-extra-panel="${i}" style="max-height:0px">
+        ${buildMultimeterDetailsHTML(it)}
+      </div>`;
+  }).join("");
+
+  // Abre/fecha igual à linha principal. Religa a cada render porque o innerHTML
+  // acima recria os nós; sem isto o clique pararia de funcionar no 1º refresh.
+  stack.querySelectorAll("[data-extra-meter]").forEach((row) => {
+    const painel = stack.querySelector(`[data-extra-panel="${row.dataset.extraMeter}"]`);
+    const aplicar = (abrir) => {
+      row.classList.toggle("open", abrir);
+      painel?.classList.toggle("open", abrir);
+      if (painel) painel.style.maxHeight = abrir ? "1200px" : "0px";
+    };
+    if (abertosAntes.has(row.dataset.meterKey)) aplicar(true);
+    row.addEventListener("click", () => aplicar(!painel?.classList.contains("open")));
+  });
 }
 
 function renderMultimeterCard(item) {
@@ -7349,7 +7484,10 @@ async function refreshRealtimeEverything() {
       window.MULTIMETER_REALTIME = MULTIMETER_REALTIME;
       const showMeter = PLANT_CAPABILITIES.hasMultimeter === true;
       setMultimeterSectionVisible(showMeter);
-      if (showMeter) renderMultimeterCard(multimeterItem);
+      if (showMeter) {
+        renderMultimeterCard(multimeterItem);
+        renderMultimeterExtras(multimeterItem);
+      }
       updateCabineMeterNode(multimeterItem);
     } else {
       console.error("[refreshRealtimeEverything][multimeter] erro", multimeterRes.reason);

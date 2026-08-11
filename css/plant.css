@@ -4181,6 +4181,29 @@ body.plant-enter #relaySection{
   filter:drop-shadow(0 0 6px rgba(57,229,140,0.35)) drop-shadow(0 0 14px rgba(57,229,140,0.15));
 }
 
+/* Medidores adicionais da usina (ex.: Medidor QGBT). O desenho é o quadro
+   geral: gabinete, barramento e disjuntores. Menor que o ícone do título da
+   seção porque aqui ele vive DENTRO da linha, ao lado do nome, e não num
+   cabeçalho — mesma paleta e mesmo brilho, só a escala muda. */
+.meter-extra-icon{
+  width:20px;
+  height:20px;
+  flex-shrink:0;
+  margin-right:8px;
+  filter:drop-shadow(0 0 5px rgba(57,229,140,0.30));
+}
+
+.meter-extra-row .relay-title{
+  display:flex;
+  align-items:center;
+}
+
+/* Filete à esquerda: comunica "pendurado no mesmo barramento do medidor
+   principal" sem precisar de legenda nenhuma. */
+.meter-extra-row{
+  border-left:2px solid rgba(57,229,140,0.28);
+}
+
 .relay-title-heading{
   display:flex;
   align-items:center;
