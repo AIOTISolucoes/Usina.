@@ -7559,7 +7559,14 @@ async function refreshRealtimeEverything() {
 }
 
 // ======================================================
-// TRACKERS (MOCK LOCAL) — MÓDULO INDEPENDENTE
+// TRACKERS — MÓDULO INDEPENDENTE
+//
+// 12/08/2026: o rótulo "(MOCK LOCAL)" e a função createMockTrackers saíram
+// daqui. Ela já não era chamada por ninguém, mas o vocabulário de estados
+// que ela inventava (manual_daytime, auto_tracking, auto_sleep, ...) tinha
+// vazado para o mapa de cores e para a legenda, e era o que a tela usava
+// para pintar dado REAL — que vem com outros nomes. Dado de tracker agora
+// vem só de /trackers/realtime.
 // ======================================================
 let TRACKER_VIEW_MODE = "state";
 let TRACKERS_DATA = [];
@@ -7573,60 +7580,44 @@ let TRACKERS_LAST_HAS_DATA = false;
 let TRACKERS_MAP = null;
 let TRACKERS_MARKERS_LAYER = null;
 
-function createMockTrackers(count = 220) {
-  const items = [];
-  const cols = 22;
-  const spacingX = 65;
-  const spacingY = 78;
-  const states = [
-    "off",
-    "manual_daytime",
-    "auto_daytime",
-    "manual_tracking",
-    "auto_tracking",
-    "manual_nighttime",
-    "auto_nighttime",
-    "manual_sleep",
-    "auto_sleep"
-  ];
+// 🔑 12/08/2026 — este vocabulário TEM que ser o mesmo que o
+// /trackers/realtime emite. Ele listava 10 estados copiados do gerador de
+// mock (manual_daytime, auto_tracking, auto_sleep...) que o backend NUNCA
+// produziu: a interseção com a API era só `off` e `no_comm`, então todo
+// tracker real caía no cinza de fallback e a legenda descrevia uma tela que
+// não existe. Ao mexer aqui, conferir a função state_code em
+// handle_get_trackers_realtime (api2.py) — as duas listas andam juntas.
+// Ordem = severidade, da pior para a melhor. A legenda sai nesta ordem.
+const TRACKER_STATE_COLORS = {
+  emergency: "#ff3b30",
+  fault: "#ff8a65",
+  warning: "#ffc857",
+  manual: "#b47dff",
+  off: "#707b86",
+  standby: "#7f8cff",
+  auto: "#2ad37f",
+  online: "#4f9dff",
+  no_comm: "#4a5057",
+  unknown: "#8a949d"
+};
 
-  for (let i = 0; i < count; i++) {
-    const row = Math.floor(i / cols);
-    const col = i % cols;
-    const offline = i % 17 === 0;
-    const stateCode = offline ? "no_comm" : states[i % states.length];
-    const angle = offline ? null : -60 + ((i * 7) % 131);
-    const error = offline ? null : Number(((i * 1.7) % 11).toFixed(1));
-
-    items.push({
-      id: `TRK-${String(i + 1).padStart(4, "0")}`,
-      name: `Tracker ${String(i + 1).padStart(3, "0")}`,
-      kind: i % 2 === 0 ? "tcu" : "rsu",
-      x: 50 + col * spacingX + (row % 2 ? 12 : 0),
-      y: 45 + row * spacingY,
-      state_code: stateCode,
-      angle_deg: angle,
-      error_value: error,
-      is_online: !offline
-    });
-  }
-  return items;
-}
+const TRACKER_STATE_LABELS = {
+  emergency: "botão de emergência",
+  fault: "falha (TCU/Zigbee/comunicação)",
+  warning: "bateria baixa ou fora de curso",
+  manual: "modo manual",
+  off: "desligado",
+  standby: "standby",
+  auto: "modo automático",
+  online: "online, sem alarme",
+  no_comm: "sem comunicação",
+  unknown: "estado desconhecido"
+};
 
 function getTrackersLegendItems(mode) {
   if (mode === "state") {
-    return [
-      ["tracker desligado", "#707b86"],
-      ["manual + daytime", "#f6bd60"],
-      ["automático + daytime", "#f2e85e"],
-      ["manual + tracking", "#4f9dff"],
-      ["automático + tracking", "#2ad37f"],
-      ["manual + nighttime", "#7f8cff"],
-      ["automático + nighttime", "#6375ff"],
-      ["manual sleep", "#b47dff"],
-      ["automático sleep", "#9255ff"],
-      ["sem comunicação", "#4a5057"]
-    ];
+    return Object.keys(TRACKER_STATE_COLORS)
+      .map((k) => [TRACKER_STATE_LABELS[k], TRACKER_STATE_COLORS[k]]);
   }
 
   if (mode === "angle") {
@@ -7659,19 +7650,7 @@ function getTrackerColorByMode(item, mode) {
   if (!item?.is_online) return "#4a5057";
 
   if (mode === "state") {
-    const map = {
-      off: "#707b86",
-      manual_daytime: "#f6bd60",
-      auto_daytime: "#f2e85e",
-      manual_tracking: "#4f9dff",
-      auto_tracking: "#2ad37f",
-      manual_nighttime: "#7f8cff",
-      auto_nighttime: "#6375ff",
-      manual_sleep: "#b47dff",
-      auto_sleep: "#9255ff",
-      no_comm: "#4a5057"
-    };
-    return map[item.state_code] || "#8a949d";
+    return TRACKER_STATE_COLORS[item.state_code] || TRACKER_STATE_COLORS.unknown;
   }
 
   if (mode === "angle") {
@@ -7690,6 +7669,51 @@ function getTrackerColorByMode(item, mode) {
   const err = Number(item.error_value);
   if (!Number.isFinite(err)) return "#4a5057";
   return err <= 5 ? "#2ad37f" : "#ff8a65";
+}
+
+// Nomes das flags como o operador fala, não como a chave do CLP.
+const TRACKER_FLAG_LABELS = {
+  button_emergency: "Botão de emergência",
+  fault_tcu: "Falha na TCU",
+  fault_zigbee: "Falha Zigbee",
+  communication_fault: "Falha de comunicação",
+  low_batt: "Bateria baixa",
+  tcu_fora_limite: "Fora do limite de curso",
+  tcu_auto: "Modo automático",
+  tcu_manual: "Modo manual",
+  tcu_off: "Desligado",
+  tcu_standbye: "Standby"
+};
+
+// 🔑 `null` é diferente de `false`: sem evento para o device a plataforma NÃO
+// SABE o estado da flag, e dizer "não" aí é o defeito que esta tela tinha —
+// ela afirmava "sem falha" para as 10 flags, incluindo botão de emergência,
+// sobre uma tabela que não tem coluna de flag nenhuma. Desconhecido mostra "—".
+function buildTrackerFlagsHTML(tracker) {
+  const flags = tracker?.flags;
+  if (!flags || typeof flags !== "object") return "";
+
+  if (!tracker.flags_known) {
+    return `<br><span style="opacity:.7">Alarmes: sem evento registrado para este equipamento</span>`;
+  }
+
+  const ligadas = Object.keys(TRACKER_FLAG_LABELS)
+    .filter((k) => flags[k] === true)
+    .map((k) => cabinMapEscape(TRACKER_FLAG_LABELS[k]));
+  const desconhecidas = Object.keys(TRACKER_FLAG_LABELS)
+    .filter((k) => flags[k] === null || flags[k] === undefined);
+
+  let html = ligadas.length
+    ? `<br><strong style="color:#ff8a65">Alarmes: ${ligadas.join(", ")}</strong>`
+    : `<br>Alarmes: nenhum ativo`;
+
+  if (desconhecidas.length) {
+    html += `<br><span style="opacity:.7">Não reportadas: ${desconhecidas.length} de ${Object.keys(TRACKER_FLAG_LABELS).length}</span>`;
+  }
+  if (tracker.flags_last_change) {
+    html += `<br><span style="opacity:.7">Última mudança: ${fmtDatePtBR(tracker.flags_last_change)}</span>`;
+  }
+  return html;
 }
 
 function renderTrackersLegend() {
@@ -7750,14 +7774,17 @@ function renderTrackersNodes() {
     const m = L.marker([lat, lng], { icon: markerIcon(color) });
     const displayName = tracker.name || tracker.tracker_code || tracker.tracker_id || "Tracker";
     const displayType = String(tracker.tracker_type || tracker.kind || "—").toUpperCase();
+    const stateLabel = TRACKER_STATE_LABELS[tracker.state_code]
+      || tracker.state_code || "—";
     m.bindPopup(`
-      <strong>${displayName}</strong><br>
-      Tipo: ${displayType}<br>
-      Estado: ${tracker.state_code ?? "—"}<br>
+      <strong>${cabinMapEscape(displayName)}</strong><br>
+      Tipo: ${cabinMapEscape(displayType)}<br>
+      Estado: ${cabinMapEscape(stateLabel)}<br>
       Ângulo: ${tracker.angle_deg ?? "—"}<br>
       Erro: ${tracker.error_value ?? "—"}<br>
       Status: ${tracker.is_online ? "online" : "offline"}<br>
       Atualização: ${fmtDatePtBR(tracker.last_update)}
+      ${buildTrackerFlagsHTML(tracker)}
     `);
     m.addTo(TRACKERS_MARKERS_LAYER);
   });
