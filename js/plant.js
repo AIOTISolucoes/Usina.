@@ -7735,6 +7735,50 @@ function applyTrackersTransform() {
   TRACKERS_MAP.invalidateSize();
 }
 
+// O mapa tem tamanho de verdade? Enquanto o painel está colapsado
+// (.trackers-panel-body com max-height:0) ou a seção escondida
+// (.trackers-hidden = display:none), o Leaflet mede 0x0.
+function trackersMapIsSized() {
+  if (!TRACKERS_MAP) return false;
+  try {
+    const s = TRACKERS_MAP.getSize();
+    return !!s && s.x > 0 && s.y > 0;
+  } catch { return false; }
+}
+
+// Abrir o painel é uma TRANSIÇÃO de .28s (max-height em .trackers-panel-body).
+// Medir/desenhar antes dela terminar lê um container de altura 0: o mapa nasce
+// com tamanho errado e o enquadramento inicial trava. Por isso a abertura
+// espera o fim da transição — com timeout de segurança, porque transitionend
+// NÃO dispara quando o usuário tem prefers-reduced-motion ou quando o painel
+// já estava aberto (aí não há transição nenhuma para terminar).
+function afterTrackersReveal(fn) {
+  const body = document.querySelector("#trackersSection .trackers-panel-body");
+  if (!body) { requestAnimationFrame(fn); return; }
+  let done = false;
+  const run = () => {
+    if (done) return;
+    done = true;
+    body.removeEventListener("transitionend", onEnd);
+    fn();
+  };
+  const onEnd = (e) => {
+    if (e.target === body && e.propertyName === "max-height") run();
+  };
+  body.addEventListener("transitionend", onEnd);
+  setTimeout(run, 360);
+}
+
+// Caminho ÚNICO de abertura do painel (aba, menu e âncora usavam três
+// variações diferentes — a da aba não desenhava nada, e era por isso que a
+// primeira abertura vinha em branco até trocar o modo de visualização).
+function revealTrackersPanel() {
+  afterTrackersReveal(() => {
+    applyTrackersTransform();
+    renderTrackersPanel();
+  });
+}
+
 function renderTrackersNodes() {
   if (!TRACKERS_MAP || !TRACKERS_MARKERS_LAYER) return;
   TRACKERS_MARKERS_LAYER.clearLayers();
@@ -7806,7 +7850,10 @@ function renderTrackersNodes() {
     } else if (bounds.length) {
       TRACKERS_MAP.fitBounds(bounds, { padding: [20, 20] });
     }
-    TRACKERS_HAS_FITTED_ONCE = true;
+    // Só trava o enquadramento se o mapa já tinha tamanho real. Um fitBounds
+    // calculado contra um container 0x0 escolhe o zoom errado — e, travado,
+    // deixaria os marcadores fora da tela até alguém apertar "resetar zoom".
+    if (trackersMapIsSized()) TRACKERS_HAS_FITTED_ONCE = true;
   }
 }
 
@@ -7841,7 +7888,7 @@ function initTrackersPanel() {
       const collapsed = !sectionEl.classList.contains("is-collapsed");
       setTrackersCollapsed(collapsed);
       const expanded = !collapsed;
-      if (expanded) applyTrackersTransform();
+      if (expanded) revealTrackersPanel();
     });
   }
 
@@ -7859,12 +7906,7 @@ function initTrackersPanel() {
         setTrackersSectionVisible(true);
         setTrackersCollapsed(false);
         TRACKERS_LAST_HAS_DATA = true;
-        requestAnimationFrame(() => {
-          applyTrackersTransform();
-          if (Array.isArray(TRACKERS_DATA) && TRACKERS_DATA.length) {
-            renderTrackersPanel();
-          }
-        });
+        revealTrackersPanel();
       } else {
         setTrackersSectionVisible(false);
       }
@@ -7940,12 +7982,7 @@ function scrollPlantSectionTarget(target) {
       anchor.scrollIntoView({ behavior: "smooth", block: "start" });
     }
 
-    requestAnimationFrame(() => {
-      applyTrackersTransform();
-      if (Array.isArray(TRACKERS_DATA) && TRACKERS_DATA.length) {
-        renderTrackersPanel();
-      }
-    });
+    revealTrackersPanel();
 
     return;
   }
