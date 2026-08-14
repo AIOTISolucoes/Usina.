@@ -3903,13 +3903,51 @@ body.plant-enter #relaySection{
   color:rgba(233,255,243,0.94);
 }
 
+/* Proteção ATUANDO é falta, não é "ok" — estava verde, e verde lê como normal.
+   O mesmo vale para o relé térmico, que reusa estas classes (_trFlag). */
 .relay-flag-pill.is-on{
-  border-color:rgba(57,229,140,0.28);
-  background:rgba(57,229,140,0.08);
+  border-color:rgba(255,92,92,0.42);
+  background:rgba(255,92,92,0.12);
+}
+
+.relay-flag-pill.is-on strong{
+  color:#ff8f8f;
+}
+
+/* Disparou e já caiu. O relé solta o bit em segundos — a sobretensão da Várzea2
+   em 13/08 durou 4 min — e quem abria a tela depois não via nada. Este estado é
+   o que faz o disparo persistir. */
+.relay-flag-pill.is-recent{
+  border-color:rgba(239,159,39,0.40);
+  background:rgba(239,159,39,0.10);
+}
+
+.relay-flag-pill.is-recent strong{
+  color:#efb45c;
+}
+
+/* Nunca apareceu na janela: dizer "não sei" em vez de fingir que está normal. */
+.relay-flag-pill.is-unknown{
+  border-color:rgba(255,255,255,0.05);
+  opacity:.55;
 }
 
 .relay-flag-pill.is-off{
   border-color:rgba(255,255,255,0.06);
+}
+
+.relay-flag-code{
+  font-style:normal;
+  font-size:10px;
+  opacity:.6;
+  letter-spacing:.04em;
+}
+
+.relay-details-hint{
+  font-weight:600;
+  letter-spacing:.04em;
+  text-transform:none;
+  opacity:.6;
 }
 
 .relay-details-empty{

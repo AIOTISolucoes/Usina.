@@ -5065,6 +5065,86 @@ function formatMetricValue(value, unit, digits = 1) {
   return `${n.toFixed(digits)} ${unit}`;
 }
 
+function _relayFlagAgoText(seconds) {
+  const s = Number(seconds);
+  if (!Number.isFinite(s) || s < 0) return "";
+  if (s < 60) return "há instantes";
+  const min = Math.floor(s / 60);
+  if (min < 60) return `há ${min} min`;
+  const h = Math.floor(min / 60);
+  if (h < 24) return `há ${h} h`;
+  return `há ${Math.floor(h / 24)} d`;
+}
+
+// Proteções do relé.
+//
+// Antes isto lia `raw(["flag_46"])`, que procurava a chave em `relayItem` e em
+// `relayItem.analog` — e as flags nunca estiveram em nenhum dos dois (chegam em
+// `event.raw`). Resultado: o painel inteiro vivia em "—". Além disso o
+// stg_relay_event só grava a chave que MUDOU, então mesmo lendo o lugar certo a
+// última linha quase sempre traz só {communication_fault}.
+//
+// Agora o backend manda `item.flags` já resolvido contra o catálogo de alarmes:
+// as 12 proteções com nome em português, valor atual e quando foi o último
+// disparo. O disparo fica visível mesmo depois de a flag cair — a sobretensão
+// da Várzea2 em 13/08 durou 4 minutos e ninguém que olhou depois viu.
+function buildRelayFlagsHTML(relayItem) {
+  const flags = Array.isArray(relayItem?.flags) ? relayItem.flags : null;
+
+  // Lambda antiga (ainda sem `flags`): mantém o comportamento anterior em vez
+  // de deixar o card vazio.
+  if (!flags || !flags.length) {
+    const analog = relayItem?.analog ?? {};
+    const eventRaw = relayItem?.event?.raw ?? {};
+    const legacy = [
+      ["46", "flag_46"], ["50", "flag_50"], ["51-1", "flag_51_1"],
+      ["50N", "flag_50N"], ["51GS", "flag_51GS"], ["51N", "flag_51N"],
+      ["27", "flag_27"], ["59", "flag_59"], ["47", "flag_47"],
+      ["81 O", "flag_81_O"], ["81 U", "flag_81_U"], ["51-2", "flag_51_2"]
+    ];
+    return legacy.map(([label, key]) => {
+      const v = eventRaw?.[key] ?? analog?.[key] ?? relayItem?.[key];
+      const txt = (v === null || v === undefined || v === "") ? "—" : String(v);
+      return `<div class="relay-flag-pill ${txt === "1" ? "is-on" : "is-off"}">
+          <span>${cabinMapEscape(label)}</span>
+          <strong>${cabinMapEscape(txt)}</strong>
+        </div>`;
+    }).join("");
+  }
+
+  // Com communication_fault 28 o CLP não está falando com o relé: o último
+  // valor conhecido das flags está congelado e não vale como "normal". Dizer
+  // "sem leitura" é o honesto — foi o que a Acopiara mostrou no teste, 12 flags
+  // em "normal" com o relé mudo há horas.
+  const semLeitura = Number(relayItem?.communication_fault) === 28;
+
+  return flags.map((f) => {
+    const nome = f?.description || f?.label || f?.code || "—";
+    const tag = f?.label || "";
+
+    let cls = "is-off";
+    let estado = "normal";
+
+    if (f?.is_on === true && !semLeitura) {
+      cls = "is-on";
+      estado = "ATIVO";
+    } else if (f?.last_trip) {
+      // Disparo passado é fato registrado: continua valendo mesmo se o relé
+      // ficou mudo depois.
+      cls = "is-recent";
+      estado = `disparou ${_relayFlagAgoText(f?.last_trip_age_seconds)}`;
+    } else if (semLeitura || f?.is_on === null || f?.is_on === undefined) {
+      cls = "is-unknown";
+      estado = "sem leitura";
+    }
+
+    return `<div class="relay-flag-pill ${cls}" title="${cabinMapEscape(f?.code || "")}">
+        <span>${cabinMapEscape(nome)}${tag ? ` <em class="relay-flag-code">${cabinMapEscape(tag)}</em>` : ""}</span>
+        <strong>${cabinMapEscape(estado)}</strong>
+      </div>`;
+  }).join("");
+}
+
 function renderRelayDetailsPanel(relayItem) {
   const panel = document.getElementById("relayDetailsPanel");
   if (!panel) return;
@@ -5091,13 +5171,6 @@ function renderRelayDetailsPanel(relayItem) {
     ["Status Relay", raw(["status_relay"])]
   ];
 
-  const flagItems = [
-    ["46", raw(["flag_46"])], ["50", raw(["flag_50"])], ["51-1", raw(["flag_51_1"])],
-    ["50N", raw(["flag_50N"])], ["51GS", raw(["flag_51GS"])], ["51N", raw(["flag_51N"])],
-    ["27", raw(["flag_27"])], ["59", raw(["flag_59"])], ["47", raw(["flag_47"])],
-    ["81 O", raw(["flag_81_O"])], ["81 U", raw(["flag_81_U"])], ["51-2", raw(["flag_51_2"])]
-  ];
-
   panel.innerHTML = `
     <div class="relay-details-card">
       <div class="relay-details-title">Leituras elétricas</div>
@@ -5111,14 +5184,9 @@ function renderRelayDetailsPanel(relayItem) {
       </div>
     </div>
     <div class="relay-details-card">
-      <div class="relay-details-title">Proteções</div>
+      <div class="relay-details-title">Proteções${relayItem?.flags_lookback ? ` <span class="relay-details-hint">disparos das últimas ${cabinMapEscape(String(relayItem.flags_lookback).replace("hours", "h").replace("days", "d"))}</span>` : ""}</div>
       <div class="relay-flag-grid">
-        ${flagItems.map(([label, value]) => `
-          <div class="relay-flag-pill ${String(value) === "1" ? "is-on" : "is-off"}">
-            <span>${label}</span>
-            <strong>${value}</strong>
-          </div>
-        `).join("")}
+        ${buildRelayFlagsHTML(relayItem)}
       </div>
     </div>
   `;
