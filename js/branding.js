@@ -866,6 +866,14 @@
     { name: "Tropical",   primary: "#a3e635", accent: "#2dd4bf", bg: "#0a1204", bg2: "#03181a", alarm: "#ff5252" },
     { name: "Dourado",    primary: "#f5b93d", accent: "#4da3ff", bg: "#120c03", bg2: "#0a1020", alarm: "#ff5252" },
     { name: "Meia-noite", primary: "#7dd3fc", accent: "#c4b5fd", bg: "#05070d", bg2: "#0b0a18", alarm: "#ff6363" },
+    // ── CLAROS ────────────────────────────────────────────────────────────
+    // Só passaram a ser possíveis com a reancoragem de luminosidade: antes o
+    // motor preservava o `l` de cada cor e nenhuma escolha produzia interface
+    // clara. A cor principal aqui é escura de propósito — no fundo claro ela
+    // vira texto e traço, e precisa de contraste contra o branco.
+    { name: "Papel",      primary: "#2f7d5a", accent: "#7a6a3c", bg: "#ffffff", bg2: "#eef1ee", alarm: "#c62828" },
+    { name: "Névoa",      primary: "#3a6ea5", accent: "#4a8577", bg: "#f4f6f8", bg2: "#e6ebf0", alarm: "#b3261e" },
+    { name: "Areia",      primary: "#8a6a2f", accent: "#5f7a4a", bg: "#faf7f0", bg2: "#efe7d8", alarm: "#b3401e" },
   ];
 
   // cada controle sabe QUAIS partes da tela ele muda (flash de destaque)
@@ -1115,6 +1123,11 @@
           <div class="brd-row"><div class="brd-meta"><b>Alarme</b><span>Estados críticos e avisos vermelhos</span></div>
             <input class="brd-hex" id="brdAlarmHex" value="${c.alarm || "#ff4f4f"}" maxlength="7" spellcheck="false">
             <span class="brd-swatch"><input type="color" id="brdAlarm" value="${c.alarm || "#ff4f4f"}"></span></div>
+          <div class="brd-row"><div class="brd-meta"><b>Intensidade</b><span>Cores vivas ou mais apagadas</span></div>
+            <input type="range" id="brdIntensity" min="0" max="100" step="5"
+                   value="${c.intensity === undefined ? 100 : c.intensity}"
+                   style="flex:1;min-width:80px;accent-color:currentColor">
+            <span class="brd-hex" id="brdIntensityVal" style="text-align:center">${c.intensity === undefined ? 100 : c.intensity}%</span></div>
         </div>
         <div class="brd-sec">
           <h4>Layout</h4>
@@ -1161,6 +1174,7 @@
         colors: {
           primary: $("brdPrimary").value, accent: $("brdAccent").value,
           bg: $("brdBg").value, bg2: $("brdBg2").value, alarm: $("brdAlarm").value,
+          intensity: +$("brdIntensity").value,
           layout: draftLayout,
         },
         texts: $("brdPdf").value.trim() ? { pdf_footer: $("brdPdf").value.trim() } : {},
@@ -1178,6 +1192,11 @@
       [["Primary", c.primary], ["Accent", c.accent], ["Bg", c.bg], ["Bg2", c.bg2], ["Alarm", c.alarm]].forEach(([id, val]) => {
         if (val) { $("brd" + id).value = val; $("brd" + id + "Hex").value = val; }
       });
+      // sem isto o Desfazer/Restaurar deixava o slider no valor antigo — foi
+      // o mesmo defeito do v2.3 (painel nao espelhava o restore)
+      const inten = c.intensity === undefined ? 100 : c.intensity;
+      $("brdIntensity").value = inten;
+      $("brdIntensityVal").textContent = inten + "%";
       draftLogo = d.logo_data || null;
       $("brdLogoPrev").src = draftLogo || "assets/logo-aioti.png";
       draftLayout = c.layout || "default";
@@ -1223,6 +1242,10 @@
         if (/^#[0-9a-fA-F]{6}$/.test(hx.value.trim())) { sw.value = hx.value.trim(); preview(kind); }
         else hx.value = sw.value;
       });
+    });
+    $("brdIntensity").addEventListener("input", () => {
+      $("brdIntensityVal").textContent = $("brdIntensity").value + "%";
+      preview("bg");
     });
     $("brdName").addEventListener("input", () => preview("name"));
     $("brdPdf").addEventListener("input", () => preview());
