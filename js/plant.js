@@ -5065,6 +5065,13 @@ function formatMetricValue(value, unit, digits = 1) {
   return `${n.toFixed(digits)} ${unit}`;
 }
 
+// Ícones das proteções. SVG inline em currentColor, então cada estado herda a
+// cor da própria pílula e não precisa de arquivo nem de fonte de ícone.
+const _RELAY_ICON_ALERTA = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><line x1="12" y1="9.5" x2="12" y2="13.5"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>`;
+const _RELAY_ICON_RELOGIO = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><polyline points="12 6.8 12 12 15.6 14.2"/></svg>`;
+const _RELAY_ICON_OK = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><polyline points="8.2 12.4 11 15.2 15.8 9.6"/></svg>`;
+const _RELAY_ICON_SEMDADO = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9" stroke-dasharray="3.2 3.2"/><line x1="8.4" y1="12" x2="15.6" y2="12"/></svg>`;
+
 function _relayFlagAgoText(seconds) {
   const s = Number(seconds);
   if (!Number.isFinite(s) || s < 0) return "";
@@ -5124,23 +5131,34 @@ function buildRelayFlagsHTML(relayItem) {
 
     let cls = "is-off";
     let estado = "normal";
+    let icone = _RELAY_ICON_OK;
 
     if (f?.is_on === true && !semLeitura) {
       cls = "is-on";
-      estado = "ATIVO";
+      estado = "ATUANDO";
+      icone = _RELAY_ICON_ALERTA;
     } else if (f?.last_trip) {
       // Disparo passado é fato registrado: continua valendo mesmo se o relé
       // ficou mudo depois.
       cls = "is-recent";
       estado = `disparou ${_relayFlagAgoText(f?.last_trip_age_seconds)}`;
+      icone = _RELAY_ICON_RELOGIO;
     } else if (semLeitura || f?.is_on === null || f?.is_on === undefined) {
       cls = "is-unknown";
       estado = "sem leitura";
+      icone = _RELAY_ICON_SEMDADO;
     }
 
-    return `<div class="relay-flag-pill ${cls}" title="${cabinMapEscape(f?.code || "")}">
-        <span>${cabinMapEscape(nome)}${tag ? ` <em class="relay-flag-code">${cabinMapEscape(tag)}</em>` : ""}</span>
-        <strong>${cabinMapEscape(estado)}</strong>
+    // O código (59, 51N...) sai da linha do nome e vira chip próprio à direita.
+    // Junto do texto ele empurrava o nome longo para uma segunda linha e era o
+    // que deixava as fileiras tortas.
+    return `<div class="relay-prot-pill ${cls}" title="${cabinMapEscape(nome)} (${cabinMapEscape(f?.code || "")})">
+        <span class="relay-prot-icon">${icone}</span>
+        <span class="relay-prot-text">
+          <span class="relay-prot-name">${cabinMapEscape(nome)}</span>
+          <strong class="relay-prot-state">${cabinMapEscape(estado)}</strong>
+        </span>
+        ${tag ? `<span class="relay-prot-code">${cabinMapEscape(tag)}</span>` : ""}
       </div>`;
   }).join("");
 }
@@ -5185,7 +5203,7 @@ function renderRelayDetailsPanel(relayItem) {
     </div>
     <div class="relay-details-card">
       <div class="relay-details-title">Proteções${relayItem?.flags_lookback ? ` <span class="relay-details-hint">disparos das últimas ${cabinMapEscape(String(relayItem.flags_lookback).replace("hours", "h").replace("days", "d"))}</span>` : ""}</div>
-      <div class="relay-flag-grid">
+      <div class="${Array.isArray(relayItem?.flags) && relayItem.flags.length ? "relay-prot-grid" : "relay-flag-grid"}">
         ${buildRelayFlagsHTML(relayItem)}
       </div>
     </div>
