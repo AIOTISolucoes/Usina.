@@ -452,10 +452,16 @@
 
         <div class="ds-v2-ctrl-group">
           <span class="ds-v2-ctrl-label">AGREGAÇÃO</span>
+          <!-- "Mediana" saiu em 17/08/2026. Ela nunca foi implementada no
+               backend e caia no fallback devolvendo a MEDIA, igualzinho ao que
+               acontecia com a Integral. Oferecer opcao que devolve outra coisa
+               e pior que nao oferecer: o cliente da Pedra Branca passou dias
+               achando que os numeros dele estavam errados.
+               Implementar de verdade exigiria percentil sobre o dado cru, que
+               as tabelas hist_* nao guardam (so avg/sum/max/min/count). -->
           <select id="dsAggregationSelect">
             <option value="avg">Média</option>
             <option value="integral">Integral</option>
-            <option value="median">Mediana</option>
             <option value="max">Máxima</option>
             <option value="sum">Soma</option>
             <option value="none">Sem agregação</option>
@@ -1032,8 +1038,37 @@
           plantInfo.textContent = (label && label.textContent !== 'Selecione usinas')
             ? label.textContent : '—';
         }
-        if (resolution && agg) resolution.textContent = agg.options[agg.selectedIndex]?.text || '—';
+        // O chip diz RESOLUCAO, entao tem que mostrar RESOLUCAO. Ate 17/08/2026
+        // ele mostrava o nome da AGREGACAO ("Media"), e a resolucao real nunca
+        // aparecia em lugar nenhum da tela. Foi isso que fez o cliente da Pedra
+        // Branca achar que os dados de julho estavam "resumidos" sem entender
+        // por que: o sistema desce sozinho para balde diario em janela longa, e
+        // ele nao tinha como saber.
+        //
+        // A resolucao de verdade so e conhecida DEPOIS da resposta (quem decide
+        // e o backend, em datastudio_choose_hist_table, pelo tamanho da janela).
+        // Por isso aqui fica o palpite pelo intervalo, e o valor medido entra
+        // depois via dsSetResolutionFromSeries().
+        if (resolution && !resolution.dataset.medido) {
+          resolution.textContent = dsResolutionGuess(si?.value, ei?.value);
+        }
       }
+
+      // Palpite local, so para o chip nao ficar vazio antes de aplicar.
+      // Espelha os cortes de datastudio_choose_hist_table no api2.py -- se
+      // aqueles mudarem, este texto passa a mentir ate a primeira resposta.
+      function dsResolutionGuess(inicio, fim) {
+        if (!inicio || !fim) return '—';
+        const a = new Date(inicio), b = new Date(fim);
+        if (isNaN(a) || isNaN(b)) return '—';
+        const dias = Math.abs(b - a) / 86400000;
+        const idade = Math.abs(Date.now() - a) / 86400000;
+        if (dias <= 2 && idade <= 7) return '5 min (previsto)';
+        if (dias <= 7)  return '15 min (previsto)';
+        if (dias <= 15) return 'Horário (previsto)';
+        return 'Diário (previsto)';
+      }
+      window._dsResolutionGuess = dsResolutionGuess;
       window._dsUpdateInfobar = updateInfobar;
       ['dsStartDateInput','dsEndDateInput','dsAggregationSelect'].forEach(id => {
         const el = document.getElementById(id);

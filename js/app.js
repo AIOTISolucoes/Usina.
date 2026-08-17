@@ -2259,6 +2259,75 @@ function dsNormalizeApiBody(data) {
   return data;
 }
 
+// --- Resolução e agregação REAIS (17/08/2026) -------------------------------
+// Quem decide a resolução é o backend (datastudio_choose_hist_table), pelo
+// tamanho da janela: até 2 dias vira 5 min, até 7 vira 15 min, até 15 vira
+// horário, acima disso vira diário. O usuário não escolhe e, até hoje, não
+// via. O cliente da Pedra Branca pediu julho inteiro, recebeu balde diário e
+// concluiu que a plataforma estava "resumindo" o dado dele.
+//
+// O backend também já dizia, em `aggregation_resolved`, quando a agregação
+// pedida não pôde ser aplicada (ex.: "avg(fallback:integral)"). Esse campo
+// existia desde sempre e o front NUNCA o leu — degradação silenciosa, a mesma
+// família do bug do assistente de IA em 15/08.
+const DS_ROTA_LABEL = {
+  hist_5min:   "5 min",
+  hist_15min:  "15 min",
+  hist_hourly: "Horário",
+  hist_daily:  "Diário",
+  hist_string: "5 min",
+  timeseries:  "Bruto",
+};
+
+function dsRotuloResolucao(rota) {
+  if (!rota) return null;
+  return DS_ROTA_LABEL[rota] || String(rota).replace(/_/g, " ");
+}
+
+function dsAplicarResolucaoMedida(payloads) {
+  const chip = document.getElementById("dsInfoResolution");
+  if (!chip) return;
+
+  const series = [];
+  for (const p of payloads) {
+    const lista = Array.isArray(p?.series) ? p.series : [];
+    for (const s of lista) series.push(s);
+  }
+  if (!series.length) return;
+
+  const rotas = [...new Set(series.map(s => dsRotuloResolucao(s?.resolved_route)).filter(Boolean))];
+  // Rotas diferentes na mesma tela são possíveis (uma série consolidada e
+  // outra histórica). Mostrar as duas é mais honesto que escolher uma.
+  chip.textContent = rotas.length ? rotas.join(" + ") : "—";
+  chip.dataset.medido = "1";
+
+  // Agregação que REALMENTE foi aplicada. `aggregation_resolved` começando com
+  // "avg(" significa que o pedido não pôde ser atendido e virou média.
+  const degradadas = series.filter(s => {
+    const r = String(s?.aggregation_resolved || "");
+    return r.startsWith("avg(") && String(s?.aggregation || "") !== "avg";
+  });
+
+  let nota = document.getElementById("dsInfoAggNote");
+  if (!nota) {
+    nota = document.createElement("span");
+    nota.id = "dsInfoAggNote";
+    nota.style.cssText = "color:#f5b93d;margin-left:8px;font-size:0.85em;";
+    chip.parentElement?.appendChild(nota);
+  }
+
+  if (degradadas.length) {
+    const pedida = degradadas[0].aggregation;
+    nota.textContent = `⚠ ${degradadas.length} série(s) sem "${pedida}"; usando média`;
+    nota.title = degradadas
+      .map(s => `${s.pathname}: ${s.aggregation_resolved}`)
+      .join("\n");
+  } else {
+    nota.textContent = "";
+    nota.title = "";
+  }
+}
+
 function dsNormalizeContextText(value) {
   return dsSafeTrim(value)
     .toLowerCase()
@@ -4140,6 +4209,12 @@ async function loadFavoriteSelections(favs) {
       }
       renderChartForPlant(pid, mergedPayload);
     }
+
+    // Mesmo motivo do caminho principal: o favorito tambem passa pelo
+    // /datastudio/series e tambem pode cair em balde diario ou ter a
+    // agregacao degradada. Corrigir so um dos dois deixaria metade da tela
+    // mentindo -- foi exatamente o que aconteceu com o alarme.py em 14/08.
+    dsAplicarResolucaoMedida(Object.values(DATASTUDIO_STATE.seriesByPlant));
   } catch (err) {
     console.error("[DataStudio] erro ao carregar favoritos:", err);
     window.alert(`Não foi possível carregar favoritos: ${err.message || err}`);
@@ -4210,6 +4285,10 @@ async function fetchDataStudioSeriesBySelection() {
       }
       renderChartForPlant(plantId, seriesPayload);
     }
+
+    // Só aqui a resolução real é conhecida: ela vem na resposta, não da
+    // escolha do usuário. Antes disso o chip mostra apenas um palpite.
+    dsAplicarResolucaoMedida(Object.values(DATASTUDIO_STATE.seriesByPlant));
   } catch (err) {
     console.error("[DataStudio] erro ao carregar séries:", err);
     window.alert(`Não foi possível carregar séries: ${err.message || err}`);
