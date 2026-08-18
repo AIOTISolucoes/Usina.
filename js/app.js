@@ -10534,16 +10534,229 @@ async function openInfraHealth() {
       </div>
       <div class="infra-body" id="infraHealthBody">
         <p class="notif-center-loading">Consultando…</p>
-      </div>
-    </div>`;
+      </div>` +
+      (_pwCanSee()
+        ? `<div style="padding:10px 14px 12px;border-top:1px solid rgba(255,255,255,0.08);">
+             <button type="button" id="infraOpenPipelineBtn"
+               style="width:100%;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);
+                      color:#e8ecf5;border-radius:8px;padding:9px 12px;font-size:12px;cursor:pointer;
+                      display:flex;align-items:center;justify-content:center;gap:8px;">
+               <i class="fa-solid fa-diagram-project"></i> Processamento e servidor
+             </button>
+           </div>`
+        : "") +
+    `</div>`;
 
   document.body.appendChild(overlay);
   const close = () => overlay.remove();
   overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
   overlay.querySelector(".notif-center-close")?.addEventListener("click", close);
+  document.getElementById("infraOpenPipelineBtn")?.addEventListener("click", openPipelineWatch);
 
   await _infraFetch();
   _infraRenderModal();
+}
+
+// ===========================================================================
+// PAINEL DO PIPELINE E DA MAQUINA (elos 5-6) -- o que foi pedido como "Airflow"
+//
+// 🔑 Nao existe Airflow neste pipeline: quem agenda sao linhas de crontab.
+// Este painel entrega a CAPACIDADE pedida (ver o que rodou, o que falhou e se
+// a maquina aguenta) lendo o que o pipeline_watch.py grava a cada 5 min.
+//
+// Restrito a admin no BACKEND (403). O gate aqui so evita oferecer um botao
+// que iria falhar -- esconder botao nunca foi seguranca.
+// ===========================================================================
+function _pwCanSee() {
+  let u = {};
+  try { u = JSON.parse(localStorage.getItem("user") || "{}"); } catch { u = {}; }
+  if (u.is_superuser === true || u.is_superuser === "true") return true;
+  const p = (u && typeof u.permissions === "object" && u.permissions) ? u.permissions : {};
+  return p.infra_alerts === true || p.infra_alerts === "true";
+}
+
+function _pwNum(v, dec) {
+  if (v === null || v === undefined || isNaN(Number(v))) return "—";
+  return Number(v).toLocaleString("pt-BR", { minimumFractionDigits: dec || 0,
+                                             maximumFractionDigits: dec || 0 });
+}
+
+function _pwBytes(v) {
+  const n = Number(v);
+  if (!isFinite(n) || n <= 0) return "—";
+  const gb = n / 1073741824;
+  if (gb >= 1) return `${gb.toFixed(1).replace(".", ",")} GB`;
+  return `${(n / 1048576).toFixed(0)} MB`;
+}
+
+async function openPipelineWatch() {
+  document.getElementById("pipelineWatchOverlay")?.remove();
+  const overlay = document.createElement("div");
+  overlay.id = "pipelineWatchOverlay";
+  overlay.className = "notif-center-overlay";
+  overlay.innerHTML = `
+    <div class="notif-center-box infra-box" role="dialog" aria-modal="true" aria-labelledby="pwTitle">
+      <div class="notif-center-head">
+        <h3 id="pwTitle"><i class="fa-solid fa-diagram-project"></i> Processamento e servidor</h3>
+        <button type="button" class="notif-center-close" aria-label="Fechar">&times;</button>
+      </div>
+      <div class="infra-body" id="pwBody">
+        <p class="notif-center-loading">Consultando…</p>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  const close = () => overlay.remove();
+  overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
+  overlay.querySelector(".notif-center-close")?.addEventListener("click", close);
+
+  let st = null;
+  try {
+    const r = await apiFetch("/infra/health?view=pipeline&hours=24");
+    if (r.status === 403) { _pwRender({ _forbidden: true }); return; }
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    st = _infraUnwrap(await r.json());
+  } catch (e) {
+    console.warn("[pipeline-watch] indisponível:", e);
+    st = null;
+  }
+  _pwRender(st);
+}
+
+function _pwRender(st) {
+  const body = document.getElementById("pwBody");
+  if (!body) return;
+
+  if (st && st._forbidden) {
+    body.innerHTML = `<p class="notif-center-loading">Painel restrito a administradores.</p>`;
+    return;
+  }
+  if (!st) {
+    body.innerHTML = `<p class="notif-center-loading">Não foi possível consultar o
+      processamento agora.</p>`;
+    return;
+  }
+  // "Ainda nao instalado" e diferente de "esta tudo bem". Dizer qual dos dois
+  // e a razao de existir de um painel de monitoramento.
+  if (st.available === false) {
+    body.innerHTML = `<p class="notif-center-loading">O vigia do processamento ainda
+      não está instalado.<br><small>${_notifEsc(st.hint || "")}</small></p>`;
+    return;
+  }
+
+  const w = st.watcher || {};
+  const s = st.summary || {};
+  const m = st.metrics || {};
+  const val = (k) => (m[k] && m[k].value !== undefined) ? m[k].value : null;
+
+  let html = "";
+
+  // 1. O vigia esta vivo? Se ele parar, TODO o resto desta tela vira retrato
+  // velho -- e retrato velho parece "tudo bem". Por isso vem primeiro.
+  html += `<div class="notif-infra-strip ${w.alive ? "ok" : "unknown"}" style="margin-bottom:10px;">
+    <i class="fa-solid ${w.alive ? "fa-circle-check" : "fa-triangle-exclamation"}"></i>
+    <span>${w.alive
+      ? `Vigia ativo, última verificação há ${_infraDur(w.age_s)}`
+      : `Vigia sem sinal${w.age_s != null ? " há " + _infraDur(w.age_s) : ""} — os números abaixo podem estar velhos`}</span>
+  </div>`;
+
+  // 2. Placar dos achados abertos.
+  const crit = s.critical || 0, warn = s.warning || 0, info = s.info || 0;
+  html += `<div style="display:flex;gap:14px;font-size:11.5px;margin-bottom:12px;">
+    <span style="color:${crit ? "#ef4444" : "rgba(255,255,255,0.45)"};">● ${crit} crítico(s)</span>
+    <span style="color:${warn ? "#eab308" : "rgba(255,255,255,0.45)"};">● ${warn} atenção</span>
+    <span style="color:${info ? "#3b82f6" : "rgba(255,255,255,0.45)"};">● ${info} informativo</span>
+    ${s.resolved ? `<span style="color:rgba(255,255,255,0.45);margin-left:auto;">${s.resolved} resolvido(s)</span>` : ""}
+  </div>`;
+
+  // 3. Os pipelines, um cartao cada. E aqui que se ve "o que rodou e o que
+  // falhou", que era o pedido.
+  const pls = st.pipelines || [];
+  if (pls.length) {
+    html += `<div class="ronda-section-title" style="font-size:10px;letter-spacing:.06em;
+      text-transform:uppercase;color:rgba(255,255,255,0.5);margin-bottom:6px;">Processamento (dbt)</div>`;
+    pls.forEach(p => {
+      const falhas = Number(p.seq_falhas || 0);
+      const skip = Number(p.skip_pct || 0);
+      const ruim = falhas > 0 || skip > 50;
+      const cor = falhas > 0 ? "#ef4444" : (skip > 50 ? "#eab308" : "#39e58c");
+      html += `<div style="display:flex;align-items:center;gap:10px;padding:7px 9px;margin-bottom:5px;
+        border-radius:8px;background:rgba(255,255,255,0.04);border-left:3px solid ${cor};">
+        <span style="flex:1;font-size:12px;font-weight:600;">${_notifEsc(p.name || "")}</span>
+        <span style="font-size:10.5px;color:rgba(255,255,255,0.6);font-family:'Space Mono',monospace;">
+          ${p.duracao_s != null ? _pwNum(p.duracao_s, 0) + "s" : "—"}
+        </span>
+        <span style="font-size:10.5px;color:rgba(255,255,255,0.6);">
+          ${p.idade_ultimo_ok_s != null ? "há " + _infraDur(p.idade_ultimo_ok_s) : "sem registro"}
+        </span>
+        <span style="font-size:10.5px;color:${ruim ? cor : "rgba(255,255,255,0.45)"};font-weight:${ruim ? 700 : 400};">
+          ${falhas > 0 ? falhas + " falha(s) seguidas" : (skip > 0 ? _pwNum(skip, 0) + "% pulado" : "ok")}
+        </span>
+      </div>`;
+    });
+  }
+
+  // 4. A maquina. Percentuais so; o numero cru de bytes vai nas tabelas.
+  const host = [
+    ["CPU", val("host:cpu_pct"), "%", 80],
+    ["Espera de disco", val("host:iowait_pct"), "%", 40],
+    ["Disco usado", val("host:disk_pct"), "%", 85],
+    ["Memória usada", val("host:mem_used_pct"), "%", 90],
+    ["Carga por núcleo", val("host:load_por_nucleo"), "", 1.5],
+  ].filter(x => x[1] !== null);
+  if (host.length) {
+    html += `<div class="ronda-section-title" style="font-size:10px;letter-spacing:.06em;
+      text-transform:uppercase;color:rgba(255,255,255,0.5);margin:12px 0 6px;">Servidor</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;">`;
+    host.forEach(([nome, v, un, teto]) => {
+      const alto = Number(v) >= teto;
+      html += `<div style="background:rgba(255,255,255,0.04);border-radius:8px;padding:7px 9px;">
+        <div style="font-size:9.5px;color:rgba(255,255,255,0.5);">${nome}</div>
+        <div style="font-size:14px;font-weight:700;font-family:'Space Mono',monospace;
+                    color:${alto ? "#ef4444" : "#e8ecf5"};">${_pwNum(v, un ? 1 : 2)}${un}</div>
+      </div>`;
+    });
+    html += `</div>`;
+  }
+
+  // 5. Tabelas que mais ocupam. Serve para responder "esta crescendo?", que e
+  // a pergunta que um retrato do instante nunca responde.
+  const rels = Object.keys(m).filter(k => k.indexOf("relacao:") === 0)
+    .map(k => [k.replace("relacao:", "").replace(":bytes", ""), val(k)])
+    .filter(x => x[1] != null).sort((a, b) => b[1] - a[1]).slice(0, 5);
+  if (rels.length) {
+    html += `<div class="ronda-section-title" style="font-size:10px;letter-spacing:.06em;
+      text-transform:uppercase;color:rgba(255,255,255,0.5);margin:12px 0 6px;">Maiores tabelas</div>`;
+    rels.forEach(([nome, v]) => {
+      html += `<div style="display:flex;justify-content:space-between;font-size:11px;
+        padding:4px 2px;border-bottom:1px solid rgba(255,255,255,0.05);">
+        <span style="color:rgba(255,255,255,0.7);">${_notifEsc(nome)}</span>
+        <span style="font-family:'Space Mono',monospace;">${_pwBytes(v)}</span>
+      </div>`;
+    });
+  }
+
+  // 6. Achados abertos, por ultimo e por extenso.
+  const abertos = (st.findings || []).filter(f => f.open);
+  if (abertos.length) {
+    html += `<div class="ronda-section-title" style="font-size:10px;letter-spacing:.06em;
+      text-transform:uppercase;color:rgba(255,255,255,0.5);margin:12px 0 6px;">O que precisa de atenção</div>`;
+    abertos.forEach(f => {
+      const cor = f.severity === "critical" ? "#ef4444"
+                : f.severity === "warning" ? "#eab308" : "#3b82f6";
+      html += `<div style="padding:7px 9px;margin-bottom:5px;border-radius:8px;
+        background:rgba(255,255,255,0.04);border-left:3px solid ${cor};">
+        <div style="font-size:11.5px;line-height:1.4;">${_notifEsc(f.summary || f.key || "")}</div>
+        <div style="font-size:9.5px;color:rgba(255,255,255,0.45);margin-top:3px;">
+          ${_notifEsc(f.family || "")}${f.duration_s != null ? " · há " + _infraDur(f.duration_s) : ""}
+        </div>
+      </div>`;
+    });
+  } else {
+    html += `<p style="font-size:11.5px;color:rgba(255,255,255,0.5);margin-top:12px;">
+      Nenhum problema aberto no processamento nem no servidor.</p>`;
+  }
+
+  body.innerHTML = html;
 }
 
 function _infraRenderModal() {
