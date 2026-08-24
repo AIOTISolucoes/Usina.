@@ -1415,6 +1415,23 @@ body::after{
   pointer-events:none;
 }
 
+/* Falha de comunicação da string (pedido do Igor, 24/08).
+   ÂMBAR de propósito, não vermelho: vermelho já é alarme elétrico (arco,
+   corrente invertida), e é para onde o técnico corre. "Não estou recebendo
+   leitura desta string" é outra coisa — pode ser o sensor, o cabo de sinal
+   ou a caixa, e não necessariamente um risco. Misturar as duas cores faria
+   alarme de verdade se perder no meio de falha de comunicação. */
+.string-card.string-nocomm{
+  border-color: rgba(245,158,11,.55);
+  background: rgba(245,158,11,.06);
+  box-shadow:
+    inset 0 0 0 1px rgba(245,158,11,.18),
+    0 6px 18px rgba(0,0,0,.35);
+}
+.string-card.string-nocomm strong{
+  color: rgba(245,158,11,.95);
+}
+
 .string-card:hover{
   transform: translateY(-1px);
   border-color: rgba(57,229,140,.42);
