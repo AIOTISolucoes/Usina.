@@ -93,6 +93,17 @@ function _canEditPlant() {
   return u.role_key === "admin_customer";
 }
 
+// Espelha o gate do backend em ?view=report-deep: `has_perm(ctx,"deep_report")`,
+// que ja deixa superusuario passar direto. Esconder o botao NAO e a seguranca --
+// a seguranca e o 403 da Lambda. Isto so evita oferecer um botao que vai falhar.
+function _canDeepReport() {
+  let u = {};
+  try { u = JSON.parse(localStorage.getItem("user") || "{}"); } catch { u = {}; }
+  if (u.is_superuser === true || u.is_superuser === "true") return true;
+  const p = (u && typeof u.permissions === "object" && u.permissions) ? u.permissions : {};
+  return p.deep_report === true || p.deep_report === "true";
+}
+
 function _dismissAppLoader() {
   const el = document.getElementById("appLoader");
   if (!el) return;
@@ -9288,11 +9299,111 @@ function _plantReportRenderMini(data, el) {
   </div>`;
   html += `<div class="ronda-toolbar">
     <button class="ronda-btn" id="plantReportExpandBtn"><i class="fa-solid fa-expand"></i> Expandir</button>
-    <button class="ronda-btn report-btn-pdf" id="plantReportPdfBtn"><i class="fa-solid fa-file-pdf"></i> PDF</button>
-  </div>`;
+    <button class="ronda-btn report-btn-pdf" id="plantReportPdfBtn"><i class="fa-solid fa-file-pdf"></i> PDF</button>` +
+    (_canDeepReport()
+      ? `<button class="ronda-btn" id="plantReportDeepBtn" title="Análise escrita por IA sobre os dados deste período"><i class="fa-solid fa-wand-magic-sparkles"></i> Análise IA</button>`
+      : "") +
+  `</div>
+  <div id="plantReportDeepBox" class="ronda-section" style="display:none;margin-top:8px;"></div>`;
   el.innerHTML = html;
   document.getElementById("plantReportExpandBtn")?.addEventListener("click", () => _plantReportOpenFull(data));
   document.getElementById("plantReportPdfBtn")?.addEventListener("click", () => _plantReportDownloadPdf(data));
+  document.getElementById("plantReportDeepBtn")?.addEventListener("click", _plantReportDeepRun);
+}
+
+// ---------------------------------------------------------------------------
+// Analise profunda (IA). O texto vem PRONTO da Lambda, ja passado pelo
+// verificador de numero e pelo filtro de palpite -- o frontend NAO reescreve
+// nada, so exibe. Se um dia a IA cair, a rota devolve erro e o relatorio
+// normal acima continua inteiro: a analise ACRESCENTA, nunca substitui.
+// ---------------------------------------------------------------------------
+let _PLANT_DEEP_LOADING = false;
+
+async function _plantReportDeepRun() {
+  if (_PLANT_DEEP_LOADING) return;
+  const box = document.getElementById("plantReportDeepBox");
+  const btn = document.getElementById("plantReportDeepBtn");
+  if (!box) return;
+  _PLANT_DEEP_LOADING = true;
+  if (btn) btn.disabled = true;
+  box.style.display = "";
+  box.innerHTML = `<div class="ronda-loading"><i class="fa-solid fa-spinner fa-spin"></i><br>
+    Analisando os dados do período…</div>`;
+  try {
+    const p = (_PLANT_REPORT_DATA && _PLANT_REPORT_DATA.period) || {};
+    let url = `${API_BASE}/plants/${PLANT_ID}/realtime?view=report-deep`;
+    if (p.start) url += `&start=${encodeURIComponent(p.start)}`;
+    if (p.end) url += `&end=${encodeURIComponent(p.end)}`;
+    const user = JSON.parse(localStorage.getItem("user") || "{}");
+    const headers = {};
+    if (user.token) headers["Authorization"] = `Bearer ${user.token}`;
+    const res = await fetch(url, { headers, cache: "no-store" });
+    if (res.status === 403) {
+      box.innerHTML = `<div class="ronda-error"><i class="fa-solid fa-lock"></i>
+        Recurso restrito à equipe AIOTI.</div>`;
+      return;
+    }
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    let data = await res.json();
+    if (data && data.body) data = typeof data.body === "string" ? JSON.parse(data.body) : data.body;
+    _plantReportDeepRender(data, box);
+  } catch (e) {
+    console.error("[REPORT-DEEP]", e);
+    // Degradar dizendo O QUE falhou. Mensagem generica de "indisponivel" foi o
+    // defeito que deixou a camada de IA muda por semanas sem ninguem notar.
+    box.innerHTML = `<div class="ronda-error"><i class="fa-solid fa-triangle-exclamation"></i>
+      Não foi possível gerar a análise agora (${cabinMapEscape(e.message)}).
+      O relatório acima continua válido.</div>`;
+  } finally {
+    _PLANT_DEEP_LOADING = false;
+    if (btn) btn.disabled = false;
+  }
+}
+
+function _plantReportDeepLista(valor) {
+  const frases = Array.isArray(valor) ? valor : String(valor || "").split(/\n+/);
+  return frases.map(t => String(t).trim()).filter(Boolean);
+}
+
+function _plantReportDeepRender(data, box) {
+  const meta = (data && data.meta) || {};
+  const analise = _plantReportDeepLista(data && data.analise);
+  // As recomendacoes sobem no topo da resposta desde 18/08, mas continuam
+  // tambem dentro de `meta` -- ler as duas posicoes evita depender de qual
+  // versao da Lambda esta no ar no momento.
+  const recs = _plantReportDeepLista(
+    (data && data.recomendacoes) || meta.recomendacoes);
+
+  if (!analise.length && !recs.length) {
+    box.innerHTML = `<div class="ronda-error"><i class="fa-solid fa-circle-info"></i>
+      A análise não retornou texto desta vez. Tente novamente em instantes.</div>`;
+    return;
+  }
+
+  const li = (t) => `<li style="margin-bottom:6px;line-height:1.45;">${cabinMapEscape(t)}</li>`;
+  let html = "";
+  if (analise.length) {
+    html += `<div class="ronda-section-title"><i class="fa-solid fa-wand-magic-sparkles"></i> Análise IA</div>
+      <ul style="margin:6px 0 0 16px;padding:0;font-size:11.5px;">${analise.map(li).join("")}</ul>`;
+  }
+  // Bloco proprio, e nao uma frase perdida no meio da analise: recomendacao e
+  // o que faz alguem PEGAR A ESTRADA, entao precisa ser achavel de relance.
+  if (recs.length) {
+    html += `<div class="ronda-section-title" style="margin-top:12px;">
+        <i class="fa-solid fa-list-check"></i> O que fazer a seguir</div>
+      <ul style="margin:6px 0 0 16px;padding:0;font-size:11.5px;">${recs.map(li).join("")}</ul>`;
+  }
+  const descartadas = Number(meta.descartadas || meta.filtradas || 0);
+  html += `
+    <div style="margin-top:8px;font-size:9.5px;color:rgba(255,255,255,0.45);line-height:1.4;">
+      Texto redigido por IA a partir dos dados medidos. Todo número foi conferido
+      contra o banco, e toda afirmação de tendência foi conferida contra a série
+      medida${descartadas ? `; ${descartadas} trecho(s) foram descartados por não conferir` : ""}.
+      As ações sugeridas apontam o que verificar — nunca a causa, que é de quem
+      abre o painel.
+      ${meta.modelo ? "Modelo " + cabinMapEscape(String(meta.modelo)) + "." : ""}
+    </div>`;
+  box.innerHTML = html;
 }
 
 function _plantReportOpenFull(data) {
