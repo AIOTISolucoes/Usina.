@@ -7795,16 +7795,17 @@ async function refreshRealtimeEverything() {
       TRACKERS_PLANT_BOUNDS = trackersPayload?.plant_bounds ?? null;
 
       const catalogHasTracker = PLANT_CAPABILITIES.hasTracker === true;
-      if (!catalogHasTracker) {
+      const hasOrthomosaic = await ensureTrackersOrthomosaicForCurrentPlant();
+      if (!catalogHasTracker && !hasOrthomosaic) {
         setTrackersSectionVisible(false);
       } else {
         const hasTrackerData = TRACKERS_DATA.some(
           (t) => Number.isFinite(Number(t.latitude)) && Number.isFinite(Number(t.longitude))
         );
-        if (hasTrackerData) TRACKERS_LAST_HAS_DATA = true;
+        if (hasTrackerData || hasOrthomosaic) TRACKERS_LAST_HAS_DATA = true;
 
         if (!TRACKERS_USER_OPENED) {
-          setTrackersSectionVisible(hasTrackerData);
+          setTrackersSectionVisible(hasTrackerData || hasOrthomosaic);
         } else {
           setTrackersSectionVisible(TRACKERS_LAST_HAS_DATA);
         }
@@ -7815,13 +7816,18 @@ async function refreshRealtimeEverything() {
             trackersSection &&
             !trackersSection.classList.contains("trackers-hidden") &&
             !trackersSection.classList.contains("is-collapsed");
-          if (trackersVisible && hasTrackerData) renderTrackersPanel();
+          if (trackersVisible && (hasTrackerData || hasOrthomosaic)) renderTrackersPanel();
         }
       }
     } else {
       TRACKERS_DATA = [];
       TRACKERS_PLANT_CENTER = null;
       TRACKERS_PLANT_BOUNDS = null;
+      const hasOrthomosaic = await ensureTrackersOrthomosaicForCurrentPlant();
+      if (hasOrthomosaic) {
+        TRACKERS_LAST_HAS_DATA = true;
+        setTrackersSectionVisible(true);
+      }
       renderTrackersPanel();
       console.error("[refreshRealtimeEverything][trackers] erro", trackersRes.reason);
     }
@@ -7874,6 +7880,228 @@ let TRACKERS_USER_OPENED = false;
 let TRACKERS_LAST_HAS_DATA = false;
 let TRACKERS_MAP = null;
 let TRACKERS_MARKERS_LAYER = null;
+let TRACKERS_ORTHO_LAYER = null;
+let TRACKERS_ORTHO_MANIFEST = null;
+let TRACKERS_ORTHO_ENTRY = null;
+let TRACKERS_ORTHO_MODE = "original";
+let TRACKERS_ORTHO_CATALOG_PROMISE = null;
+let TRACKERS_ORTHO_MANIFEST_PROMISE = null;
+const TRACKERS_ORTHO_TILES = new Map();
+const TRACKERS_ORTHO_CATALOG_URL = "assets/orthomosaics/catalog.json?v=20260829";
+
+function normalizeTrackerPlantName(value) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "")
+    .trim();
+}
+
+async function loadTrackersOrthomosaicCatalog() {
+  if (!TRACKERS_ORTHO_CATALOG_PROMISE) {
+    TRACKERS_ORTHO_CATALOG_PROMISE = fetch(TRACKERS_ORTHO_CATALOG_URL, { cache: "force-cache" })
+      .then((res) => {
+        if (!res.ok) throw new Error(`catálogo de ortomosaicos: HTTP ${res.status}`);
+        return res.json();
+      })
+      .then((payload) => Array.isArray(payload?.items) ? payload.items : [])
+      .catch((error) => {
+        TRACKERS_ORTHO_CATALOG_PROMISE = null;
+        console.warn("[trackers/orthomosaic] catálogo indisponível", error);
+        return [];
+      });
+  }
+  return TRACKERS_ORTHO_CATALOG_PROMISE;
+}
+
+function findTrackersOrthomosaicEntry(catalog) {
+  const plantId = Number(PLANT_ID);
+  const plantName = normalizeTrackerPlantName(PLANT_STATE?.name);
+  return (catalog || []).find((entry) => {
+    const idMatch = Number.isFinite(plantId)
+      && Array.isArray(entry?.plant_ids)
+      && entry.plant_ids.some((id) => Number(id) === plantId);
+    const names = [entry?.name, ...(Array.isArray(entry?.aliases) ? entry.aliases : [])]
+      .map(normalizeTrackerPlantName)
+      .filter(Boolean);
+    return idMatch || (!!plantName && names.includes(plantName));
+  }) || null;
+}
+
+function trackerOrthoHasValidBounds(source = TRACKERS_ORTHO_MANIFEST) {
+  const bounds = source?.bounds;
+  return Array.isArray(bounds)
+    && bounds.length === 2
+    && bounds.every((point) => Array.isArray(point)
+      && point.length === 2
+      && point.every((value) => Number.isFinite(Number(value))));
+}
+
+function formatTrackersOrthomosaicDate(value) {
+  if (!value) return "Levantamento georreferenciado";
+  const [year, month, day] = String(value).split("-").map(Number);
+  if (!year || !month || !day) return "Levantamento georreferenciado";
+  return `Captura de ${String(day).padStart(2, "0")}/${String(month).padStart(2, "0")}/${year}`;
+}
+
+function getTrackersOrthomosaicOpacity() {
+  if (TRACKERS_ORTHO_MODE === "transparent") return 0.56;
+  if (TRACKERS_ORTHO_MODE === "hidden") return 0;
+  return 1;
+}
+
+function updateTrackersOrthomosaicUi() {
+  const card = document.getElementById("trackersOrthoCard");
+  const meta = document.getElementById("trackersOrthoMeta");
+  const available = !!TRACKERS_ORTHO_ENTRY;
+  if (card) card.hidden = !available;
+  document.querySelectorAll("[data-ortho-mode]").forEach((button) => {
+    const active = available && button.dataset.orthoMode === TRACKERS_ORTHO_MODE;
+    button.classList.toggle("is-active", active);
+    button.setAttribute("aria-pressed", active ? "true" : "false");
+    button.disabled = !available;
+  });
+  if (meta) {
+    meta.textContent = TRACKERS_ORTHO_MANIFEST
+      ? formatTrackersOrthomosaicDate(TRACKERS_ORTHO_MANIFEST.captured_at)
+      : "Carregando imagem aérea…";
+  }
+}
+
+function clearTrackersOrthomosaicTiles() {
+  TRACKERS_ORTHO_TILES.forEach((overlay) => {
+    if (TRACKERS_ORTHO_LAYER) TRACKERS_ORTHO_LAYER.removeLayer(overlay);
+  });
+  TRACKERS_ORTHO_TILES.clear();
+}
+
+function updateTrackersOrthomosaicTiles() {
+  if (!TRACKERS_MAP || !TRACKERS_ORTHO_LAYER || TRACKERS_ORTHO_MODE === "hidden" || !TRACKERS_ORTHO_MANIFEST) {
+    clearTrackersOrthomosaicTiles();
+    return;
+  }
+
+  const manifest = TRACKERS_ORTHO_MANIFEST;
+  const minLevel = Number(manifest.min_level) || 1;
+  const maxLevel = Number(manifest.max_level) || minLevel;
+  const offset = Number(manifest.zoom_level_offset) || 15;
+  const opacity = getTrackersOrthomosaicOpacity();
+  const level = Math.max(minLevel, Math.min(maxLevel, Math.round(TRACKERS_MAP.getZoom() - offset)));
+  const tiles = Array.isArray(manifest.levels?.[String(level)]) ? manifest.levels[String(level)] : [];
+  const view = TRACKERS_MAP.getBounds().pad(0.18);
+  const wanted = new Map();
+
+  tiles.forEach((tile) => {
+    if (!Array.isArray(tile) || tile.length < 5) return;
+    const [south, west, north, east, path] = tile;
+    if (Number(north) < view.getSouth() || Number(south) > view.getNorth()
+      || Number(east) < view.getWest() || Number(west) > view.getEast()) return;
+    wanted.set(`${level}:${path}`, tile);
+  });
+
+  TRACKERS_ORTHO_TILES.forEach((overlay, key) => {
+    if (wanted.has(key)) {
+      overlay.setOpacity(opacity);
+      return;
+    }
+    TRACKERS_ORTHO_LAYER.removeLayer(overlay);
+    TRACKERS_ORTHO_TILES.delete(key);
+  });
+
+  wanted.forEach((tile, key) => {
+    if (TRACKERS_ORTHO_TILES.has(key)) return;
+    const [south, west, north, east, path] = tile;
+    const url = encodeURI(`${manifest.tile_base_url}${path}`);
+    const overlay = L.imageOverlay(url, [[south, west], [north, east]], {
+      pane: "trackersOrthomosaicPane",
+      opacity,
+      interactive: false,
+      className: "tracker-orthomosaic-tile"
+    });
+    overlay.addTo(TRACKERS_ORTHO_LAYER);
+    TRACKERS_ORTHO_TILES.set(key, overlay);
+  });
+}
+
+async function ensureTrackersOrthomosaicForCurrentPlant() {
+  const catalog = await loadTrackersOrthomosaicCatalog();
+  const entry = findTrackersOrthomosaicEntry(catalog);
+  if (!entry) {
+    TRACKERS_ORTHO_ENTRY = null;
+    TRACKERS_ORTHO_MANIFEST = null;
+    TRACKERS_ORTHO_MANIFEST_PROMISE = null;
+    clearTrackersOrthomosaicTiles();
+    updateTrackersOrthomosaicUi();
+    return false;
+  }
+
+  if (TRACKERS_ORTHO_ENTRY?.slug === entry.slug && TRACKERS_ORTHO_MANIFEST) {
+    updateTrackersOrthomosaicUi();
+    updateTrackersOrthomosaicTiles();
+    return true;
+  }
+  if (TRACKERS_ORTHO_ENTRY?.slug === entry.slug && TRACKERS_ORTHO_MANIFEST_PROMISE) {
+    try {
+      await TRACKERS_ORTHO_MANIFEST_PROMISE;
+      return !!TRACKERS_ORTHO_MANIFEST;
+    } catch {
+      return false;
+    }
+  }
+
+  TRACKERS_ORTHO_ENTRY = entry;
+  TRACKERS_ORTHO_MANIFEST = null;
+  clearTrackersOrthomosaicTiles();
+  updateTrackersOrthomosaicUi();
+  const expectedSlug = entry.slug;
+  TRACKERS_ORTHO_MANIFEST_PROMISE = fetch(`${entry.manifest_url}?v=20260829`, { cache: "force-cache" })
+    .then((res) => {
+      if (!res.ok) throw new Error(`${entry.name}: HTTP ${res.status}`);
+      return res.json();
+    });
+
+  try {
+    const manifest = await TRACKERS_ORTHO_MANIFEST_PROMISE;
+    if (TRACKERS_ORTHO_ENTRY?.slug !== expectedSlug) return false;
+    TRACKERS_ORTHO_MANIFEST = manifest;
+    updateTrackersOrthomosaicUi();
+    updateTrackersOrthomosaicTiles();
+    return true;
+  } catch (error) {
+    console.warn("[trackers/orthomosaic] manifest indisponível", error);
+    if (TRACKERS_ORTHO_ENTRY?.slug === expectedSlug) {
+      TRACKERS_ORTHO_ENTRY = null;
+      TRACKERS_ORTHO_MANIFEST = null;
+      updateTrackersOrthomosaicUi();
+    }
+    return false;
+  } finally {
+    TRACKERS_ORTHO_MANIFEST_PROMISE = null;
+  }
+}
+
+function fitTrackersMapToContent() {
+  if (!TRACKERS_MAP) return;
+  if (trackerOrthoHasValidBounds()) {
+    TRACKERS_MAP.fitBounds(TRACKERS_ORTHO_MANIFEST.bounds, { padding: [18, 18], maxZoom: 20 });
+  } else if (TRACKERS_PLANT_BOUNDS &&
+    Number.isFinite(Number(TRACKERS_PLANT_BOUNDS.min_lat)) &&
+    Number.isFinite(Number(TRACKERS_PLANT_BOUNDS.max_lat)) &&
+    Number.isFinite(Number(TRACKERS_PLANT_BOUNDS.min_lng)) &&
+    Number.isFinite(Number(TRACKERS_PLANT_BOUNDS.max_lng))) {
+    TRACKERS_MAP.fitBounds([
+      [Number(TRACKERS_PLANT_BOUNDS.min_lat), Number(TRACKERS_PLANT_BOUNDS.min_lng)],
+      [Number(TRACKERS_PLANT_BOUNDS.max_lat), Number(TRACKERS_PLANT_BOUNDS.max_lng)]
+    ], { padding: [20, 20] });
+  } else if (TRACKERS_PLANT_CENTER &&
+    Number.isFinite(Number(TRACKERS_PLANT_CENTER.latitude)) &&
+    Number.isFinite(Number(TRACKERS_PLANT_CENTER.longitude))) {
+    TRACKERS_MAP.setView([Number(TRACKERS_PLANT_CENTER.latitude), Number(TRACKERS_PLANT_CENTER.longitude)], 18);
+  } else {
+    TRACKERS_MAP.setView([-14.235, -51.9253], 4);
+  }
+}
 
 // 🔑 12/08/2026 — este vocabulário TEM que ser o mesmo que o
 // /trackers/realtime emite. Ele listava 10 estados copiados do gerador de
@@ -8091,7 +8319,11 @@ function renderTrackersNodes() {
 
   const fallback = document.getElementById("trackersMapFallback");
   if (!valid.length) {
-    if (fallback) fallback.hidden = false;
+    if (fallback) fallback.hidden = !!TRACKERS_ORTHO_MANIFEST;
+    if (TRACKERS_ORTHO_MANIFEST && !TRACKERS_HAS_FITTED_ONCE) {
+      fitTrackersMapToContent();
+      if (trackersMapIsSized()) TRACKERS_HAS_FITTED_ONCE = true;
+    }
     return;
   }
   if (fallback) fallback.hidden = true;
@@ -8129,19 +8361,8 @@ function renderTrackersNodes() {
   });
 
   if (!TRACKERS_HAS_FITTED_ONCE) {
-    if (TRACKERS_PLANT_BOUNDS &&
-        Number.isFinite(Number(TRACKERS_PLANT_BOUNDS.min_lat)) &&
-        Number.isFinite(Number(TRACKERS_PLANT_BOUNDS.max_lat)) &&
-        Number.isFinite(Number(TRACKERS_PLANT_BOUNDS.min_lng)) &&
-        Number.isFinite(Number(TRACKERS_PLANT_BOUNDS.max_lng))) {
-      TRACKERS_MAP.fitBounds([
-        [Number(TRACKERS_PLANT_BOUNDS.min_lat), Number(TRACKERS_PLANT_BOUNDS.min_lng)],
-        [Number(TRACKERS_PLANT_BOUNDS.max_lat), Number(TRACKERS_PLANT_BOUNDS.max_lng)]
-      ], { padding: [20, 20] });
-    } else if (TRACKERS_PLANT_CENTER &&
-        Number.isFinite(Number(TRACKERS_PLANT_CENTER.latitude)) &&
-        Number.isFinite(Number(TRACKERS_PLANT_CENTER.longitude))) {
-      TRACKERS_MAP.setView([Number(TRACKERS_PLANT_CENTER.latitude), Number(TRACKERS_PLANT_CENTER.longitude)], 18);
+    if (trackerOrthoHasValidBounds() || TRACKERS_PLANT_BOUNDS || TRACKERS_PLANT_CENTER) {
+      fitTrackersMapToContent();
     } else if (bounds.length) {
       TRACKERS_MAP.fitBounds(bounds, { padding: [20, 20] });
     }
@@ -8154,6 +8375,8 @@ function renderTrackersNodes() {
 
 function renderTrackersPanel() {
   renderTrackersLegend();
+  updateTrackersOrthomosaicUi();
+  updateTrackersOrthomosaicTiles();
   renderTrackersNodes();
 }
 
@@ -8213,19 +8436,43 @@ function initTrackersPanel() {
   TRACKERS_HAS_FITTED_ONCE = false;
   TRACKERS_MAP = L.map(mapEl, {
     zoomControl: false,
-    attributionControl: false
+    attributionControl: true,
+    minZoom: 3,
+    maxZoom: 23,
+    dragging: true,
+    touchZoom: true,
+    scrollWheelZoom: true,
+    doubleClickZoom: true,
+    boxZoom: true,
+    keyboard: true
   }).setView([-14.235, -51.9253], 4);
+  TRACKERS_MAP.attributionControl.setPrefix(false);
 
-  L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
-    subdomains: "abcd",
-    maxZoom: 20
+  L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    maxNativeZoom: 19,
+    maxZoom: 23,
+    attribution: "&copy; OpenStreetMap contributors"
   }).addTo(TRACKERS_MAP);
+  TRACKERS_MAP.createPane("trackersOrthomosaicPane");
+  TRACKERS_MAP.getPane("trackersOrthomosaicPane").style.zIndex = "250";
+  TRACKERS_ORTHO_LAYER = L.layerGroup().addTo(TRACKERS_MAP);
   TRACKERS_MARKERS_LAYER = L.layerGroup().addTo(TRACKERS_MAP);
+  TRACKERS_MAP.on("moveend zoomend", updateTrackersOrthomosaicTiles);
 
   document.getElementById("trackerModeState")?.addEventListener("click", () => setTrackerMode("state"));
   document.getElementById("trackerModeAngle")?.addEventListener("click", () => setTrackerMode("angle"));
   document.getElementById("trackerModeError")?.addEventListener("click", () => setTrackerMode("error"));
   document.getElementById("trackersSearchInput")?.addEventListener("input", (e) => filterTrackers(e.target.value));
+  document.querySelectorAll("[data-ortho-mode]").forEach((button) => {
+    button.addEventListener("click", () => {
+      if (!TRACKERS_ORTHO_ENTRY) return;
+      const mode = button.dataset.orthoMode;
+      if (!["original", "transparent", "hidden"].includes(mode)) return;
+      TRACKERS_ORTHO_MODE = mode;
+      updateTrackersOrthomosaicUi();
+      updateTrackersOrthomosaicTiles();
+    });
+  });
 
   document.getElementById("trackersZoomIn")?.addEventListener("click", () => {
     if (TRACKERS_MAP) TRACKERS_MAP.zoomIn();
@@ -8234,25 +8481,10 @@ function initTrackersPanel() {
     if (TRACKERS_MAP) TRACKERS_MAP.zoomOut();
   });
   document.getElementById("trackersZoomReset")?.addEventListener("click", () => {
-    if (!TRACKERS_MAP) return;
-    if (TRACKERS_PLANT_BOUNDS &&
-      Number.isFinite(Number(TRACKERS_PLANT_BOUNDS.min_lat)) &&
-      Number.isFinite(Number(TRACKERS_PLANT_BOUNDS.max_lat)) &&
-      Number.isFinite(Number(TRACKERS_PLANT_BOUNDS.min_lng)) &&
-      Number.isFinite(Number(TRACKERS_PLANT_BOUNDS.max_lng))) {
-      TRACKERS_MAP.fitBounds([
-        [Number(TRACKERS_PLANT_BOUNDS.min_lat), Number(TRACKERS_PLANT_BOUNDS.min_lng)],
-        [Number(TRACKERS_PLANT_BOUNDS.max_lat), Number(TRACKERS_PLANT_BOUNDS.max_lng)]
-      ], { padding: [20, 20] });
-    } else if (TRACKERS_PLANT_CENTER &&
-      Number.isFinite(Number(TRACKERS_PLANT_CENTER.latitude)) &&
-      Number.isFinite(Number(TRACKERS_PLANT_CENTER.longitude))) {
-      TRACKERS_MAP.setView([Number(TRACKERS_PLANT_CENTER.latitude), Number(TRACKERS_PLANT_CENTER.longitude)], 18);
-    } else {
-      TRACKERS_MAP.setView([-14.235, -51.9253], 4);
-    }
+    fitTrackersMapToContent();
   });
 
+  void loadTrackersOrthomosaicCatalog();
   renderTrackersPanel();
   setTrackersSectionVisible(false);
   setTrackersCollapsed(true);
@@ -9456,6 +9688,26 @@ function _rpSparkP(values, color, w, h) {
   return `<svg viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" style="display:block;"><polyline points="${pts}" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
 }
 
+function _rpInvTempSparkP(series, w = 180, h = 46, fallbackAvg = null, fallbackMax = null) {
+  const valid = value => value !== null && value !== undefined && value !== "" && Number.isFinite(Number(value));
+  const rows = (Array.isArray(series) ? series : []).filter(r => r && (valid(r.avg_temp_c) || valid(r.max_temp_c)));
+  if (rows.length < 2) {
+    if (!valid(fallbackAvg)) return `<span style="color:rgba(255,255,255,.35);font-size:9px;">sem temperatura medida</span>`;
+    const avg = Number(fallbackAvg), max = valid(fallbackMax) ? Number(fallbackMax) : null;
+    const pct = Math.max(2, Math.min(100, ((avg - 20) / 60) * 100));
+    const maxPct = max === null ? null : Math.max(2, Math.min(100, ((max - 20) / 60) * 100));
+    return `<div title="Média interna do período: ${avg.toFixed(1)} °C${max===null?'':` · máxima: ${max.toFixed(1)} °C`}" style="position:relative;width:100%;max-width:${w}px;height:9px;margin:7px 0;background:rgba(255,255,255,.07);border-radius:9px;overflow:visible;"><div style="height:100%;width:${pct}%;background:#60a5fa;border-radius:9px;"></div>${maxPct===null?'':`<span style="position:absolute;left:${maxPct}%;top:-2px;width:3px;height:13px;background:#f97316;border-radius:2px;"></span>`}</div>`;
+  }
+  const vals = rows.flatMap(r => [r.avg_temp_c, r.max_temp_c]).filter(valid).map(Number);
+  let min = Math.min(...vals) - 1, max = Math.max(...vals) + 1;
+  if (max <= min) max = min + 1;
+  const x = i => 3 + i / Math.max(rows.length - 1, 1) * (w - 6);
+  const y = v => 3 + (max - Number(v)) / (max - min) * (h - 6);
+  const pts = key => rows.map((r, i) => valid(r[key]) ? `${x(i).toFixed(1)},${y(r[key]).toFixed(1)}` : null).filter(Boolean).join(" ");
+  const dots = rows.map((r, i) => { const d = String(r.date || "").split("-").reverse().join("/"); return `${valid(r.avg_temp_c) ? `<circle cx="${x(i)}" cy="${y(r.avg_temp_c)}" r="2.4" fill="#60a5fa"><title>${d} · média interna ${Number(r.avg_temp_c).toFixed(1)} °C</title></circle>` : ""}${valid(r.max_temp_c) ? `<circle cx="${x(i)}" cy="${y(r.max_temp_c)}" r="2.4" fill="#f97316"><title>${d} · máxima interna ${Number(r.max_temp_c).toFixed(1)} °C</title></circle>` : ""}`; }).join("");
+  return `<svg viewBox="0 0 ${w} ${h}" style="display:block;width:100%;max-width:${w}px;height:${h}px;"><line x1="3" y1="${h-3}" x2="${w-3}" y2="${h-3}" stroke="rgba(255,255,255,.08)"/><polyline points="${pts("avg_temp_c")}" fill="none" stroke="#60a5fa" stroke-width="2"/><polyline points="${pts("max_temp_c")}" fill="none" stroke="#f97316" stroke-width="1.5"/>${dots}</svg>`;
+}
+
 function _plantReportRenderMini(data, el) {
   const p = data.period || {};
   const s = data.summary || {};
@@ -9482,6 +9734,19 @@ function _plantReportRenderMini(data, el) {
     html += `<div class="ronda-section"><div class="ronda-section-title"><i class="fa-solid fa-bolt"></i> Inversores — Destaque</div>`;
     if (worst && worst.vs_fleet === "abaixo") html += `<div style="display:flex;align-items:center;gap:6px;font-size:11px;padding:2px 0;"><span style="color:#ef4444;font-weight:700;">▼</span> ${worst.inverter_name} <span style="font-family:'Space Mono',monospace;color:#ef4444;">PR ${_rpFmtP(worst.avg_pr_pct,1)}%</span> <span class="ronda-perf-badge ronda-perf-abaixo">abaixo</span></div>`;
     if (best && best.vs_fleet === "acima") html += `<div style="display:flex;align-items:center;gap:6px;font-size:11px;padding:2px 0;"><span style="color:#39e58c;font-weight:700;">▲</span> ${best.inverter_name} <span style="font-family:'Space Mono',monospace;color:#39e58c;">PR ${_rpFmtP(best.avg_pr_pct,1)}%</span> <span class="ronda-perf-badge ronda-perf-acima">acima</span></div>`;
+    html += `</div>`;
+  }
+  const tempInvs = invs.filter(inv => inv.avg_temp_c !== null && inv.avg_temp_c !== undefined)
+    .sort((a, b) => Number(b.avg_temp_c) - Number(a.avg_temp_c));
+  if (tempInvs.length) {
+    const ordered = tempInvs.map(inv => Number(inv.avg_temp_c)).sort((a, b) => a - b);
+    const mid = Math.floor(ordered.length / 2);
+    const median = ordered.length % 2 ? ordered[mid] : (ordered[mid - 1] + ordered[mid]) / 2;
+    html += `<div class="ronda-section"><div class="ronda-section-title"><i class="fa-solid fa-temperature-half"></i> Temperatura interna por inversor</div><div style="font-size:9px;color:rgba(255,255,255,.48);margin-bottom:7px;">Mediana da frota: <b style="color:#e2e8f0;">${_rpFmtP(median,1)} °C</b> · <span style="color:#60a5fa;">azul média</span> · <span style="color:#f97316;">laranja máxima</span></div>`;
+    tempInvs.forEach(inv => {
+      const delta = Number(inv.avg_temp_c) - median, hot = delta >= 5;
+      html += `<div style="padding:6px 0;border-top:1px solid rgba(255,255,255,.06);"><div style="display:flex;justify-content:space-between;gap:8px;font-size:10px;"><span style="font-weight:650;color:${hot?'#f97316':'rgba(255,255,255,.82)'};">${inv.inverter_name||"Inv"+inv.device_id}</span><span style="font-family:'Space Mono',monospace;color:rgba(255,255,255,.68);">méd. <b style="color:#60a5fa;">${_rpFmtP(inv.avg_temp_c,1)}°</b> · máx. <b style="color:#f97316;">${_rpFmtP(inv.max_temp_c,1)}°</b> · Δ ${delta>=0?'+':''}${_rpFmtP(delta,1)}°</span></div>${_rpInvTempSparkP(inv.daily_temperature||[],270,42,inv.avg_temp_c,inv.max_temp_c)}</div>`;
+    });
     html += `</div>`;
   }
   const totalAlarms = data.total_alarms || 0;
@@ -9708,12 +9973,26 @@ function _plantReportOpenFull(data) {
   if (trend.length > 1) body += `<div class="ronda-card span-full" style="${cd()}"><div class="ronda-card-header"><div class="ronda-card-icon icon-bolt">${svgTrend}</div><div><div class="ronda-card-title">Tendência Diária</div><div class="ronda-card-subtitle">Geração (kWh) e PR (%)</div></div></div><div class="ronda-card-body" style="padding:10px 12px;">${trendSVG()}</div></div>`;
 
   if (invs.length) {
-    body += `<div class="ronda-card span-full" style="${cd()}"><div class="ronda-card-header"><div class="ronda-card-icon icon-bolt">${svgBolt}</div><div><div class="ronda-card-title">Performance por Inversor</div><div class="ronda-card-subtitle">${invs.length} unidades</div></div></div><div class="ronda-card-body" style="padding:0;"><div style="overflow-x:auto;"><table class="ronda-full-inv-table"><thead><tr><th>Inversor</th><th>Pot. Média</th><th>Energia</th><th>PR Méd</th><th>vs Média</th><th>Disponib.</th><th>Tend.</th></tr></thead><tbody>`;
+    body += `<div class="ronda-card span-full" style="${cd()}"><div class="ronda-card-header"><div class="ronda-card-icon icon-bolt">${svgBolt}</div><div><div class="ronda-card-title">Performance por Inversor</div><div class="ronda-card-subtitle">${invs.length} unidades</div></div></div><div class="ronda-card-body" style="padding:0;"><div style="overflow-x:auto;"><table class="ronda-full-inv-table"><thead><tr><th>Inversor</th><th>Pot. Média</th><th>Energia</th><th>PR Méd</th><th>Temp. média</th><th>Temp. máxima</th><th>vs Média</th><th>Disponib.</th><th>Tend.</th></tr></thead><tbody>`;
     invs.forEach(inv => {
       const vc = inv.vs_fleet && inv.vs_fleet !== "sem_dados" ? `ronda-full-perf-${inv.vs_fleet}` : "";
       const ar = inv.vs_fleet==="acima"?"▲":inv.vs_fleet==="abaixo"?"▼":"";
       const sc = inv.vs_fleet==="abaixo"?"#ef4444":inv.vs_fleet==="acima"?"#39e58c":"#60a5fa";
-      body += `<tr><td style="font-weight:600;">${inv.inverter_name||"Inv"+inv.device_id}</td><td>${_rpFmtP(inv.avg_power_kw,1)} kW</td><td>${_rpFmtP(inv.total_energy_kwh,0)} kWh</td><td style="font-weight:700;">${_rpFmtP(inv.avg_pr_pct,1)}%</td><td><span class="ronda-full-perf-badge ${vc}">${ar} ${inv.vs_fleet==="sem_dados"?"—":inv.vs_fleet}</span></td><td>${_rpFmtP(inv.availability_pct,1)}%</td><td>${miniSpark(inv.daily_energy||[],sc)}</td></tr>`;
+      body += `<tr><td style="font-weight:600;">${inv.inverter_name||"Inv"+inv.device_id}</td><td>${_rpFmtP(inv.avg_power_kw,1)} kW</td><td>${_rpFmtP(inv.total_energy_kwh,0)} kWh</td><td style="font-weight:700;">${_rpFmtP(inv.avg_pr_pct,1)}%</td><td style="color:#60a5fa;font-weight:700;">${_rpFmtP(inv.avg_temp_c,1)} °C</td><td style="color:#f97316;font-weight:700;">${_rpFmtP(inv.max_temp_c,1)} °C</td><td><span class="ronda-full-perf-badge ${vc}">${ar} ${inv.vs_fleet==="sem_dados"?"—":inv.vs_fleet}</span></td><td>${_rpFmtP(inv.availability_pct,1)}%</td><td>${miniSpark(inv.daily_energy||[],sc)}</td></tr>`;
+    });
+    body += `</tbody></table></div></div></div>`;
+  }
+
+  const _tempInvs = invs.filter(inv => inv.avg_temp_c !== null && inv.avg_temp_c !== undefined)
+    .sort((a,b) => Number(b.avg_temp_c) - Number(a.avg_temp_c));
+  if (_tempInvs.length) {
+    const _ordered = _tempInvs.map(inv => Number(inv.avg_temp_c)).sort((a,b) => a-b);
+    const _mid = Math.floor(_ordered.length / 2);
+    const _median = _ordered.length % 2 ? _ordered[_mid] : (_ordered[_mid-1] + _ordered[_mid]) / 2;
+    body += `<div class="ronda-card span-full" style="${cd()}"><div class="ronda-card-header"><div class="ronda-card-icon icon-weather">${svgWeather}</div><div><div class="ronda-card-title">Temperatura Interna dos Inversores</div><div class="ronda-card-subtitle">Mediana da frota ${_rpFmtP(_median,1)} °C · azul = média diária · laranja = máxima diária</div></div></div><div class="ronda-card-body" style="padding:0;"><div style="overflow-x:auto;"><table class="ronda-full-inv-table"><thead><tr><th>Inversor</th><th>Média</th><th>Máxima</th><th>vs mediana</th><th>Evolução diária</th></tr></thead><tbody>`;
+    _tempInvs.forEach(inv => {
+      const delta = Number(inv.avg_temp_c) - _median, hot = delta >= 5;
+      body += `<tr><td style="font-weight:650;color:${hot?'#f97316':'inherit'};">${inv.inverter_name||"Inv"+inv.device_id}</td><td style="color:#60a5fa;font-weight:700;">${_rpFmtP(inv.avg_temp_c,1)} °C</td><td style="color:#f97316;font-weight:700;">${_rpFmtP(inv.max_temp_c,1)} °C</td><td style="color:${hot?'#f97316':'rgba(255,255,255,.65)'};font-weight:${hot?'700':'500'};">${delta>=0?'+':''}${_rpFmtP(delta,1)} °C${hot?' · atenção':''}</td><td style="min-width:210px;">${_rpInvTempSparkP(inv.daily_temperature||[],260,48,inv.avg_temp_c,inv.max_temp_c)}</td></tr>`;
     });
     body += `</tbody></table></div></div></div>`;
   }

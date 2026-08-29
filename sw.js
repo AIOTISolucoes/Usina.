@@ -1,4 +1,4 @@
-const CACHE_NAME = "aioti-v5";   // v5: guard/401 no plant.js + deep-link de alarme
+const CACHE_NAME = "aioti-v6";   // v6: ortomosaico dos trackers + temperatura no relatorio
 // caminhos relativos ao sw.js: funcionam na raiz (produção) e em
 // subpath (pipeline de teste github.io/USINA/)
 const SHELL = [

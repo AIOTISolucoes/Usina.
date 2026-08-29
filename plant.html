@@ -703,6 +703,22 @@
 
       <div class="trackers-layout">
         <aside class="trackers-sidebar">
+          <div id="trackersOrthoCard" class="trackers-ortho-card" hidden>
+            <div class="trackers-ortho-heading">
+              <span class="trackers-ortho-icon" aria-hidden="true"><i class="fa-solid fa-layer-group"></i></span>
+              <div>
+                <strong>Imagem da usina</strong>
+                <small id="trackersOrthoMeta">Carregando imagem aérea…</small>
+              </div>
+            </div>
+            <div class="trackers-ortho-modes" role="group" aria-label="Visualização do ortomosaico">
+              <button class="trackers-ortho-mode is-active" type="button" data-ortho-mode="original" aria-pressed="true">Original</button>
+              <button class="trackers-ortho-mode" type="button" data-ortho-mode="transparent" aria-pressed="false">Transparente</button>
+              <button class="trackers-ortho-mode" type="button" data-ortho-mode="hidden" aria-pressed="false">Oculto</button>
+            </div>
+            <small class="trackers-map-hint"><i class="fa-solid fa-hand" aria-hidden="true"></i> Arraste o mapa para navegar</small>
+          </div>
+
           <div class="trackers-zoom-controls">
             <button id="trackersZoomIn" class="tracker-mode-btn" type="button">Zoom +</button>
             <button id="trackersZoomOut" class="tracker-mode-btn" type="button">Zoom −</button>
