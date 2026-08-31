@@ -1,4 +1,4 @@
-const CACHE_NAME = "aioti-v6";   // v6: ortomosaico dos trackers + temperatura no relatorio
+const CACHE_NAME = "aioti-v8";   // v8: communication_fault=28 invalida o cache do plant.js
 // caminhos relativos ao sw.js: funcionam na raiz (produção) e em
 // subpath (pipeline de teste github.io/USINA/)
 const SHELL = [
