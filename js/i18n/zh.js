@@ -22,6 +22,7 @@ AIOTI_I18N.register("zh", {
   "AIOTI · Empresa": "AIOTI · 公司",
   "AIOTI · Sistema Industrial · v2.0": "AIOTI · 工业系统 · v2.0",
   "Aberto": "打开",
+  "Fechado": "闭合",
   "Abrir": "打开",
   "Abrir alarmes da usina": "打开电站告警",
   "Acoes da usina": "电站操作",

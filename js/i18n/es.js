@@ -20,6 +20,7 @@ AIOTI_I18N.register("es", {
   "AIOTI · Sistema Industrial · v2.0": "AIOTI · Sistema industrial · v2.0",
   "Aba Usina e gateway: \"ID da usina\" está vazio — é o segmento do tópico.": "Pestaña Planta y gateway: \"ID de la planta\" está vacío — es el segmento del tópico.",
   "Aberto": "Abierto",
+  "Fechado": "Cerrado",
   "Abra o configurador pelo botão do gateway na tela da usina.": "Abra el configurador con el botón del gateway en la pantalla de la planta.",
   "Abra um chamado para o suporte AIOTI: dúvidas, problemas ou solicitações.": "Abra un ticket con el soporte de AIOTI: dudas, problemas o solicitudes.",
   "Abrir JSON do publicador local": "Abrir el JSON del publicador local",

@@ -5242,7 +5242,11 @@ function renderRelayDetailsPanel(relayItem) {
     ["Ia", metric(["current_a_a", "current_a", "ia"], "A", 1)],
     ["Ib", metric(["current_b_a", "current_b", "ib"], "A", 1)],
     ["Ic", metric(["current_c_a", "current_c", "ic"], "A", 1)],
-    ["Status Relay", raw(["status_relay"])]
+    // "Fechado"/"Aberto" quando o relé está no relay_breaker_map; senão o número
+    // cru. A frota não tem convenção única para o status_relay (1 é fechado em 6
+    // usinas, 0 em 3 e 2 em Acopiara), então traduzir sem o mapa mostraria
+    // "disjuntor aberto" em usina gerando.
+    ["Status Relay", raw(["status_relay_label", "status_relay"])]
   ];
 
   panel.innerHTML = `

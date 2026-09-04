@@ -21,6 +21,7 @@ AIOTI_I18N.register("de", {
   "AIOTI · Empresa": "AIOTI · Unternehmen",
   "AIOTI · Sistema Industrial · v2.0": "AIOTI · Industriesystem · v2.0",
   "Aberto": "Offen",
+  "Fechado": "Geschlossen",
   "Abrir": "Öffnen",
   "Abrir alarmes da usina": "Anlagenalarme öffnen",
   "Acoes da usina": "Anlagenaktionen",
